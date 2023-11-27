@@ -11,7 +11,7 @@ export const DOWNLOAD_TIMEOUT = Number(process.env.DOWNLOAD_TIMEOUT ?? 5000);
 
 const ROOT = projectRoot();
 // TEMP_DIR is also downloads directory
-const TMP = '.tmp/';
+const TMP = '.tmp';
 export const TEMP_DIR = path.resolve(ROOT, TMP);
 const FIXTURES_DIR = 'tests/fixtures/';
 export const FIXTURES = path.resolve(ROOT, FIXTURES_DIR);
@@ -59,7 +59,7 @@ export const config: Options.Testrunner = {
             mount: '/',
             path: './dist',
           },
-          { mount: '/tmp', path: `./${TMP}` },
+          { mount: `/tmp`, path: `./${TMP}` },
         ],
         port: TEST_PORT,
       },

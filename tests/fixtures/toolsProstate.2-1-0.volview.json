@@ -1,0 +1,353 @@
+{
+  "version": "2.1.0",
+  "datasets": [
+    {
+      "id": "1.3.6.1.4.1.14519.5.2.1.7311.5101.206828891270520544417996275680.5tse2d1254.538438420111018.1D000000SN0D000000S0D000000S0D000000S0D970296SN0D241922",
+      "path": "data/1.3.6.1.4.1.14519.5.2.1.7311.5101.206828891270520544417996275680.5tse2d1254.538438420111018.1D000000SN0D000000S0D000000S0D000000S0D970296SN0D241922/",
+      "type": "dicom"
+    }
+  ],
+  "remoteFiles": {
+    "1.3.6.1.4.1.14519.5.2.1.7311.5101.206828891270520544417996275680.5tse2d1254.538438420111018.1D000000SN0D000000S0D000000S0D000000S0D970296SN0D241922": [
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-19.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-18.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-17.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-16.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-15.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-14.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-13.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-12.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-11.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-10.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-09.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-08.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-07.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-06.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-05.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-04.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-03.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-02.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      },
+      {
+        "archiveSrc": { "path": "MRI-PROSTATEx-0004/1-01.dcm" },
+        "parent": {
+          "uriSrc": {
+            "uri": "https://data.kitware.com/api/v1/item/63527c7311dab8142820a338/download",
+            "name": "MRI-PROSTATEx-0004.zip"
+          }
+        }
+      }
+    ]
+  },
+  "labelMaps": [],
+  "tools": {
+    "crosshairs": { "position": [0, 0, 0] },
+    "paint": {
+      "activeLabelmapID": null,
+      "brushSize": 4,
+      "brushValue": 1,
+      "labelmapOpacity": 1
+    },
+    "crop": {
+      "10": {
+        "Sagittal": [-0.5, 383.5],
+        "Coronal": [-0.5, 383.5],
+        "Axial": [-0.5, 18.5]
+      }
+    },
+    "current": "Ruler",
+    "polygons": {
+      "tools": [
+        {
+          "imageID": "1.3.6.1.4.1.14519.5.2.1.7311.5101.206828891270520544417996275680.5tse2d1254.538438420111018.1D000000SN0D000000S0D000000S0D000000S0D970296SN0D241922",
+          "frameOfReference": {
+            "planeNormal": [-1, 1.9901095602651587e-10, -4.961898903617917e-11],
+            "planeOrigin": [
+              -21.913253803870006, -85.14991853516106, 12.839991645554424
+            ]
+          },
+          "slice": 192,
+          "placing": false,
+          "color": "#ffffff",
+          "strokeWidth": 1,
+          "name": "Polygon",
+          "points": [
+            [-21.913253793455468, -26.035952658844444, 40.043030426568826],
+            [-21.913253795879754, -43.50275785498896, 18.845472462845592],
+            [-21.91325378913905, -13.2182627464645, 4.460887366907217]
+          ],
+          "id": "15",
+          "label": "9",
+          "labelName": "white",
+          "movePoint": null
+        }
+      ],
+      "labels": {
+        "7": { "labelName": "red", "color": "red", "strokeWidth": 1 },
+        "8": { "labelName": "green", "color": "#00ff00", "strokeWidth": 1 },
+        "9": { "labelName": "white", "color": "#ffffff", "strokeWidth": 1 }
+      }
+    },
+    "rectangles": {
+      "tools": [
+        {
+          "imageID": "1.3.6.1.4.1.14519.5.2.1.7311.5101.206828891270520544417996275680.5tse2d1254.538438420111018.1D000000SN0D000000S0D000000S0D000000S0D970296SN0D241922",
+          "frameOfReference": {
+            "planeNormal": [-1, 1.9901095602651587e-10, -4.961898903617917e-11],
+            "planeOrigin": [
+              -21.913253803870006, -85.14991853516106, 12.839991645554424
+            ]
+          },
+          "slice": 192,
+          "placing": false,
+          "color": "red",
+          "strokeWidth": 1,
+          "name": "Rectangle",
+          "firstPoint": [
+            -21.913253791326838, -11.01393722969522, 57.39330673229667
+          ],
+          "secondPoint": [
+            -21.913253781334035, 26.49523475520717, 6.444097013912222
+          ],
+          "id": "11",
+          "fillColor": "transparent",
+          "label": "6",
+          "labelName": "lesion"
+        }
+      ],
+      "labels": {
+        "4": {
+          "labelName": "artifact",
+          "color": "#888888",
+          "strokeWidth": 1,
+          "fillColor": "#ffbf0040"
+        },
+        "5": {
+          "labelName": "innocuous",
+          "color": "#00ff00",
+          "strokeWidth": 1,
+          "fillColor": "#00ff0020"
+        },
+        "6": {
+          "labelName": "lesion",
+          "color": "red",
+          "strokeWidth": 1,
+          "fillColor": "transparent"
+        }
+      }
+    },
+    "rulers": {
+      "tools": [
+        {
+          "imageID": "1.3.6.1.4.1.14519.5.2.1.7311.5101.206828891270520544417996275680.5tse2d1254.538438420111018.1D000000SN0D000000S0D000000S0D000000S0D970296SN0D241922",
+          "frameOfReference": {
+            "planeNormal": [
+              2.0510340000000028e-10, 0.9702957270336713, -0.24192189256080032
+            ],
+            "planeOrigin": [
+              -117.91325378418009, 7.998471279176442, -10.38451004504583
+            ]
+          },
+          "slice": 192,
+          "placing": false,
+          "color": "#ffffff",
+          "strokeWidth": 1,
+          "name": "Ruler",
+          "firstPoint": [
+            -62.811914987613584, 20.39704096666574, 39.34343757084859
+          ],
+          "secondPoint": [
+            -23.028116033464777, 17.60723051718813, 28.15411889634344
+          ],
+          "id": "20",
+          "label": "3",
+          "labelName": "white"
+        }
+      ],
+      "labels": {
+        "1": { "labelName": "red", "color": "red", "strokeWidth": 1 },
+        "2": { "labelName": "green", "color": "#00ff00", "strokeWidth": 1 },
+        "3": { "labelName": "white", "color": "#ffffff", "strokeWidth": 1 }
+      }
+    }
+  },
+  "layout": {
+    "name": "Quad View",
+    "direction": "H",
+    "items": [
+      { "direction": "V", "items": ["Coronal", "3D"] },
+      { "direction": "V", "items": ["Sagittal", "Axial"] }
+    ]
+  },
+  "views": [
+    {
+      "id": "Coronal",
+      "type": "2D",
+      "props": { "viewDirection": "Right", "viewUp": "Superior" },
+      "config": {}
+    },
+    {
+      "id": "Sagittal",
+      "type": "2D",
+      "props": { "viewDirection": "Posterior", "viewUp": "Superior" },
+      "config": {}
+    },
+    {
+      "id": "Axial",
+      "type": "2D",
+      "props": { "viewDirection": "Superior", "viewUp": "Anterior" },
+      "config": {}
+    },
+    {
+      "id": "3D",
+      "type": "3D",
+      "props": { "viewDirection": "Posterior", "viewUp": "Superior" },
+      "config": {}
+    }
+  ],
+  "parentToLayers": [],
+  "primarySelection": "1.3.6.1.4.1.14519.5.2.1.7311.5101.206828891270520544417996275680.5tse2d1254.538438420111018.1D000000SN0D000000S0D000000S0D000000S0D970296SN0D241922"
+}
