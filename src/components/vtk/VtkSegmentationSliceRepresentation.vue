@@ -88,6 +88,7 @@ const applySegmentColoring = () => {
   ofun.removeAllPoints();
 
   let maxValue = 0;
+  console.log(metadata.value);
 
   const { segments } = metadata.value;
   segments.order.forEach((segId) => {
