@@ -99,6 +99,16 @@ const slice = vtkFieldRef(sliceRep.mapper, 'slice');
 const { slice: storedSlice } = useSliceConfig(viewId, parentImageId);
 syncRef(storedSlice, slice, { immediate: true });
 
+sliceRep.property.setUseLabelOutline(true);
+// Label outline thickness is for first segment -> 2 (positioned at array index 0), second segment -> 4
+// (positioned at array index 4)
+sliceRep.property.setLabelOutlineThickness([2, 1, 1, 1, 4]);
+sliceRep.property.setLabelOutlineOpacity(1.0);
+
+// This is very important to make sure the labelmap is rendered
+// correctly
+sliceRep.property.setUseLookupTableScalarRange(true);
+
 // set coloring properties
 const applySegmentColoring = () => {
   const cfun = sliceRep.property.getRGBTransferFunction(0);
