@@ -111,3 +111,20 @@ async def median_filter(img_id, radius):
         await store.updateData(blurred_id, output)
 
     await show_image(blurred_id)
+
+
+async def catigorize_image(img_id: str):
+    store = get_current_client_store("images")
+    img = await store.dataIndex[img_id]
+    cat = compute_category(img)
+
+
+async def layer_image(base: str, blurred: str):
+    store = get_current_client_store("layer")
+    await store.addLayer(base, blurred)
+
+
+@volview.expose
+async def categorize_image(img_id: str):
+    store = get_current_client_store("images")
+    return "asdf"
