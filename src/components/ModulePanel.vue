@@ -73,8 +73,8 @@ const Modules: Module[] = [
     component: RenderingModule,
   },
   {
-    name: 'Remote',
-    icon: 'server-network',
+    name: 'AI',
+    icon: 'robot',
     component: ServerModule,
   },
 ];
