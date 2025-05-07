@@ -6,8 +6,10 @@ import { Chunk } from '@/src/core/streaming/chunk';
 import { useImageCacheStore } from '@/src/store/image-cache';
 import DicomChunkImage from '@/src/core/streaming/dicomChunkImage';
 import { Tags } from '@/src/core/dicomTags';
+import { useMessageStore } from '@/src/store/messages';
 import { removeFromArray } from '../utils';
 import { useFileStore } from './datasets-files';
+import { DataSource } from '../io/import/dataSource';
 
 export const ANONYMOUS_PATIENT = 'Anonymous';
 export const ANONYMOUS_PATIENT_ID = 'ANONYMOUS';
@@ -226,6 +228,43 @@ export const useDICOMStore = defineStore('dicom', {
 
           // save the image name
           image.setName(getDisplayName(volumeInfo));
+
+          image.addEventListener('chunkError', ({ chunk, error }) => {
+            const messageStore = useMessageStore();
+            const volumeName = image.getName() || 'Unknown Volume';
+            const dataSource = chunk.getUserData('dataSource') as
+              | DataSource
+              | undefined;
+            let errorMessageTitle: string;
+
+            if (dataSource) {
+              if (dataSource.type === 'uri') {
+                errorMessageTitle = `Error processing URI: ${
+                  (dataSource as any).uri
+                } (Volume: ${volumeName})`;
+              } else if (
+                dataSource.type === 'file' &&
+                (dataSource as any).file
+              ) {
+                const file = (dataSource as any).file as File;
+                errorMessageTitle = `Error processing file: ${file.name} for Volume: ${volumeName}`;
+              } else {
+                const chunkIndex = image.getChunks().indexOf(chunk);
+                const chunkIdentifier =
+                  chunkIndex !== -1
+                    ? `Chunk ${chunkIndex + 1}`
+                    : 'a data chunk';
+                errorMessageTitle = `Error processing ${chunkIdentifier} for volume: ${volumeName}`;
+              }
+            } else {
+              const chunkIndex = image.getChunks().indexOf(chunk);
+              const chunkIdentifier =
+                chunkIndex !== -1 ? `Chunk ${chunkIndex + 1}` : 'a data chunk';
+              errorMessageTitle = `Error processing ${chunkIdentifier} for volume: ${volumeName}`;
+            }
+
+            messageStore.addError(errorMessageTitle, error as Error);
+          });
         })
       );
 

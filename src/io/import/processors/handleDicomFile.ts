@@ -32,6 +32,8 @@ const handleDicomFile: ImportHandler = async (dataSource) => {
     metaLoader,
     dataLoader,
   });
+  // Attach the data source for error context
+  chunk.setUserData('dataSource', dataSource);
 
   await chunk.loadMeta();
 

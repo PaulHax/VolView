@@ -299,10 +299,15 @@ export default class DicomChunkImage
   }
 
   private async onChunkHasData(chunkIndex: number) {
-    if (this.getModality() === 'SEG') {
-      await this.onSegChunkHasData(chunkIndex);
-    } else {
-      await this.onRegularChunkHasData(chunkIndex);
+    try {
+      if (this.getModality() === 'SEG') {
+        await this.onSegChunkHasData(chunkIndex);
+      } else {
+        await this.onRegularChunkHasData(chunkIndex);
+      }
+    } catch (error) {
+      // could error if bytes are incomplete or corrupt
+      this.onChunkErrored(chunkIndex, error);
     }
   }
 
