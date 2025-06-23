@@ -37,7 +37,7 @@ export default defineComponent({
     const paintStore = usePaintToolStore();
     const active = computed(
       () =>
-        paintStore.isActive && paintStore.activeMode !== PaintMode.FillBetween
+        paintStore.isActive && paintStore.activeMode !== PaintMode.Process
     );
 
     return {
