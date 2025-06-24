@@ -140,6 +140,7 @@ export const useProcessStore = defineStore('process', () => {
         showingOriginal: false,
       };
     } catch (error) {
+      console.error(`${activeProcessType.value} Operation Failed:`, error);
       messageStore.addError(`${activeProcessType.value} Operation Failed`, error as Error);
       if (processState.value.step === 'computing') {
         rollbackPreview(segImage, originalScalars);
