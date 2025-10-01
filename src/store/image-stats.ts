@@ -11,7 +11,6 @@ import {
 import * as Comlink from 'comlink';
 import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';
 import vtkImageData from '@kitware/vtk.js/Common/DataModel/ImageData';
-import { useVtkComputed } from '@/src/core/vtk/useVtkComputed';
 import { WLAutoRanges, WL_HIST_BINS } from '@/src/constants';
 import { HistogramWorker } from '@/src/utils/histogram.worker';
 import { Maybe } from '@/src/types';
@@ -134,13 +133,13 @@ export const useImageStatsStore = defineStore('image-stats', () => {
     const activeScalars = computed(() =>
       imageData.value?.getPointData()?.getScalars()
     );
-    const scalarRange = useVtkComputed(activeScalars, () =>
-      activeScalars.value?.getRange(0)
-    );
 
     watch(
-      scalarRange,
-      (range) => {
+      activeScalars,
+      (scalars) => {
+        if (!scalars) return;
+
+        const range = scalars.getRange(0);
         if (range) {
           internalSetScalarRange(id, range[0], range[1]);
         }
