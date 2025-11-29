@@ -2,6 +2,7 @@
 import { computed, toRefs } from 'vue';
 import { useGlobalLayerColorConfig } from '@/src/composables/useGlobalLayerColorConfig';
 import { useGlobalSegmentGroupConfig } from '@/src/store/view-configs/segmentGroups';
+import { useGlobalSegmentGroupMeshConfig } from '@/src/store/view-configs/segmentGroupMesh';
 
 const props = defineProps<{
   groupId: string;
@@ -61,6 +62,30 @@ const outlineThickness = computed({
     });
   },
 });
+
+const { config: meshConfig } = useGlobalSegmentGroupMeshConfig(groupId);
+
+const meshUpdateFunctions = computed(() =>
+  selected.value.map((id) => useGlobalSegmentGroupMeshConfig(id).updateConfig)
+);
+
+const meshEnabled = computed({
+  get: () => meshConfig.value.enabled,
+  set: (enabled: boolean) => {
+    meshUpdateFunctions.value.forEach((updateFn) => {
+      updateFn({ enabled });
+    });
+  },
+});
+
+const meshOpacity = computed({
+  get: () => meshConfig.value.opacity,
+  set: (opacity: number) => {
+    meshUpdateFunctions.value.forEach((updateFn) => {
+      updateFn({ opacity });
+    });
+  },
+});
 </script>
 
 <template>
@@ -97,5 +122,24 @@ const outlineThickness = computed({
     hide-details
     thumb-label
     v-model="outlineThickness"
+  />
+  <v-switch
+    class="mx-4"
+    label="3D Mesh"
+    density="compact"
+    hide-details
+    v-model="meshEnabled"
+  />
+  <v-slider
+    v-if="meshEnabled"
+    class="mx-4"
+    label="Mesh Opacity"
+    min="0"
+    max="1"
+    step="0.01"
+    density="compact"
+    hide-details
+    thumb-label
+    v-model="meshOpacity"
   />
 </template>

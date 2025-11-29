@@ -55,3 +55,8 @@ export interface SegmentGroupConfig {
   outlineOpacity: number;
   outlineThickness: number;
 }
+
+export interface SegmentGroupMeshConfig {
+  enabled: boolean;
+  opacity: number;
+}

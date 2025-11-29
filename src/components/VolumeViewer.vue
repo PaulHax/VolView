@@ -22,6 +22,12 @@
             :view-id="viewId"
             :image-id="currentImageID"
           ></vtk-base-volume-representation>
+          <vtk-segment-group-mesh-representation
+            v-for="segId in segmentations"
+            :key="`mesh-${segId}`"
+            :view-id="viewId"
+            :segment-group-id="segId"
+          />
           <vtk-orientation-marker></vtk-orientation-marker>
           <crop-tool :view-id="viewId" :image-id="currentImageID"></crop-tool>
           <slot></slot>
@@ -74,6 +80,7 @@ import { LPSAxisDir } from '@/src/types/lps';
 import VtkVolumeView from '@/src/components/vtk/VtkVolumeView.vue';
 import { VtkViewApi } from '@/src/types/vtk-types';
 import VtkBaseVolumeRepresentation from '@/src/components/vtk/VtkBaseVolumeRepresentation.vue';
+import VtkSegmentGroupMeshRepresentation from '@/src/components/vtk/VtkSegmentGroupMeshRepresentation.vue';
 import { useViewAnimationListener } from '@/src/composables/useViewAnimationListener';
 import CropTool from '@/src/components/tools/crop/CropTool.vue';
 import { useWebGLWatchdog } from '@/src/composables/useWebGLWatchdog';
@@ -83,6 +90,7 @@ import useVolumeColoringStore from '@/src/store/view-configs/volume-coloring';
 import { useResetViewsEvents } from '@/src/components/tools/ResetViews.vue';
 import { onVTKEvent } from '@/src/composables/onVTKEvent';
 import { useViewStore } from '@/src/store/views';
+import { useSegmentGroupStore } from '@/src/store/segmentGroups';
 import ViewTypeSwitcher from '@/src/components/ViewTypeSwitcher.vue';
 
 interface Props {
@@ -139,6 +147,12 @@ const coloringConfig = computed(() =>
 );
 const presetName = computed(
   () => coloringConfig.value?.transferFunction.preset.replace(/-/g, ' ') ?? ''
+);
+
+// segment groups
+const segmentGroupStore = useSegmentGroupStore();
+const segmentations = computed(
+  () => segmentGroupStore.orderByParent[currentImageID.value ?? ''] ?? []
 );
 </script>
 
