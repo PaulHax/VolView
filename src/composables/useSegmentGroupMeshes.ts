@@ -8,10 +8,10 @@ import {
 } from 'vue';
 import vtkPolyData from '@kitware/vtk.js/Common/DataModel/PolyData';
 import { useDebounceFn } from '@vueuse/core';
-import { labelmapToPolyDatas } from 'labelmap-polydata';
-import LabelmapWorker from 'labelmap-polydata/worker?worker';
+import { labelmapToPolyDatas } from 'labelmap-polydata/labelmapToPolyDatas';
 import { useSegmentGroupStore } from '@/src/store/segmentGroups';
 import { onVTKEvent } from '@/src/composables/onVTKEvent';
+import LabelmapWorker from './labelmapMesh.worker?worker';
 
 export type PolyDataRecord = Record<number, vtkPolyData>;
 
