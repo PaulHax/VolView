@@ -185,8 +185,11 @@ export default function widgetBehavior(publicAPI: any, model: any) {
     }
 
     // Don't emit hover events if another widget has focus (e.g., is placing)
-    const activeWidget = model._widgetManager.getActiveWidget();
-    if (activeWidget && activeWidget !== publicAPI) {
+    const widgets = model._widgetManager.getWidgets();
+    const anotherWidgetHasFocus = widgets.some(
+      (w: any) => w !== publicAPI && w.hasFocus()
+    );
+    if (anotherWidgetHasFocus) {
       publicAPI.invokeHoverEvent({
         ...eventData,
         hovering: false,
@@ -232,8 +235,11 @@ export default function widgetBehavior(publicAPI: any, model: any) {
     }
 
     // If another widget has focus (e.g., is placing), don't show context menu
-    const activeWidget = model._widgetManager.getActiveWidget();
-    if (activeWidget && activeWidget !== publicAPI) {
+    const widgets = model._widgetManager.getWidgets();
+    const anotherWidgetHasFocus = widgets.some(
+      (w: any) => w !== publicAPI && w.hasFocus()
+    );
+    if (anotherWidgetHasFocus) {
       return macro.VOID;
     }
 

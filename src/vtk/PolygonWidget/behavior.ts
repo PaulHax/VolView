@@ -480,6 +480,11 @@ export default function widgetBehavior(publicAPI: any, model: any) {
     model.hasFocus = false;
     if (hadFocus) {
       model._widgetManager.releaseFocus();
+      // Deactivate all widgets so stale activeStates don't persist
+      // (user may right-click again without moving mouse)
+      model._widgetManager
+        .getWidgets()
+        .forEach((w: any) => w.deactivateAllHandles());
     }
     model._widgetManager.enablePicking();
   };
