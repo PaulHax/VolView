@@ -1,16 +1,64 @@
 diff --git a/node_modules/itk-wasm/dist/pipeline/internal/run-pipeline-emscripten.js b/node_modules/itk-wasm/dist/pipeline/internal/run-pipeline-emscripten.js
-index fe35074..f344a0e 100644
+index fe35074..e0c9ed3 100644
 --- a/node_modules/itk-wasm/dist/pipeline/internal/run-pipeline-emscripten.js
 +++ b/node_modules/itk-wasm/dist/pipeline/internal/run-pipeline-emscripten.js
-@@ -58,7 +58,10 @@ function getPipelineModuleOutputArray(emscriptenModule, outputIndex, subIndex, c
+@@ -56,10 +56,58 @@ function getPipelineModuleOutputArray(emscriptenModule, outputIndex, subIndex, c
+     const data = bufferToTypedArray(componentType, dataUint8.buffer);
+     return data;
  }
++function sanitizeJsonStringValues(jsonStr) {
++    let result = '';
++    let inString = false;
++    let i = 0;
++    while (i < jsonStr.length) {
++        const char = jsonStr[i];
++        if (inString) {
++            if (char === '\\') {
++                if (i + 1 < jsonStr.length) {
++                    const nextChar = jsonStr[i + 1];
++                    if ('"\\bfnrt/'.includes(nextChar)) {
++                        result += char + nextChar;
++                        i += 2;
++                        continue;
++                    } else if (nextChar === 'u' && i + 5 < jsonStr.length && /^[0-9a-fA-F]{4}$/.test(jsonStr.substring(i + 2, i + 6))) {
++                        result += jsonStr.substring(i, i + 6);
++                        i += 6;
++                        continue;
++                    }
++                    result += '\\\\';
++                    i += 1;
++                    continue;
++                }
++                result += '\\\\';
++                i += 1;
++                continue;
++            } else if (char === '"') {
++                result += char;
++                inString = false;
++            } else {
++                const code = char.charCodeAt(0);
++                if (code < 0x20 || code === 0x7F) {
++                    result += '\\u' + ('0000' + code.toString(16)).slice(-4);
++                    i += 1;
++                    continue;
++                }
++                result += char;
++            }
++        } else {
++            if (char === '"') {
++                inString = true;
++            }
++            result += char;
++        }
++        i += 1;
++    }
++    return result;
++}
  function getPipelineModuleOutputJSON(emscriptenModule, outputIndex) {
      const jsonPtr = emscriptenModule.ccall('itk_wasm_output_json_address', 'number', ['number', 'number'], [0, outputIndex]);
--    const dataJSON = emscriptenModule.UTF8ToString(jsonPtr);
-+    let dataJSON = emscriptenModule.UTF8ToString(jsonPtr);
-+    dataJSON = dataJSON.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, (char) => {
-+        return '\\u' + ('0000' + char.charCodeAt(0).toString(16)).slice(-4);
-+    });
-     const dataObject = JSON.parse(dataJSON);
+     const dataJSON = emscriptenModule.UTF8ToString(jsonPtr);
+-    const dataObject = JSON.parse(dataJSON);
++    const dataObject = JSON.parse(sanitizeJsonStringValues(dataJSON));
      return dataObject;
  }
+ function runPipelineEmscripten(pipelineModule, args, outputs, inputs) {
