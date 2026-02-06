@@ -50,7 +50,7 @@ export function sanitizeJsonStringValues(jsonStr: string): string {
         inString = false;
       } else {
         const code = char.charCodeAt(0);
-        if (code < 0x20 || code === 0x7F) {
+        if (code < 0x20 || code === 0x7F) { // DEL
           // Control character - escape as unicode
           result += '\\u' + ('0000' + code.toString(16)).slice(-4);
           i += 1;
