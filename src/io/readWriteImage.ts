@@ -8,15 +8,21 @@ import {
 import { vtiReader, vtiWriter } from '@/src/io/vtk/async';
 import { getWorker } from '@/src/io/itk/worker';
 
-export const readImage = async (file: File) => {
+export const readImage = async (file: File, webWorker?: Worker | null) => {
   if (file.name.endsWith('.vti'))
     return (await vtiReader(file)) as vtkImageData;
 
-  const { image } = await readImageItk(file, { webWorker: getWorker() });
+  const { image } = await readImageItk(file, {
+    webWorker: webWorker ?? getWorker(),
+  });
   return vtkITKHelper.convertItkToVtkImage(image);
 };
 
-export const writeImage = async (format: string, image: vtkImageData) => {
+export const writeImage = async (
+  format: string,
+  image: vtkImageData,
+  webWorker?: Worker | null
+) => {
   if (format === 'vti') {
     return vtiWriter(image);
   }
@@ -24,7 +30,7 @@ export const writeImage = async (format: string, image: vtkImageData) => {
   const itkImage = copyImage(vtkITKHelper.convertVtkToItkImage(image));
 
   const result = await writeImageItk(itkImage, `image.${format}`, {
-    webWorker: getWorker(),
+    webWorker: webWorker ?? getWorker(),
   });
   return result.serializedImage.data as Uint8Array<ArrayBuffer>;
 };

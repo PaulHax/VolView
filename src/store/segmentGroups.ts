@@ -10,6 +10,7 @@ import { onImageDeleted } from '@/src/composables/onImageDeleted';
 import { normalizeForStore, removeFromArray } from '@/src/utils';
 import { SegmentMask } from '@/src/types/segment';
 import { DEFAULT_SEGMENT_MASKS, CATEGORICAL_COLORS } from '@/src/config';
+import { createWebWorker } from 'itk-wasm';
 import { readImage, writeImage } from '@/src/io/readWriteImage';
 import {
   type DataSelection,
@@ -480,12 +481,21 @@ export const useSegmentGroupStore = defineStore('segmentGroup', () => {
 
     state.manifest.segmentGroups = serialized;
 
-    // save labelmap images
+    // save labelmap images — fresh worker per write to avoid heap accumulation
     await Promise.all(
       serialized.map(async ({ id, path }) => {
         const vtkImage = dataIndex[id];
-        const serializedImage = await writeImage(saveFormat.value, vtkImage);
-        zip.file(path, serializedImage);
+        const worker = await createWebWorker(null);
+        try {
+          const serializedImage = await writeImage(
+            saveFormat.value,
+            vtkImage,
+            worker
+          );
+          zip.file(path, serializedImage);
+        } finally {
+          worker.terminate();
+        }
       })
     );
   }
@@ -527,7 +537,14 @@ export const useSegmentGroupStore = defineStore('segmentGroup', () => {
       const file = stateFiles.find(
         (entry) => entry.archivePath === normalize(segmentGroup.path!)
       )?.file;
-      return { image: await readImage(file!) };
+      // Use a fresh worker per labelmap to avoid WASM heap accumulation.
+      // The shared worker may already have a large heap from base images.
+      const worker = await createWebWorker(null);
+      try {
+        return { image: await readImage(file!, worker) };
+      } finally {
+        worker.terminate();
+      }
     }
 
     const labelmapResults = await Promise.all(
