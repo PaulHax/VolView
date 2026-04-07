@@ -11,7 +11,7 @@ import { normalizeForStore, removeFromArray } from '@/src/utils';
 import { SegmentMask } from '@/src/types/segment';
 import { DEFAULT_SEGMENT_MASKS, CATEGORICAL_COLORS } from '@/src/config';
 import { createWebWorker } from 'itk-wasm';
-import { readImage, writeImage } from '@/src/io/readWriteImage';
+import { readImage, writeSegmentation } from '@/src/io/readWriteImage';
 import {
   type DataSelection,
   getImage,
@@ -484,12 +484,12 @@ export const useSegmentGroupStore = defineStore('segmentGroup', () => {
     // save labelmap images — fresh worker per write to avoid heap accumulation
     await Promise.all(
       serialized.map(async ({ id, path }) => {
-        const vtkImage = dataIndex[id];
         const worker = await createWebWorker(null);
         try {
-          const serializedImage = await writeImage(
+          const serializedImage = await writeSegmentation(
             saveFormat.value,
-            vtkImage,
+            dataIndex[id],
+            metadataByID[id],
             worker
           );
           zip.file(path, serializedImage);
