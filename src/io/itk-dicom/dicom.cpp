@@ -101,13 +101,16 @@ std::vector<double> ReadImageOrientationValue(const std::string &filename) {
 bool areCosinesAlmostEqual(std::vector<double> cosines1,
                            std::vector<double> cosines2,
                            double epsilon = EPSILON) {
-  for (int i = 0; i <= 1; i++) {
-    std::vector<double> vec1{cosines1.at(i), cosines1.at(i + 1),
-                             cosines1.at(i + 2)};
-    std::vector<double> vec2{cosines2.at(i), cosines2.at(i + 1),
-                             cosines2.at(i + 2)};
+  // ImageOrientationPatient is two row vectors: X cosines at [0..2] and
+  // Y cosines at [3..5]. Compare each row.
+  for (int row = 0; row < 2; row++) {
+    const int offset = row * 3;
+    std::vector<double> vec1{cosines1.at(offset), cosines1.at(offset + 1),
+                             cosines1.at(offset + 2)};
+    std::vector<double> vec2{cosines2.at(offset), cosines2.at(offset + 1),
+                             cosines2.at(offset + 2)};
     double dot = dotProduct<3>(vec1, vec2);
-    if (dot < (1 - EPSILON)) {
+    if (dot < (1 - epsilon)) {
       return false;
     }
   }
@@ -116,8 +119,6 @@ bool areCosinesAlmostEqual(std::vector<double> cosines1,
 
 VolumeMapType SeparateOnImageOrientation(const VolumeMapType &volumeMap) {
   VolumeMapType newVolumeMap;
-  // Vector< Pair< cosines, volumeID >>
-  std::vector<std::pair<std::vector<double>, std::string>> cosinesToID;
 
   // append unique ID part to the volume ID, based on cosines
   // The format replaces non-alphanumeric chars to be semi-consistent with DICOM
@@ -141,6 +142,11 @@ VolumeMapType SeparateOnImageOrientation(const VolumeMapType &volumeMap) {
   };
 
   for (const auto &[volumeID, names] : volumeMap) {
+    // Per-input-volume orientation lookup. Two distinct series sharing an
+    // orientation must remain separate, so this list is rebuilt per input
+    // volume rather than carried across them (issue #861).
+    std::vector<std::pair<std::vector<double>, std::string>> cosinesToID;
+
     for (const auto &filename : names) {
       std::vector<double> curCosines = ReadImageOrientationValue(filename);
 
