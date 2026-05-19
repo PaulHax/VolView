@@ -44,10 +44,12 @@
 import { Component, computed, defineComponent, ref, watch } from 'vue';
 
 import { ConnectionState, useServerStore } from '@/src/store/server';
+import { useProvidersStore } from '@/src/store/providers';
 import DataBrowser from './DataBrowser.vue';
 import RenderingModule from './RenderingModule.vue';
 import AnnotationsModule from './AnnotationsModule.vue';
 import ServerModule from './ServerModule.vue';
+import AnalysisModule from './AnalysisModule.vue';
 import ProbeView from './ProbeView.vue';
 import { useToolStore } from '../store/tools';
 import { Tools } from '../store/tools/types';
@@ -74,6 +76,11 @@ const Modules: Module[] = [
     name: 'Rendering',
     icon: 'cube',
     component: RenderingModule,
+  },
+  {
+    name: 'Analysis',
+    icon: 'flask-outline',
+    component: AnalysisModule,
   },
   {
     name: 'Remote',
@@ -105,16 +112,22 @@ export default defineComponent({
     );
 
     const serverStore = useServerStore();
+    const providersStore = useProvidersStore();
     const modules = computed(() => {
+      const hasAnalysis = providersStore.providerCount > 0;
+      const filtered = Modules.filter(
+        (m) => m.name !== 'Analysis' || hasAnalysis
+      );
+
       if (!serverStore.url) {
-        return Modules.filter((m) => m.name !== 'Remote');
+        return filtered.filter((m) => m.name !== 'Remote');
       }
 
       if (serverStore.connState === ConnectionState.Connected) {
-        return Modules;
+        return filtered;
       }
 
-      return Modules.map((m) => {
+      return filtered.map((m) => {
         if (m.name === 'Remote') {
           return { ...m, disabled: true };
         }
