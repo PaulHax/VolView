@@ -4,7 +4,6 @@
     :label="(param.title || param.id) + ' (output filename)'"
     :hint="param.description"
     density="compact"
-    variant="outlined"
     hide-details="auto"
     persistent-hint
     @update:model-value="onInput"

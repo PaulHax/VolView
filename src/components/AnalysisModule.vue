@@ -10,13 +10,13 @@
 
     <template v-else>
       <v-select
+        v-if="showProviderSelect"
         v-model="selectedProviderId"
         :items="providerItems"
         item-title="label"
         item-value="id"
         label="Provider"
         density="compact"
-        variant="outlined"
         hide-details
         class="mb-3"
       />
@@ -91,6 +91,7 @@ const providerItems = computed(() =>
     label: c.label,
   }))
 );
+const showProviderSelect = computed(() => providerItems.value.length > 1);
 
 const selectedProviderId = ref<string | null>(
   providerItems.value[0]?.id ?? null
@@ -111,13 +112,30 @@ const issues = ref<SlicerCliValidationIssue[]>([]);
 const submitting = ref(false);
 
 watch(
+  providerItems,
+  (items) => {
+    if (items.length === 0) {
+      selectedProviderId.value = null;
+      return;
+    }
+    if (
+      !selectedProviderId.value ||
+      !items.some((item) => item.id === selectedProviderId.value)
+    ) {
+      selectedProviderId.value = items[0].id;
+    }
+  },
+  { immediate: true }
+);
+
+watch(
   selectedProviderId,
   async (id) => {
-    if (!id) return;
     provider.value = null;
     tasks.value = [];
     doc.value = null;
     selectedTaskId.value = null;
+    if (!id) return;
     loadingProvider.value = true;
     providerError.value = null;
     try {

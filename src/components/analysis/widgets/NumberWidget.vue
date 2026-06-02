@@ -8,7 +8,6 @@
     :step="param.step ?? 'any'"
     type="number"
     density="compact"
-    variant="outlined"
     hide-details="auto"
     persistent-hint
     @update:model-value="onInput"

@@ -4,7 +4,6 @@
     :label="param.title || param.id"
     :hint="param.description"
     density="compact"
-    variant="outlined"
     hide-details="auto"
     persistent-hint
     @update:model-value="(v) => emit('update:modelValue', v)"
