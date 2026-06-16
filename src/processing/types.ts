@@ -116,6 +116,14 @@ export type ProcessingResult = {
   name: string;
   url: string;
   role?: 'base' | 'layer' | 'segmentGroup' | 'state' | 'download';
+  /**
+   * Provider-supplied result intent (the five-name v1 vocabulary, see
+   * `processing/intents`). Emitted additively alongside `role`; the adapter
+   * prefers a present, valid intent and falls back to `role` translation
+   * otherwise. Typed loosely because it arrives as untrusted wire JSON and is
+   * zod-validated at the adapter boundary.
+   */
+  intent?: string;
   mimeType?: string;
   size?: number;
   /**

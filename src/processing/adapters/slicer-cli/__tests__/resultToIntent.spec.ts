@@ -68,3 +68,65 @@ describe('resultToIntent', () => {
     });
   });
 });
+
+describe('resultToIntent — prefers a valid provider intent (item 3.1)', () => {
+  it('prefers a present, valid intent over the role translation', () => {
+    // role would translate to add-base-image; the provider intent wins.
+    const intent = resultToIntent(base({ role: 'base', intent: 'download' }));
+    expect(intent).toEqual({
+      intent: 'download',
+      url: 'https://example/out.nrrd',
+      name: 'out.nrrd',
+    });
+    expect(() => resultIntentSchema.parse(intent)).not.toThrow();
+  });
+
+  it('honors a provider intent unreachable from role alone (download, unset role)', () => {
+    // Unset role translates to add-base-image; the facade marks a non-image
+    // file as download — only the preferred intent expresses it.
+    expect(resultToIntent(base({ intent: 'download' })).intent).toBe(
+      'download'
+    );
+  });
+
+  it('carries segments when the provider intent is attach-segment-group', () => {
+    const segments = [
+      { value: 1, name: 'liver', color: [255, 0, 0, 255] as const },
+    ];
+    const intent = resultToIntent(
+      base({ intent: 'attach-segment-group', segments })
+    );
+    expect(intent).toEqual({
+      intent: 'attach-segment-group',
+      url: 'https://example/out.nrrd',
+      name: 'out.nrrd',
+      segments,
+    });
+  });
+
+  it('drops segments on an intent that does not declare them', () => {
+    const intent = resultToIntent(
+      base({
+        intent: 'add-base-image',
+        segments: [{ value: 1, name: 'liver', color: [1, 2, 3, 4] as const }],
+      })
+    );
+    expect(intent).toEqual({
+      intent: 'add-base-image',
+      url: 'https://example/out.nrrd',
+      name: 'out.nrrd',
+    });
+  });
+
+  it('falls back to role translation for an invalid intent string', () => {
+    const intent = resultToIntent(base({ intent: 'bogus', role: 'layer' }));
+    expect(intent.intent).toBe('add-layer');
+    expect(() => resultIntentSchema.parse(intent)).not.toThrow();
+  });
+
+  it('falls back to role translation when intent is absent', () => {
+    expect(resultToIntent(base({ role: 'segmentGroup' })).intent).toBe(
+      'attach-segment-group'
+    );
+  });
+});
