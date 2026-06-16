@@ -57,24 +57,39 @@ const providerOrigin = (config: ProcessingProviderConfig) => {
   }
 };
 
-const allowedOrigins = () =>
-  new Set(
-    (import.meta.env.VITE_PROCESSING_ALLOWED_ORIGINS ?? '')
-      .split(',')
-      .map((origin) => origin.trim())
-      .filter(Boolean)
-      .map((origin) => {
-        try {
-          return new URL(origin).origin;
-        } catch {
-          console.warn(`Ignoring invalid processing origin: ${origin}`);
-          return null;
-        }
-      })
-      .filter((origin): origin is string => origin !== null)
-  );
+// An allow-list entry may be a full origin (`https://host`) or a bare
+// `host`/`host:port` an operator typed without a scheme; assume https for the
+// latter so a common configuration mistake does not silently drop the entry.
+const allowedOrigin = (entry: string) => {
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(entry)
+    ? entry
+    : `https://${entry}`;
+  try {
+    const { origin } = new URL(candidate);
+    if (origin && origin !== 'null') return origin;
+  } catch {
+    // fall through to the warning below
+  }
+  console.warn(`Ignoring invalid processing origin: ${entry}`);
+  return null;
+};
 
-const isProviderOriginAllowed = (config: ProcessingProviderConfig) => {
+// Same-origin is always allowed; the env list adds extra origins on top.
+const allowedOrigins = () =>
+  new Set([
+    window.location.origin,
+    ...(import.meta.env.VITE_PROCESSING_ALLOWED_ORIGINS ?? '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map(allowedOrigin)
+      .filter((origin): origin is string => origin !== null),
+  ]);
+
+const isProviderOriginAllowed = (
+  config: ProcessingProviderConfig,
+  allowed: Set<string>
+) => {
   const origin = providerOrigin(config);
   if (!origin) {
     console.warn(
@@ -83,8 +98,7 @@ const isProviderOriginAllowed = (config: ProcessingProviderConfig) => {
     return false;
   }
 
-  if (origin === window.location.origin) return true;
-  if (allowedOrigins().has(origin)) return true;
+  if (allowed.has(origin)) return true;
 
   console.warn(
     `Skipping processing provider "${config.id}" because origin "${origin}" is not allowed`
@@ -97,9 +111,10 @@ export const applyProcessingConfig = (manifest: Config) => {
     ?.providers;
   if (!providersConfig?.length) return;
 
+  const allowed = allowedOrigins();
   const providers = useProvidersStore();
   providersConfig.forEach((p) => {
-    if (!isProviderOriginAllowed(p)) return;
+    if (!isProviderOriginAllowed(p, allowed)) return;
     providers.registerProviderConfig(p);
   });
 };

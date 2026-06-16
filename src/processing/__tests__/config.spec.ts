@@ -75,4 +75,14 @@ describe('processing config provider origins', () => {
     );
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it('accepts a scheme-less allow-list entry as an https origin', () => {
+    const providers = useProvidersStore();
+    vi.stubEnv('VITE_PROCESSING_ALLOWED_ORIGINS', 'analysis.example');
+
+    applyProcessingConfig(processingConfig('https://analysis.example/api'));
+
+    expect(providers.providerCount).toBe(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
 });
