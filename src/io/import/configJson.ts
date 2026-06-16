@@ -12,11 +12,8 @@ import { useSegmentGroupStore } from '@/src/store/segmentGroups';
 import { AnnotationToolStore } from '@/src/store/tools/useAnnotationTool';
 import useLoadDataStore from '@/src/store/load-data';
 import { layoutConfig } from '@/src/utils/layoutParsing';
-import { useProvidersStore } from '@/src/store/providers';
-import type {
-  ProcessingProviderConfig,
-  SourceRef,
-} from '@/src/processing/types';
+
+const PROCESSING_ENABLED = import.meta.env.VITE_ENABLE_PROCESSING === 'true';
 
 // --------------------------------------------------------------------------
 // Layout
@@ -85,39 +82,6 @@ const windowing = z
 
 const disabledViewTypes = z.array(z.enum(['2D', '3D', 'Oblique'])).optional();
 
-// --------------------------------------------------------------------------
-// Processing
-
-const sourceRef = z.string().transform((s) => s as SourceRef);
-
-const loadedProcessingSource = z.object({
-  datasetId: z.string(),
-  name: z.string(),
-  uri: z.string().optional(),
-  sourceRef: sourceRef.optional(),
-});
-
-const processingContext = z.object({
-  activeDatasetId: z.string().optional(),
-  activeSourceRef: sourceRef.optional().nullable(),
-  loadedSources: z.array(loadedProcessingSource).default([]),
-});
-
-const processingProviderConfig = z.object({
-  id: z.string(),
-  label: z.string(),
-  protocol: z.enum(['slicer-cli']),
-  baseUrl: z.string(),
-  auth: z.enum(['same-origin', 'bearer', 'tokenUrl']).optional(),
-  context: processingContext.optional(),
-});
-
-const processing = z
-  .object({
-    providers: z.array(processingProviderConfig).default([]),
-  })
-  .optional();
-
 export const config = z.object({
   layouts,
   labels,
@@ -125,7 +89,6 @@ export const config = z.object({
   io,
   windowing,
   disabledViewTypes,
-  processing,
 });
 
 export type Config = z.infer<typeof config>;
@@ -134,7 +97,11 @@ export const readConfigFile = async (configFile: File) => {
   const decoder = new TextDecoder();
   const ab = await configFile.arrayBuffer();
   const text = decoder.decode(new Uint8Array(ab));
-  return config.parse(JSON.parse(text));
+  const rawConfig = JSON.parse(text);
+  if (!PROCESSING_ENABLED) return config.parse(rawConfig);
+
+  const { withProcessingConfig } = await import('@/src/processing/config');
+  return withProcessingConfig(config).parse(rawConfig);
 };
 
 const applyLabels = (manifest: Config) => {
@@ -207,21 +174,20 @@ const applyDisabledViewTypes = (manifest: Config) => {
   useViewStore().disabledViewTypes = manifest.disabledViewTypes;
 };
 
-const applyProcessing = (manifest: Config) => {
-  if (!manifest.processing?.providers?.length) return;
-  const providers = useProvidersStore();
-  manifest.processing.providers.forEach((p) => {
-    providers.registerProviderConfig(p as ProcessingProviderConfig);
-  });
+const applyProcessing = async (manifest: Config) => {
+  if (!PROCESSING_ENABLED) return;
+
+  const { applyProcessingConfig } = await import('@/src/processing/config');
+  applyProcessingConfig(manifest);
 };
 
-export const applyPreStateConfig = (manifest: Config) => {
+export const applyPreStateConfig = async (manifest: Config) => {
   applyDisabledViewTypes(manifest);
   applyLayout(manifest);
   applyShortcuts(manifest);
   applyIo(manifest);
   applyWindowing(manifest);
-  applyProcessing(manifest);
+  await applyProcessing(manifest);
 };
 
 export const applyPostStateConfig = (manifest: Config) => {

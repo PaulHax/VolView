@@ -41,27 +41,35 @@
 </template>
 
 <script lang="ts">
-import { Component, computed, defineComponent, ref, watch } from 'vue';
+import {
+  Component,
+  computed,
+  defineAsyncComponent,
+  defineComponent,
+  onBeforeUnmount,
+  ref,
+  watch,
+} from 'vue';
 
 import { ConnectionState, useServerStore } from '@/src/store/server';
-import { useProvidersStore } from '@/src/store/providers';
 import DataBrowser from './DataBrowser.vue';
 import RenderingModule from './RenderingModule.vue';
 import AnnotationsModule from './AnnotationsModule.vue';
 import ServerModule from './ServerModule.vue';
-import AnalysisModule from './AnalysisModule.vue';
 import ProbeView from './ProbeView.vue';
 import { useToolStore } from '../store/tools';
 import { Tools } from '../store/tools/types';
 
-interface Module {
+type Module = {
   name: string;
   icon: string;
   component: Component;
   disabled?: boolean;
-}
+};
 
-const Modules: Module[] = [
+const PROCESSING_ENABLED = import.meta.env.VITE_ENABLE_PROCESSING === 'true';
+
+const CoreModules: Module[] = [
   {
     name: 'Data',
     icon: 'database',
@@ -77,17 +85,13 @@ const Modules: Module[] = [
     icon: 'cube',
     component: RenderingModule,
   },
-  {
-    name: 'Analysis',
-    icon: 'flask-outline',
-    component: AnalysisModule,
-  },
-  {
-    name: 'Remote',
-    icon: 'server-network',
-    component: ServerModule,
-  },
 ];
+
+const RemoteModule: Module = {
+  name: 'Remote',
+  icon: 'server-network',
+  component: ServerModule,
+};
 
 const autoSwitchToAnnotationsTools = [
   Tools.Rectangle,
@@ -112,12 +116,50 @@ export default defineComponent({
     );
 
     const serverStore = useServerStore();
-    const providersStore = useProvidersStore();
-    const modules = computed(() => {
-      const hasAnalysis = providersStore.providerCount > 0;
-      const filtered = Modules.filter(
-        (m) => m.name !== 'Analysis' || hasAnalysis
+    const analysisModule = ref<Module | null>(null);
+    let stopProviderCountWatch: (() => void) | null = null;
+    let disposed = false;
+
+    onBeforeUnmount(() => {
+      disposed = true;
+      stopProviderCountWatch?.();
+    });
+
+    if (PROCESSING_ENABLED) {
+      const AnalysisModule = defineAsyncComponent(
+        () => import('./AnalysisModule.vue')
       );
+
+      import('@/src/store/providers')
+        .then(({ useProvidersStore }) => {
+          if (disposed) return;
+          const providersStore = useProvidersStore();
+          stopProviderCountWatch = watch(
+            () => providersStore.providerCount,
+            (providerCount) => {
+              analysisModule.value =
+                providerCount > 0
+                  ? {
+                      name: 'Analysis',
+                      icon: 'flask-outline',
+                      component: AnalysisModule,
+                    }
+                  : null;
+            },
+            { immediate: true }
+          );
+        })
+        .catch((err) => {
+          console.warn('Failed to initialize analysis providers', err);
+        });
+    }
+
+    const modules = computed(() => {
+      const filtered = [
+        ...CoreModules,
+        ...(analysisModule.value ? [analysisModule.value] : []),
+        RemoteModule,
+      ];
 
       if (!serverStore.url) {
         return filtered.filter((m) => m.name !== 'Remote');

@@ -194,7 +194,7 @@ export async function importDataSources(
       case 'config':
         configResults.push(result);
         try {
-          applyPreStateConfig(result.config);
+          await applyPreStateConfig(result.config);
         } catch (err) {
           results.push(asErrorResult(ensureError(err), result.dataSource));
         }
