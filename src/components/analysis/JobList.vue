@@ -97,7 +97,8 @@
 import { computed, reactive } from 'vue';
 
 import { useProvidersStore } from '@/src/store/providers';
-import { loadResultAction } from '@/src/actions/processResults';
+import { applyIntent } from '@/src/actions/processResults';
+import type { ResultIntent } from '@/src/processing/intents';
 import type { ProcessingResult } from '@/src/processing/types';
 
 const providers = useProvidersStore();
@@ -159,6 +160,31 @@ function looksLikeImage(result: ProcessingResult): boolean {
   );
 }
 
+// Map an explicit action button to the intent it requests. The user's choice —
+// not the result's role — determines the intent here.
+function actionToIntent(
+  action: 'open' | 'layer' | 'segmentGroup',
+  result: ProcessingResult
+): ResultIntent {
+  const file = { url: result.url, name: result.name };
+  switch (action) {
+    case 'open':
+      return { intent: 'add-base-image', ...file };
+    case 'layer':
+      return { intent: 'add-layer', ...file };
+    case 'segmentGroup':
+      return {
+        intent: 'attach-segment-group',
+        ...file,
+        segments: result.segments ?? [],
+      };
+    default: {
+      const exhaustive: never = action;
+      throw new Error(`Unknown result action: ${exhaustive}`);
+    }
+  }
+}
+
 async function dispatch(
   jobId: string,
   result: ProcessingResult,
@@ -168,7 +194,7 @@ async function dispatch(
   loadingResultIds.add(key);
   try {
     const ctx = providers.submittedContexts.get(jobId);
-    await loadResultAction(result, ctx, action);
+    await applyIntent(actionToIntent(action, result), ctx);
   } catch (err) {
     console.error('Failed to load result', result, err);
   } finally {

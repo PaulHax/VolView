@@ -1,17 +1,23 @@
-// Dispatch a `ProcessingResult[]` returned by a finished provider job.
+// Apply the result intents produced by a finished provider job.
+//
+// Results arrive from the provider as `ProcessingResult[]` (with the slicer-cli
+// `role` field); the adapter translates each into a declarative `ResultIntent`
+// (see processing/adapters/slicer-cli/resultToIntent) and a single client-side
+// applier maps each intent to the store calls that perform it. The intent
+// vocabulary — not a store-method name — is the producer-facing contract
+// (decisions.md D3/D4).
 //
 // Per the architecture doc, the default is **not** to auto-load anything that
 // could clobber the user's current view. Auto-load is reserved for true
-// overlays (segment groups). Everything else is surfaced as an action button
-// in JobList so the user can choose to open/attach/download.
+// overlays (`attach-segment-group`); every other intent is requested
+// explicitly from a JobList action button (decisions.md D6 MVP stance).
 //
-// Result roles:
-//   `segmentGroup` → auto-load + attach as labelmap onto the originating
-//                   dataset. Overlays are non-disruptive.
-//   `layer`        → wait for user click → load + addLayer.
-//   `base` / unset → wait for user click → loadUrls as new dataset.
-//   `download`     → wait for user click → just a link.
-//   `state`        → user-initiated session-state restore.
+// Intent → store call:
+//   `attach-segment-group` → convertImageToLabelmap + updateSegment (overlay)
+//   `add-layer`            → useLayersStore.addLayer
+//   `add-base-image`       → loadUrls (new top-level dataset)
+//   `restore-state`        → loadUrls (no dedicated session restore yet)
+//   `download`             → no store mutation; surfaced as a link in JobList
 
 import { storeToRefs } from 'pinia';
 import type {
@@ -19,6 +25,8 @@ import type {
   ProcessingSegmentDescriptor,
   SubmittedJobContext,
 } from '@/src/processing/types';
+import type { ResultIntent } from '@/src/processing/intents';
+import { resultToIntent } from '@/src/processing/adapters/slicer-cli/resultToIntent';
 import { uriToDataSource } from '@/src/io/import/dataSource';
 import {
   importDataSources,
@@ -29,8 +37,10 @@ import { useLayersStore } from '@/src/store/datasets-layers';
 import { useSegmentGroupStore } from '@/src/store/segmentGroups';
 import { loadUrls } from './loadUserFiles';
 
-async function loadAsImport(result: ProcessingResult) {
-  const ds = uriToDataSource(result.url, result.name);
+type ResultFile = { url: string; name: string };
+
+async function loadAsImport(file: ResultFile) {
+  const ds = uriToDataSource(file.url, file.name);
   const importResults = await importDataSources([ds]);
   const loaded = importResults
     .filter((r) => r.type === 'data')
@@ -69,64 +79,87 @@ function applySegmentDescriptors(
   });
 }
 
-/** Auto-actions on job completion. Only overlays. */
+async function attachSegmentGroup(
+  intent: Extract<ResultIntent, { intent: 'attach-segment-group' }>,
+  parentSelection: string
+) {
+  const childSelection = await loadAsImport(intent);
+  if (!childSelection) return;
+  const segmentGroupStore = useSegmentGroupStore();
+  await segmentGroupStore.convertImageToLabelmap(
+    childSelection,
+    parentSelection
+  );
+  if (intent.segments.length) {
+    applySegmentDescriptors(parentSelection, intent.segments);
+  }
+}
+
+/**
+ * The single result applier: map a declarative intent to the store calls that
+ * perform it. `add-layer` / `attach-segment-group` need an originating dataset
+ * to attach to; with none they fall back to opening the file as a new dataset
+ * (matching the legacy behavior when no active dataset was recorded).
+ */
+export async function applyIntent(
+  intent: ResultIntent,
+  context: SubmittedJobContext | undefined
+): Promise<void> {
+  const parentSelection = context?.activeDatasetId;
+
+  switch (intent.intent) {
+    case 'add-base-image':
+    case 'restore-state':
+      await loadUrls({ urls: [intent.url], names: [intent.name] });
+      return;
+    case 'download':
+      // No store mutation — the file is surfaced as a link in JobList.
+      return;
+    case 'add-layer': {
+      if (!parentSelection) {
+        await loadUrls({ urls: [intent.url], names: [intent.name] });
+        return;
+      }
+      const childSelection = await loadAsImport(intent);
+      if (!childSelection) return;
+      await useLayersStore().addLayer(parentSelection, childSelection);
+      return;
+    }
+    case 'attach-segment-group': {
+      if (!parentSelection) {
+        await loadUrls({ urls: [intent.url], names: [intent.name] });
+        return;
+      }
+      await attachSegmentGroup(intent, parentSelection);
+      return;
+    }
+    default: {
+      const exhaustive: never = intent;
+      throw new Error(`Unhandled result intent: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
+/**
+ * Auto-actions on job completion. Only overlays (`attach-segment-group`)
+ * auto-apply, and only when there is an originating dataset to attach to;
+ * everything else waits for an explicit JobList action so we never clobber the
+ * current view (decisions.md D6).
+ */
 export async function autoLoadProcessingResults(
   results: ProcessingResult[],
   context: SubmittedJobContext | undefined
 ): Promise<void> {
   const parentSelection = context?.activeDatasetId;
-  const segmentGroupStore = useSegmentGroupStore();
+  if (!parentSelection) return;
 
   for (const result of results) {
-    if (result.role === 'segmentGroup' && parentSelection) {
-      try {
-        const childSelection = await loadAsImport(result);
-        if (childSelection) {
-          await segmentGroupStore.convertImageToLabelmap(
-            childSelection,
-            parentSelection
-          );
-          if (result.segments?.length) {
-            applySegmentDescriptors(parentSelection, result.segments);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to auto-load segment group result', result, err);
-      }
-    }
-  }
-}
-
-/** User-initiated load (called from JobList action buttons). */
-export async function loadResultAction(
-  result: ProcessingResult,
-  context: SubmittedJobContext | undefined,
-  action: 'open' | 'layer' | 'segmentGroup'
-): Promise<void> {
-  const layersStore = useLayersStore();
-  const segmentGroupStore = useSegmentGroupStore();
-  const parentSelection = context?.activeDatasetId;
-
-  if (action === 'open') {
-    await loadUrls({ urls: [result.url], names: [result.name] });
-    return;
-  }
-  if (!parentSelection) {
-    // No parent → fall back to opening as a new dataset.
-    await loadUrls({ urls: [result.url], names: [result.name] });
-    return;
-  }
-  const childSelection = await loadAsImport(result);
-  if (!childSelection) return;
-  if (action === 'layer') {
-    await layersStore.addLayer(parentSelection, childSelection);
-  } else if (action === 'segmentGroup') {
-    await segmentGroupStore.convertImageToLabelmap(
-      childSelection,
-      parentSelection
-    );
-    if (result.segments?.length) {
-      applySegmentDescriptors(parentSelection, result.segments);
+    const intent = resultToIntent(result);
+    if (intent.intent !== 'attach-segment-group') continue;
+    try {
+      await attachSegmentGroup(intent, parentSelection);
+    } catch (err) {
+      console.error('Failed to auto-load segment group result', result, err);
     }
   }
 }
