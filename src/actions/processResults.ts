@@ -106,18 +106,22 @@ export async function applyIntent(
   context: SubmittedJobContext | undefined
 ): Promise<void> {
   const parentSelection = context?.activeDatasetId;
+  // Open the result as a new top-level dataset. Also the fallback when a
+  // parent-requiring intent has no originating dataset to attach to.
+  const openAsDataset = (file: ResultFile) =>
+    loadUrls({ urls: [file.url], names: [file.name] });
 
   switch (intent.intent) {
     case 'add-base-image':
     case 'restore-state':
-      await loadUrls({ urls: [intent.url], names: [intent.name] });
+      await openAsDataset(intent);
       return;
     case 'download':
       // No store mutation — the file is surfaced as a link in JobList.
       return;
     case 'add-layer': {
       if (!parentSelection) {
-        await loadUrls({ urls: [intent.url], names: [intent.name] });
+        await openAsDataset(intent);
         return;
       }
       const childSelection = await loadAsImport(intent);
@@ -127,7 +131,7 @@ export async function applyIntent(
     }
     case 'attach-segment-group': {
       if (!parentSelection) {
-        await loadUrls({ urls: [intent.url], names: [intent.name] });
+        await openAsDataset(intent);
         return;
       }
       await attachSegmentGroup(intent, parentSelection);
