@@ -12,23 +12,21 @@ describe('result intent vocabulary', () => {
 
   const fileRef = { url: 'https://example/out.nrrd', name: 'out.nrrd' };
 
-  describe.each([
-    ['add-base-image'],
-    ['add-layer'],
-    ['restore-state'],
-    ['download'],
-  ])('file-only intent %s', (intent) => {
-    it('parses a valid sample', () => {
-      const parsed = resultIntentSchema.parse({ intent, ...fileRef });
-      expect(parsed).toEqual({ intent, ...fileRef });
-    });
+  describe.each(['add-base-image', 'add-layer', 'restore-state', 'download'])(
+    'file-only intent %s',
+    (intent) => {
+      it('parses a valid sample', () => {
+        const parsed = resultIntentSchema.parse({ intent, ...fileRef });
+        expect(parsed).toEqual({ intent, ...fileRef });
+      });
 
-    it('rejects a sample missing the file name', () => {
-      expect(() =>
-        resultIntentSchema.parse({ intent, url: fileRef.url })
-      ).toThrow();
-    });
-  });
+      it('rejects a sample missing the file name', () => {
+        expect(() =>
+          resultIntentSchema.parse({ intent, url: fileRef.url })
+        ).toThrow();
+      });
+    }
+  );
 
   describe('attach-segment-group', () => {
     const segments = [
