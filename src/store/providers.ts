@@ -122,29 +122,41 @@ export const useProvidersStore = defineStore('providers', () => {
     pollTimers.delete(jobId);
   }
 
+  // Shared terminal-completion path. Fetches results for a successful job,
+  // then notifies subscribers. Reached from both the poller and the
+  // born-terminal fast-path in `submitJob`, so a synchronous job lands results
+  // identically to a polled one. Assumes `status.state` is already terminal.
+  async function fireCompletion(
+    provider: ProcessingProvider,
+    status: ProcessingJobStatus
+  ) {
+    const { jobId } = status;
+    if (status.state === 'success') {
+      try {
+        const results = await provider.getResults(jobId);
+        jobResults.set(jobId, results);
+        const ctx = submittedContexts.get(jobId);
+        completionListeners.forEach((cb) => cb(status, results, ctx));
+      } catch (err) {
+        console.error('Failed to fetch job results', jobId, err);
+        completionListeners.forEach((cb) =>
+          cb(status, [], submittedContexts.get(jobId))
+        );
+      }
+    } else {
+      completionListeners.forEach((cb) =>
+        cb(status, [], submittedContexts.get(jobId))
+      );
+    }
+  }
+
   async function pollOnce(provider: ProcessingProvider, jobId: string) {
     try {
       const status = await provider.getJob(jobId);
       recordJob(status);
       if (TERMINAL_STATES.has(status.state)) {
         stopPolling(jobId);
-        if (status.state === 'success') {
-          try {
-            const results = await provider.getResults(jobId);
-            jobResults.set(jobId, results);
-            const ctx = submittedContexts.get(jobId);
-            completionListeners.forEach((cb) => cb(status, results, ctx));
-          } catch (err) {
-            console.error('Failed to fetch job results', jobId, err);
-            completionListeners.forEach((cb) =>
-              cb(status, [], submittedContexts.get(jobId))
-            );
-          }
-        } else {
-          completionListeners.forEach((cb) =>
-            cb(status, [], submittedContexts.get(jobId))
-          );
-        }
+        await fireCompletion(provider, status);
       }
     } catch (err) {
       // Network blip — keep polling unless we've already stopped.
@@ -174,7 +186,20 @@ export const useProvidersStore = defineStore('providers', () => {
       submittedAt: new Date().toISOString(),
       ...submittedContext,
     });
-    recordJob({ jobId, state: 'pending' });
+
+    // Async-with-sync-fast-path (decisions.md D5): a provider may hand back a
+    // job that is already terminal. Record its real state and route it through
+    // the same completion path as a polled job, but never register a poller.
+    // Polling stays the driver only for jobs that are not yet terminal.
+    const initialStatus: ProcessingJobStatus = jobRef.status
+      ? { ...jobRef.status, jobId }
+      : { jobId, state: 'pending' };
+    recordJob(initialStatus);
+    if (TERMINAL_STATES.has(initialStatus.state)) {
+      await fireCompletion(provider, initialStatus);
+      return jobId;
+    }
+
     pollOnce(provider, jobId);
     const timer = setInterval(
       () => pollOnce(provider, jobId),

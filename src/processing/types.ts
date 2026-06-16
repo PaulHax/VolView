@@ -82,13 +82,25 @@ export type ProcessingOutputRequest = {
   folderRef?: SourceRef;
 };
 
-export type ProcessingJobRef = { jobId: string };
-
 export type ProcessingJobStatus = {
   jobId: string;
   state: 'pending' | 'running' | 'success' | 'error' | 'cancelled';
   progress?: number;
   errorTail?: string;
+};
+
+export type ProcessingJobRef = {
+  jobId: string;
+  /**
+   * Optional initial status. The async lifecycle has a synchronous fast-path:
+   * a provider's `runTask` may return a job that is already terminal ("born
+   * terminal" — e.g. a synchronous `/infer` backend, decisions.md D5). When the
+   * status is terminal the store routes it through the same completion path as a
+   * polled job (auto-apply hook, JobList rendering) but never registers a
+   * poller. When absent the job is treated as `pending` and polled — polling
+   * stays the driver for non-terminal jobs, unchanged.
+   */
+  status?: ProcessingJobStatus;
 };
 
 export type ProcessingSegmentDescriptor = {
