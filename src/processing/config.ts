@@ -9,11 +9,28 @@ import type {
 
 const sourceRef = z.string().transform((s) => s as SourceRef);
 
+// Volume identity used by the client to bind the on-screen volume (item 3.6).
+// It arrives as untrusted wire JSON, so a malformed key degrades to `undefined`
+// (the source still loads, it just can't be matched by key) rather than failing
+// the whole `.parse()` of the per-launch config.
+const processingSourceMatchKey = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('series'),
+    seriesInstanceUID: z.string(),
+    seriesDescription: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal('name'),
+    name: z.string(),
+  }),
+]);
+
 const loadedProcessingSource = z.object({
   datasetId: z.string(),
   name: z.string(),
   uri: z.string().optional(),
   sourceRef: sourceRef.optional(),
+  matchKey: processingSourceMatchKey.optional().catch(undefined),
 });
 
 const processingContext = z.object({

@@ -64,6 +64,8 @@ import { useToast } from 'vue-toastification';
 import { useProvidersStore } from '@/src/store/providers';
 import { useCurrentImage } from '@/src/composables/useCurrentImage';
 import { useImageCacheStore } from '@/src/store/image-cache';
+import { useDICOMStore } from '@/src/store/datasets-dicom';
+import { matchActiveSource } from '@/src/processing/matchSource';
 import { autoLoadProcessingResults } from '@/src/actions/processResults';
 import type {
   ProcessingProvider,
@@ -83,6 +85,7 @@ import JobList from './analysis/JobList.vue';
 const providers = useProvidersStore();
 const { currentImageID } = useCurrentImage('global');
 const imageCache = useImageCacheStore();
+const dicomStore = useDICOMStore();
 const toast = useToast();
 
 const providerItems = computed(() =>
@@ -229,22 +232,37 @@ async function onSubmit(values: Record<string, ProcessingValue>) {
 const activeSourceRef = computed(() => {
   const config = providers.configs.get(selectedProviderId.value ?? '');
   if (!config?.context) return undefined;
-  // Multi-dataset matching is post-MVP. For the folder-launch case the config
-  // either advertises a single source or an explicit `activeSourceRef`, so
-  // we prefer that. Strict file-name matching against the active DICOM image
-  // would always fail (DICOM-series names come from headers, not file names).
   const sources = config.context.loadedSources ?? [];
+
+  // Single advertised source — nothing to disambiguate.
   if (sources.length === 1 && sources[0].sourceRef) {
     return sources[0].sourceRef;
   }
-  if (currentImageID.value) {
-    const name = imageCache.getImageMetadata(currentImageID.value)?.name;
-    if (name) {
-      const match = sources.find((s) => s.name === name);
-      if (match?.sourceRef) return match.sourceRef;
-    }
+
+  // Multiple volumes: bind the on-screen volume by its facade-supplied match
+  // key (item 3.2) instead of guessing `sources[0]`, which can run the job on
+  // the wrong volume. DICOM matches by SeriesInstanceUID, non-DICOM by name.
+  const id = currentImageID.value;
+  const matched = id
+    ? matchActiveSource(sources, {
+        seriesInstanceUID: dicomStore.volumeInfo[id]?.SeriesInstanceUID,
+        name: imageCache.getImageMetadata(id)?.name ?? undefined,
+      })
+    : undefined;
+  if (matched?.sourceRef) return matched.sourceRef;
+
+  // An explicit operator/config-provided ref is a deliberate signal, not a
+  // silent guess — honor it when key matching is inconclusive.
+  if (config.context.activeSourceRef) return config.context.activeSourceRef;
+
+  // Otherwise refuse to bind `sources[0]` blindly: surface the ambiguity and
+  // leave the input unbound rather than running on the wrong volume.
+  if (sources.length > 0) {
+    console.warn(
+      '[analysis] active volume did not match any advertised source; not auto-binding an input.'
+    );
   }
-  return config.context.activeSourceRef ?? sources[0]?.sourceRef ?? undefined;
+  return undefined;
 });
 
 const firstRequiredInput = (d: SlicerCliDocument | null) => {

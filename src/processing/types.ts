@@ -49,11 +49,21 @@ export type ProcessingContext = {
   cropLpsBounds?: LpsBounds;
 };
 
+// Provider-supplied volume identity (facade item 3.2) used to bind the
+// on-screen volume to its advertised source. A discriminated union over the
+// two loaded formats: DICOM volumes carry the SeriesInstanceUID (names come
+// from headers, not filenames); non-DICOM single-file volumes carry the
+// dataset name VolView shows. Opaque to core matching — never a Girder id.
+export type ProcessingSourceMatchKey =
+  | { kind: 'series'; seriesInstanceUID: string; seriesDescription?: string }
+  | { kind: 'name'; name: string };
+
 export type LoadedProcessingSource = {
   datasetId: string;
   name: string;
   uri?: string;
   sourceRef?: SourceRef;
+  matchKey?: ProcessingSourceMatchKey;
 };
 
 export type LpsBounds = {
