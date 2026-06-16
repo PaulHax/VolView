@@ -3,6 +3,7 @@ import {
   fileToDataSource,
   uriToDataSource,
   DataSource,
+  DataSourceRole,
   getDataSourceName,
 } from '@/src/io/import/dataSource';
 import useLoadDataStore from '@/src/store/load-data';
@@ -368,11 +369,20 @@ export async function loadUserPromptedFiles() {
   return loadFiles(files);
 }
 
-function urlsToDataSources(urls: string[], names: string[] = []): DataSource[] {
+function urlsToDataSources(
+  urls: string[],
+  names: string[] = [],
+  sourceRole?: DataSourceRole
+): DataSource[] {
   return urls.map((url, idx) => {
     const defaultName =
       basename(parseUrl(url, window.location.href).pathname) || url;
-    return uriToDataSource(url, names[idx] || defaultName);
+    return uriToDataSource(
+      url,
+      names[idx] || defaultName,
+      undefined,
+      sourceRole
+    );
   });
 }
 
@@ -385,7 +395,7 @@ type LoadUrlsParams = {
 export async function loadUrls(params: UrlParams | LoadUrlsParams) {
   if (params.config) {
     const configUrls = wrapInArray(params.config);
-    const configSources = urlsToDataSources(configUrls);
+    const configSources = urlsToDataSources(configUrls, [], 'config');
     await loadDataSources(configSources);
   }
 

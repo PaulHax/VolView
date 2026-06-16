@@ -93,12 +93,21 @@ export const config = z.object({
 
 export type Config = z.infer<typeof config>;
 
-export const readConfigFile = async (configFile: File) => {
+type ReadConfigFileOptions = {
+  processing?: boolean;
+};
+
+export const readConfigFile = async (
+  configFile: File,
+  options: ReadConfigFileOptions = {}
+) => {
   const decoder = new TextDecoder();
   const ab = await configFile.arrayBuffer();
   const text = decoder.decode(new Uint8Array(ab));
   const rawConfig = JSON.parse(text);
-  if (!PROCESSING_ENABLED) return config.parse(rawConfig);
+  if (!PROCESSING_ENABLED || options.processing === false) {
+    return config.parse(rawConfig);
+  }
 
   const { withProcessingConfig } = await import('@/src/processing/config');
   return withProcessingConfig(config).parse(rawConfig);

@@ -49,6 +49,49 @@ export const withProcessingConfig = <Shape extends z.ZodRawShape>(
   schema: z.ZodObject<Shape>
 ) => schema.extend(processingConfigShape);
 
+const providerOrigin = (config: ProcessingProviderConfig) => {
+  try {
+    return new URL(config.baseUrl, window.location.href).origin;
+  } catch {
+    return null;
+  }
+};
+
+const allowedOrigins = () =>
+  new Set(
+    (import.meta.env.VITE_PROCESSING_ALLOWED_ORIGINS ?? '')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean)
+      .map((origin) => {
+        try {
+          return new URL(origin).origin;
+        } catch {
+          console.warn(`Ignoring invalid processing origin: ${origin}`);
+          return null;
+        }
+      })
+      .filter((origin): origin is string => origin !== null)
+  );
+
+const isProviderOriginAllowed = (config: ProcessingProviderConfig) => {
+  const origin = providerOrigin(config);
+  if (!origin) {
+    console.warn(
+      `Skipping processing provider "${config.id}" because baseUrl is invalid: ${config.baseUrl}`
+    );
+    return false;
+  }
+
+  if (origin === window.location.origin) return true;
+  if (allowedOrigins().has(origin)) return true;
+
+  console.warn(
+    `Skipping processing provider "${config.id}" because origin "${origin}" is not allowed`
+  );
+  return false;
+};
+
 export const applyProcessingConfig = (manifest: Config) => {
   const providersConfig = (manifest as ConfigWithProcessing).processing
     ?.providers;
@@ -56,6 +99,7 @@ export const applyProcessingConfig = (manifest: Config) => {
 
   const providers = useProvidersStore();
   providersConfig.forEach((p) => {
+    if (!isProviderOriginAllowed(p)) return;
     providers.registerProviderConfig(p);
   });
 };

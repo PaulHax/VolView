@@ -2,6 +2,8 @@ import { Chunk } from '@/src/core/streaming/chunk';
 import { Fetcher } from '@/src/core/streaming/types';
 import { Maybe } from '@/src/types';
 
+export type DataSourceRole = 'config';
+
 /**
  * Represents a URI source with a file name for the downloaded resource.
  */
@@ -11,6 +13,7 @@ export type UriSource = {
   name: string;
   mime?: string;
   fetcher?: Fetcher;
+  sourceRole?: DataSourceRole;
 };
 
 /**
@@ -87,12 +90,14 @@ export const fileToDataSource = (file: File): FileSource => ({
 export const uriToDataSource = (
   uri: string,
   name: string,
-  mime?: string
+  mime?: string,
+  sourceRole?: DataSourceRole
 ): UriSource => ({
   type: 'uri',
   uri,
   name,
   mime,
+  sourceRole,
 });
 
 /**
@@ -116,6 +121,17 @@ export const remoteFileToDataSource = (
 export function isRemoteDataSource(ds: DataSource | undefined): boolean {
   if (!ds) return false;
   return ds.type === 'uri' || isRemoteDataSource(ds.parent);
+}
+
+export function hasDataSourceRole(
+  ds: DataSource | undefined,
+  role: DataSourceRole
+): boolean {
+  if (!ds) return false;
+  return (
+    (ds.type === 'uri' && ds.sourceRole === role) ||
+    hasDataSourceRole(ds.parent, role)
+  );
 }
 
 /**
