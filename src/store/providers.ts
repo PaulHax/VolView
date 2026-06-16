@@ -19,7 +19,7 @@ import type {
   SubmittedJobContext,
 } from '@/src/processing/types';
 
-const POLL_INTERVAL_MS = 2000;
+export const POLL_INTERVAL_MS = 2000;
 const TERMINAL_STATES = new Set<ProcessingJobStatus['state']>([
   'success',
   'error',
@@ -131,22 +131,20 @@ export const useProvidersStore = defineStore('providers', () => {
     status: ProcessingJobStatus
   ) {
     const { jobId } = status;
-    if (status.state === 'success') {
-      try {
-        const results = await provider.getResults(jobId);
-        jobResults.set(jobId, results);
-        const ctx = submittedContexts.get(jobId);
-        completionListeners.forEach((cb) => cb(status, results, ctx));
-      } catch (err) {
-        console.error('Failed to fetch job results', jobId, err);
-        completionListeners.forEach((cb) =>
-          cb(status, [], submittedContexts.get(jobId))
-        );
-      }
-    } else {
-      completionListeners.forEach((cb) =>
-        cb(status, [], submittedContexts.get(jobId))
-      );
+    const ctx = submittedContexts.get(jobId);
+    const notify = (results: ProcessingResult[]) =>
+      completionListeners.forEach((cb) => cb(status, results, ctx));
+    if (status.state !== 'success') {
+      notify([]);
+      return;
+    }
+    try {
+      const results = await provider.getResults(jobId);
+      jobResults.set(jobId, results);
+      notify(results);
+    } catch (err) {
+      console.error('Failed to fetch job results', jobId, err);
+      notify([]);
     }
   }
 

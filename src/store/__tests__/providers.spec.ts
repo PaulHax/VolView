@@ -1,16 +1,13 @@
 import { describe, it, beforeEach, afterEach, expect, vi } from 'vitest';
 import { setActivePinia, createPinia } from 'pinia';
 
-import { useProvidersStore } from '@/src/store/providers';
+import { useProvidersStore, POLL_INTERVAL_MS } from '@/src/store/providers';
 import type {
   ProcessingJobRef,
   ProcessingJobStatus,
   ProcessingProvider,
   ProcessingResult,
 } from '@/src/processing/types';
-
-// Mirrors the private constant in the store under test.
-const POLL_INTERVAL_MS = 2000;
 
 // Minimal fake provider — only the methods the lifecycle exercises are real.
 const makeProvider = (
