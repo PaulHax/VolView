@@ -4,6 +4,7 @@ import { useProvidersStore } from '@/src/store/providers';
 import type { Config } from '@/src/io/import/configJson';
 import type {
   ProcessingProviderConfig,
+  ProcessingSourceMatchKey,
   SourceRef,
 } from '@/src/processing/types';
 
@@ -23,7 +24,9 @@ const processingSourceMatchKey = z.discriminatedUnion('kind', [
     kind: z.literal('name'),
     name: z.string(),
   }),
-]);
+  // `satisfies` keeps this runtime schema and the core type from drifting
+  // apart (mirrors the segmentDescriptor pattern in intents.ts).
+]) satisfies z.ZodType<ProcessingSourceMatchKey>;
 
 const loadedProcessingSource = z.object({
   datasetId: z.string(),
