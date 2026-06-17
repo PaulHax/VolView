@@ -18,6 +18,7 @@ import type {
 } from '@/src/processing/types';
 import { parseSlicerCli, type SlicerCliDocument } from './parser';
 import type { ParsedParam } from './parser';
+import { parseJobRef, parseJobStatus, parseResults } from './wire';
 
 // ---------------------------------------------------------------------------
 // Schema-driven form helpers (consumed by TaskForm.vue, not core VolView).
@@ -153,7 +154,7 @@ export class SlicerCliProvider implements ProcessingProvider {
     taskId: string,
     values: Record<string, ProcessingValue>
   ): Promise<ProcessingJobRef> {
-    return fetchJson<ProcessingJobRef>(
+    const raw = await fetchJson<unknown>(
       join(this.config.baseUrl, `tasks/${encodeURIComponent(taskId)}/run`),
       {
         method: 'POST',
@@ -161,18 +162,21 @@ export class SlicerCliProvider implements ProcessingProvider {
         body: JSON.stringify({ values }),
       }
     );
+    return parseJobRef(raw);
   }
 
   async getJob(jobId: string): Promise<ProcessingJobStatus> {
-    return fetchJson<ProcessingJobStatus>(
+    const raw = await fetchJson<unknown>(
       join(this.config.baseUrl, `jobs/${encodeURIComponent(jobId)}`)
     );
+    return parseJobStatus(jobId, raw);
   }
 
   async getResults(jobId: string): Promise<ProcessingResult[]> {
-    return fetchJson<ProcessingResult[]>(
+    const raw = await fetchJson<unknown>(
       join(this.config.baseUrl, `jobs/${encodeURIComponent(jobId)}/results`)
     );
+    return parseResults(raw);
   }
 }
 

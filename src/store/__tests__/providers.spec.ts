@@ -116,4 +116,88 @@ describe('Providers store — job lifecycle (D5 async-with-sync-fast-path)', () 
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 2);
     expect(getJob).toHaveBeenCalledTimes(2);
   });
+
+  // An adapter that meets a malformed wire status returns an `error` job state
+  // (item 4.3). `error` is terminal, so the poller must stop rather than loop
+  // forever, and completion fires with no results (state is not `success`).
+  it('stops polling and completes with no results when a job errors', async () => {
+    const store = useProvidersStore();
+
+    const getJob = vi
+      .fn()
+      .mockResolvedValueOnce({ jobId: 'job-err', state: 'running' })
+      .mockResolvedValue({
+        jobId: 'job-err',
+        state: 'error',
+        errorTail: 'boom',
+      });
+    const getResults = vi.fn().mockResolvedValue(sampleResults);
+    const runTask = vi
+      .fn()
+      .mockResolvedValue({ jobId: 'job-err' } as ProcessingJobRef);
+    const provider = makeProvider({ runTask, getJob, getResults });
+    store.instances.set('p1', provider);
+
+    const listener = vi.fn();
+    store.onJobComplete(listener);
+
+    await store.submitJob('p1', 'task-1', {}, {});
+
+    await vi.advanceTimersByTimeAsync(0); // running — still polling
+    expect(listener).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS); // error — terminal
+    expect(getJob).toHaveBeenCalledTimes(2);
+    expect(store.jobs.get('job-err')?.state).toBe('error');
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: 'job-err', state: 'error' }),
+      [],
+      expect.objectContaining({ jobId: 'job-err' })
+    );
+    expect(getResults).not.toHaveBeenCalled();
+
+    // Poller stopped — no further polls no matter how much time elapses.
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
+    expect(getJob).toHaveBeenCalledTimes(2);
+  });
+
+  // The born-terminal fast-path equivalent: a malformed born-terminal ref is
+  // validated to an `error` status at the adapter seam, so the store routes it
+  // through completion once and never registers a poller (no infinite poll).
+  it('routes a born-terminal error ref through completion without polling', async () => {
+    const store = useProvidersStore();
+
+    const status: ProcessingJobStatus = {
+      jobId: 'job-born-err',
+      state: 'error',
+      errorTail: 'malformed',
+    };
+    const getJob = vi.fn();
+    const getResults = vi.fn().mockResolvedValue(sampleResults);
+    const runTask = vi
+      .fn()
+      .mockResolvedValue({ jobId: 'job-born-err', status } as ProcessingJobRef);
+    const provider = makeProvider({ runTask, getJob, getResults });
+    store.instances.set('p1', provider);
+
+    const listener = vi.fn();
+    store.onJobComplete(listener);
+
+    const jobId = await store.submitJob('p1', 'task-1', {}, {});
+
+    expect(jobId).toBe('job-born-err');
+    expect(store.jobs.get('job-born-err')?.state).toBe('error');
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: 'job-born-err', state: 'error' }),
+      [],
+      expect.objectContaining({ jobId: 'job-born-err' })
+    );
+    expect(getResults).not.toHaveBeenCalled();
+
+    // No poller registered — getJob never called even after intervals elapse.
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
+    expect(getJob).not.toHaveBeenCalled();
+  });
 });
