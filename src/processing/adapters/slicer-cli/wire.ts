@@ -26,6 +26,7 @@ import type {
   ProcessingJobStatus,
   ProcessingResult,
 } from '@/src/processing/types';
+import { JOB_STATES, RESULT_ROLES } from '@/src/processing/types';
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -34,13 +35,7 @@ import type {
 // byte-identically — the happy path must not change shape.
 // ---------------------------------------------------------------------------
 
-const jobState = z.enum([
-  'pending',
-  'running',
-  'success',
-  'error',
-  'cancelled',
-]);
+const jobState = z.enum(JOB_STATES);
 
 // `satisfies` pins the schema to the core type (same idiom as
 // `intents.ts`/`config.ts`) so the two cannot drift. `resultSchema` below
@@ -60,10 +55,7 @@ const jobStatusSchema = z
 // Result `role` arrives as an untrusted, additively-extended enum; an
 // unrecognized value degrades to `undefined` (the adapter's `resultToIntent`
 // then treats it as a base image) rather than rejecting the whole result list.
-const resultRole = z
-  .enum(['base', 'layer', 'segmentGroup', 'state', 'download'])
-  .optional()
-  .catch(undefined);
+const resultRole = z.enum(RESULT_ROLES).optional().catch(undefined);
 
 // Structural-only segment descriptor (bounds enforced downstream in
 // `intents.ts`): channels and label index are plain numbers here.

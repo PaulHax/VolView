@@ -92,9 +92,18 @@ export type ProcessingOutputRequest = {
   folderRef?: SourceRef;
 };
 
+/** Job lifecycle states (closed vocabulary; shared with the wire schema). */
+export const JOB_STATES = [
+  'pending',
+  'running',
+  'success',
+  'error',
+  'cancelled',
+] as const;
+
 export type ProcessingJobStatus = {
   jobId: string;
-  state: 'pending' | 'running' | 'success' | 'error' | 'cancelled';
+  state: (typeof JOB_STATES)[number];
   progress?: number;
   errorTail?: string;
 };
@@ -121,11 +130,20 @@ export type ProcessingSegmentDescriptor = {
   visible?: boolean;
 };
 
+/** Result role names (closed vocabulary; shared with the wire schema). */
+export const RESULT_ROLES = [
+  'base',
+  'layer',
+  'segmentGroup',
+  'state',
+  'download',
+] as const;
+
 export type ProcessingResult = {
   id: string;
   name: string;
   url: string;
-  role?: 'base' | 'layer' | 'segmentGroup' | 'state' | 'download';
+  role?: (typeof RESULT_ROLES)[number];
   /**
    * Provider-supplied result intent (the five-name v1 vocabulary, see
    * `processing/intents`). Emitted additively alongside `role`; the adapter
