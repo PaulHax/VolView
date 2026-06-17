@@ -67,6 +67,48 @@ describe('result intent vocabulary', () => {
         })
       ).toThrow();
     });
+
+    const segmentWith = (overrides: Record<string, unknown>) => ({
+      intent: 'attach-segment-group',
+      ...fileRef,
+      segments: [
+        { value: 1, name: 'liver', color: [255, 0, 0, 255], ...overrides },
+      ],
+    });
+
+    it('parses an in-range segment descriptor', () => {
+      expect(() => resultIntentSchema.parse(segmentWith({}))).not.toThrow();
+    });
+
+    it('rejects a negative value index', () => {
+      expect(() =>
+        resultIntentSchema.parse(segmentWith({ value: -1 }))
+      ).toThrow();
+    });
+
+    it('rejects a non-integer (float) value index', () => {
+      expect(() =>
+        resultIntentSchema.parse(segmentWith({ value: 1.5 }))
+      ).toThrow();
+    });
+
+    it('rejects a color channel above 255', () => {
+      expect(() =>
+        resultIntentSchema.parse(segmentWith({ color: [256, 0, 0, 255] }))
+      ).toThrow();
+    });
+
+    it('rejects a negative color channel', () => {
+      expect(() =>
+        resultIntentSchema.parse(segmentWith({ color: [-1, 0, 0, 255] }))
+      ).toThrow();
+    });
+
+    it('rejects a non-integer color channel', () => {
+      expect(() =>
+        resultIntentSchema.parse(segmentWith({ color: [12.5, 0, 0, 255] }))
+      ).toThrow();
+    });
   });
 
   it('rejects an unknown intent kind', () => {

@@ -31,13 +31,19 @@ const resultFile = {
   name: z.string(),
 };
 
+// A single RGBA channel: an integer in [0, 255].
+const colorChannel = z.number().int().min(0).max(255);
+
 // Mirrors `ProcessingSegmentDescriptor`; the `satisfies` keeps the runtime
-// schema and the core type from drifting apart.
+// schema and the core type from drifting apart. The bounds match the contract:
+// `value` is a non-negative integer label index and `color` is RGBA 0-255, so
+// out-of-range descriptors are rejected here instead of silently dropped by
+// `updateSegment`'s try/catch downstream.
 const segmentDescriptor = z.object({
-  value: z.number(),
+  value: z.number().int().min(0),
   name: z.string(),
   // RGBA, 0-255.
-  color: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+  color: z.tuple([colorChannel, colorChannel, colorChannel, colorChannel]),
   visible: z.boolean().optional(),
 }) satisfies z.ZodType<ProcessingSegmentDescriptor>;
 
