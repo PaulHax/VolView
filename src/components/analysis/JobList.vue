@@ -48,7 +48,7 @@
               </div>
               <div class="d-flex flex-wrap" style="gap: 4px">
                 <v-btn
-                  v-if="result.role !== 'download'"
+                  v-if="canOpen(result)"
                   size="x-small"
                   variant="tonal"
                   :loading="loadingResultIds.has(result.id + ':open')"
@@ -99,6 +99,11 @@ import { computed, reactive } from 'vue';
 import { useProvidersStore } from '@/src/store/providers';
 import { applyIntent } from '@/src/actions/processResults';
 import type { ResultIntent } from '@/src/processing/intents';
+import {
+  canOpen,
+  canBeLayer,
+  canBeSegmentGroup,
+} from '@/src/processing/resultActions';
 import type { ProcessingResult } from '@/src/processing/types';
 
 const providers = useProvidersStore();
@@ -122,42 +127,6 @@ function subtitleFor(job: { state: string; progress?: number }): string {
   const pct =
     job.progress != null ? ` (${Math.round(job.progress * 100)}%)` : '';
   return `${job.state}${pct}`;
-}
-
-const IMAGE_LIKE_MIMETYPES = [
-  'application/dicom',
-  'application/vnd.unknown.nifti-1',
-  'application/vnd.unknown.metaimage',
-  'application/vnd.unknown.nrrd',
-];
-
-function canBeLayer(result: ProcessingResult): boolean {
-  if (result.role === 'state' || result.role === 'download') return false;
-  // Either explicitly tagged as a layer, or looks like an image.
-  if (result.role === 'layer') return true;
-  if (result.role === 'segmentGroup') return false;
-  return looksLikeImage(result);
-}
-
-function canBeSegmentGroup(result: ProcessingResult): boolean {
-  if (result.role === 'segmentGroup') return true;
-  if (result.role === 'layer' || result.role === 'base') return false;
-  return looksLikeImage(result);
-}
-
-function looksLikeImage(result: ProcessingResult): boolean {
-  if (result.mimeType && IMAGE_LIKE_MIMETYPES.includes(result.mimeType)) {
-    return true;
-  }
-  const lower = result.name.toLowerCase();
-  return (
-    lower.endsWith('.nii') ||
-    lower.endsWith('.nii.gz') ||
-    lower.endsWith('.mha') ||
-    lower.endsWith('.mhd') ||
-    lower.endsWith('.nrrd') ||
-    lower.endsWith('.dcm')
-  );
 }
 
 // Map an explicit action button to the intent it requests. The user's choice —
