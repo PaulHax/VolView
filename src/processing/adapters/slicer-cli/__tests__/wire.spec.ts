@@ -49,6 +49,15 @@ describe('parseJobStatus', () => {
     expect(parseJobStatus('job-1', { jobId: 'job-1' }).state).toBe('error');
   });
 
+  it('pins a valid status to the requested jobId, not the echoed one', () => {
+    const status = parseJobStatus('job-1', {
+      jobId: 'something-else',
+      state: 'success',
+    });
+    expect(status.jobId).toBe('job-1');
+    expect(status.state).toBe('success');
+  });
+
   it('converts a non-object payload into a terminal error', () => {
     expect(parseJobStatus('job-1', 'nonsense').state).toBe('error');
     expect(parseJobStatus('job-1', null).state).toBe('error');
@@ -77,15 +86,13 @@ describe('parseJobRef', () => {
     expect(ref.status?.state).toBe('error');
   });
 
-  it('throws when the job id is missing — nothing can be tracked', () => {
-    expect(() => parseJobRef({ status: { state: 'success' } })).toThrow(
-      /Malformed job ref/
-    );
-  });
-
-  it('throws when the job id is empty or not a string', () => {
-    expect(() => parseJobRef({ jobId: '' })).toThrow(/Malformed job ref/);
-    expect(() => parseJobRef({ jobId: 42 })).toThrow(/Malformed job ref/);
+  // Nothing can be tracked without a usable job id, so every unusable form throws.
+  it.each([
+    ['a missing job id', { status: { state: 'success' } }],
+    ['an empty job id', { jobId: '' }],
+    ['a non-string job id', { jobId: 42 }],
+  ])('throws on a ref with %s', (_label, input) => {
+    expect(() => parseJobRef(input)).toThrow(/Malformed job ref/);
   });
 });
 
@@ -110,6 +117,24 @@ describe('parseResults', () => {
       },
     ];
     expect(parseResults(raw)).toEqual(raw);
+  });
+
+  it('tolerates null mimeType/size (the facade emits absent file fields as null)', () => {
+    const raw = [
+      {
+        id: 'r1',
+        name: 'out.nrrd',
+        url: 'https://example/out.nrrd',
+        mimeType: null,
+        size: null,
+      },
+    ];
+    // Null is accepted (not thrown) and normalized to absent so the output
+    // still matches `ProcessingResult` (mimeType?: string, size?: number).
+    const parsed = parseResults(raw);
+    expect(parsed[0]).toMatchObject({ id: 'r1', name: 'out.nrrd' });
+    expect(parsed[0].mimeType).toBeUndefined();
+    expect(parsed[0].size).toBeUndefined();
   });
 
   it('degrades an unrecognized role to undefined instead of rejecting the list', () => {

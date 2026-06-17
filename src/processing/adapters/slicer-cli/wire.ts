@@ -42,14 +42,20 @@ const jobState = z.enum([
   'cancelled',
 ]);
 
+// `satisfies` pins the schema to the core type (same idiom as
+// `intents.ts`/`config.ts`) so the two cannot drift. `resultSchema` below
+// cannot adopt it — its `.catch()`/`.nullish()` widen the inferred type past
+// `ProcessingResult` — which is why only the status schema carries the guard.
 const jobStatusSchema = z
   .object({
-    jobId: z.string(),
+    // A usable job id is mandatory, same as the ref envelope below — nothing
+    // can be tracked or completion-keyed without it.
+    jobId: z.string().min(1),
     state: jobState,
     progress: z.number().optional(),
     errorTail: z.string().optional(),
   })
-  .passthrough();
+  .passthrough() satisfies z.ZodType<ProcessingJobStatus>;
 
 // Result `role` arrives as an untrusted, additively-extended enum; an
 // unrecognized value degrades to `undefined` (the adapter's `resultToIntent`
@@ -77,8 +83,20 @@ const resultSchema = z
     url: z.string(),
     role: resultRole,
     intent: z.string().optional(),
-    mimeType: z.string().optional(),
-    size: z.number().optional(),
+    // The facade emits these straight from `fileDoc.get(...)`, which is JSON
+    // `null` when the file doc lacks the key (e.g. an asset-store import with no
+    // mimeType). Plain `.optional()` rejects `null` and would throw the whole
+    // result list away (fireCompletion drops every result on a parse failure),
+    // so a single null mimeType could silently load nothing. Accept null and
+    // normalize it to absent so the output still matches `ProcessingResult`.
+    mimeType: z
+      .string()
+      .nullish()
+      .transform((v) => v ?? undefined),
+    size: z
+      .number()
+      .nullish()
+      .transform((v) => v ?? undefined),
     segments: z.array(segmentDescriptorSchema).optional(),
   })
   .passthrough();
@@ -114,7 +132,12 @@ export const parseJobStatus = (
   raw: unknown
 ): ProcessingJobStatus => {
   const parsed = jobStatusSchema.safeParse(raw);
-  if (parsed.success) return parsed.data;
+  // Pin the status to the *requested* jobId on both branches. The store keys
+  // its job map and submitted-context lookup off `status.jobId`, so a provider
+  // that echoed a different id would record the job under the wrong key (UI
+  // never sees the terminal state, result auto-attach context is lost). The
+  // error branch already does this; the success branch must match.
+  if (parsed.success) return { ...parsed.data, jobId };
   return {
     jobId,
     state: 'error',
