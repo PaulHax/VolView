@@ -36,6 +36,54 @@ describe('processing config injection', () => {
     vi.restoreAllMocks();
   });
 
+  const sameOriginProcessingConfig = () =>
+    new File(
+      [
+        JSON.stringify({
+          processing: {
+            providers: [
+              {
+                id: 'injected-provider',
+                label: 'Injected',
+                protocol: 'slicer-cli',
+                baseUrl: '/api/v1/folder/abc/volview_processing',
+              },
+            ],
+          },
+        }),
+      ],
+      'config.json',
+      { type: 'application/json' }
+    );
+
+  it('registers provider config loaded through the trusted config path', async () => {
+    const [{ importDataSources }, { uriToDataSource }, { useProvidersStore }] =
+      await Promise.all([
+        import('@/src/io/import/importDataSources'),
+        import('@/src/io/import/dataSource'),
+        import('@/src/store/providers'),
+      ]);
+
+    // A config delivered as a file whose parent uri carries the 'config' role —
+    // the shape produced by launching VolView with `&config=<url>` and letting
+    // openUriStream/downloadStream resolve the uri to a same-origin .json file.
+    const dataSource: DataSource = {
+      type: 'file',
+      file: sameOriginProcessingConfig(),
+      fileType: 'application/json',
+      parent: uriToDataSource(
+        'http://localhost:3000/api/v1/folder/abc/volview_processing/config.json',
+        'config.json',
+        undefined,
+        'config'
+      ),
+    };
+
+    await importDataSources([dataSource]);
+
+    expect(useProvidersStore().providerCount).toBe(1);
+  });
+
   it('does not register provider config loaded through the urls path', async () => {
     const [{ importDataSources }, { uriToDataSource }, { useProvidersStore }] =
       await Promise.all([
