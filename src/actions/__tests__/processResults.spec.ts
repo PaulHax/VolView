@@ -132,11 +132,15 @@ describe('applyIntent', () => {
   it('attach-segment-group converts the labelmap and applies descriptors', async () => {
     mocks.orderByParent.value = { parent: ['group-1'] };
     const segments = [
-      { value: 1, name: 'liver', color: [255, 0, 0, 255] as const },
+      {
+        value: 1,
+        name: 'liver',
+        color: [255, 0, 0, 255] as [number, number, number, number],
+      },
       {
         value: 2,
         name: 'tumor',
-        color: [0, 255, 0, 255] as const,
+        color: [0, 255, 0, 255] as [number, number, number, number],
         visible: false,
       },
     ];
