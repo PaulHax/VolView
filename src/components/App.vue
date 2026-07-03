@@ -163,7 +163,7 @@ export default defineComponent({
 
     // --- remote save state URL --- //
 
-    if (import.meta.env.VITE_ENABLE_REMOTE_SAVE && urlParams.save) {
+    if (urlParams.save) {
       const url = Array.isArray(urlParams.save)
         ? urlParams.save[0]
         : urlParams.save;

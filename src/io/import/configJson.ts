@@ -13,8 +13,6 @@ import { AnnotationToolStore } from '@/src/store/tools/useAnnotationTool';
 import useLoadDataStore from '@/src/store/load-data';
 import { layoutConfig } from '@/src/utils/layoutParsing';
 
-const PROCESSING_ENABLED = import.meta.env.VITE_ENABLE_PROCESSING === 'true';
-
 // --------------------------------------------------------------------------
 // Layout
 
@@ -105,7 +103,11 @@ export const readConfigFile = async (
   const ab = await configFile.arrayBuffer();
   const text = decoder.decode(new Uint8Array(ab));
   const rawConfig = JSON.parse(text);
-  if (!PROCESSING_ENABLED || options.processing === false) {
+  // Processing is always built. The `processing` config section is only parsed
+  // in when the caller trusts this source (handleConfig passes
+  // `processing: false` for untrusted remote sources); provider registration is
+  // then further gated by the origin allow-list in applyProcessingConfig.
+  if (options.processing === false) {
     return config.parse(rawConfig);
   }
 
@@ -184,8 +186,6 @@ const applyDisabledViewTypes = (manifest: Config) => {
 };
 
 const applyProcessing = async (manifest: Config) => {
-  if (!PROCESSING_ENABLED) return;
-
   const { applyProcessingConfig } = await import('@/src/processing/config');
   applyProcessingConfig(manifest);
 };

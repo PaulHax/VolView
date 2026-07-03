@@ -67,8 +67,6 @@ type Module = {
   disabled?: boolean;
 };
 
-const PROCESSING_ENABLED = import.meta.env.VITE_ENABLE_PROCESSING === 'true';
-
 const CoreModules: Module[] = [
   {
     name: 'Data',
@@ -125,34 +123,35 @@ export default defineComponent({
       stopProviderCountWatch?.();
     });
 
-    if (PROCESSING_ENABLED) {
-      const AnalysisModule = defineAsyncComponent(
-        () => import('./AnalysisModule.vue')
-      );
+    // Processing ships in every build; the Analysis tab stays latent until a
+    // provider registers. `providerCount > 0` is the sole runtime gate — with
+    // no provider configured the tab never appears (latent = inert).
+    const AnalysisModule = defineAsyncComponent(
+      () => import('./AnalysisModule.vue')
+    );
 
-      import('@/src/store/providers')
-        .then(({ useProvidersStore }) => {
-          if (disposed) return;
-          const providersStore = useProvidersStore();
-          stopProviderCountWatch = watch(
-            () => providersStore.providerCount,
-            (providerCount) => {
-              analysisModule.value =
-                providerCount > 0
-                  ? {
-                      name: 'Analysis',
-                      icon: 'flask-outline',
-                      component: AnalysisModule,
-                    }
-                  : null;
-            },
-            { immediate: true }
-          );
-        })
-        .catch((err) => {
-          console.warn('Failed to initialize analysis providers', err);
-        });
-    }
+    import('@/src/store/providers')
+      .then(({ useProvidersStore }) => {
+        if (disposed) return;
+        const providersStore = useProvidersStore();
+        stopProviderCountWatch = watch(
+          () => providersStore.providerCount,
+          (providerCount) => {
+            analysisModule.value =
+              providerCount > 0
+                ? {
+                    name: 'Analysis',
+                    icon: 'flask-outline',
+                    component: AnalysisModule,
+                  }
+                : null;
+          },
+          { immediate: true }
+        );
+      })
+      .catch((err) => {
+        console.warn('Failed to initialize analysis providers', err);
+      });
 
     const modules = computed(() => {
       const filtered = [

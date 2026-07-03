@@ -25,7 +25,6 @@ const remoteProcessingConfig = () =>
 describe('processing config injection', () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.stubEnv('VITE_ENABLE_PROCESSING', 'true');
     vi.stubEnv('VITE_PROCESSING_ALLOWED_ORIGINS', 'https://analysis.example');
     setActivePinia(createPinia());
     vi.spyOn(console, 'warn').mockImplementation(() => {});
