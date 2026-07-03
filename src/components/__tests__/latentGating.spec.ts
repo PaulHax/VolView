@@ -104,15 +104,33 @@ describe('Remote save is latent — gated on a save target', () => {
     expect($fetch).not.toHaveBeenCalled();
   });
 
-  it('performs egress only after a save target is set (always-built, latent)', async () => {
+  it('performs egress only after an allowed save target is set (always-built, latent)', async () => {
     const store = useRemoteSaveStateStore();
-    store.setSaveUrl('https://example.test/save');
+    // Same-origin passes the runtime egress gate with zero config (chunk 2).
+    const saveUrl = `${window.location.origin}/save`;
+    await store.setSaveUrl(saveUrl);
 
     await store.saveState();
 
     expect($fetch).toHaveBeenCalledTimes(1);
-    expect(vi.mocked($fetch).mock.calls[0][0]).toBe(
-      'https://example.test/save'
+    expect(vi.mocked($fetch).mock.calls[0][0]).toBe(saveUrl);
+  });
+
+  it('refuses a disallowed cross-origin save target — surface stays inert', async () => {
+    const store = useRemoteSaveStateStore();
+    // No allow-list served ⇒ a cross-origin save target never reaches saveUrl,
+    // so the surface (gated on saveUrl !== '') and egress both stay inert.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 404 })) as unknown as typeof fetch
     );
+
+    await store.setSaveUrl('https://attacker.example/save');
+
+    expect(store.saveUrl).toBe('');
+    await store.saveState();
+    expect($fetch).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
   });
 });

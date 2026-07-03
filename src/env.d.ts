@@ -4,7 +4,6 @@ interface ImportMetaEnv {
   readonly VITE_DICOM_WEB_URL: string;
   readonly VITE_DICOM_WEB_NAME: string;
   readonly VITE_REMOTE_SERVER_URL: string;
-  readonly VITE_PROCESSING_ALLOWED_ORIGINS: string;
 }
 
 interface ImportMeta {

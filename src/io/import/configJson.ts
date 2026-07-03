@@ -91,28 +91,65 @@ export const config = z.object({
 
 export type Config = z.infer<typeof config>;
 
-type ReadConfigFileOptions = {
-  processing?: boolean;
+// ---------------------------------------------------------------------------
+// Config-by-shape recognition (D9, chunk 2)
+//
+// Config may arrive via ANY channel — launch manifest, dropped file, or a JSON
+// inside the normal `urls=` file list. There is no channel distinction: a JSON
+// is recognized as config purely BY SHAPE, and trust for the `processing`
+// section attaches later to the provider's ORIGIN (see io/originGate), never to
+// how the config arrived.
+//
+// Recognition is strict on the trust boundary so a data JSON can't drift into
+// being read as config:
+//   - zero known top-level section keys          => data (silent; plain import)
+//   - >=1 known key AND >=1 unknown top-level key => near-miss: surfaced by the
+//                                                    caller, then imported as
+//                                                    data (a newer config on an
+//                                                    older client is a visible
+//                                                    error, not a silent import)
+//   - only known top-level keys                   => config (values validated)
+
+export type ConfigRecognition =
+  | { kind: 'config'; config: Config }
+  | { kind: 'near-miss'; unknownKeys: string[] }
+  | { kind: 'data' };
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+export const recognizeConfig = async (
+  raw: unknown
+): Promise<ConfigRecognition> => {
+  if (!isPlainObject(raw)) return { kind: 'data' };
+
+  // The full schema (base sections + `processing`) defines the known top-level
+  // keys. Imported lazily so the processing schema stays in its own chunk.
+  const { withProcessingConfig } = await import('@/src/processing/config');
+  const fullConfig = withProcessingConfig(config);
+  const knownKeys = new Set(Object.keys(fullConfig.shape));
+
+  const presentKeys = Object.keys(raw);
+  const knownPresent = presentKeys.filter((key) => knownKeys.has(key));
+  // No config signal at all — a plain data JSON. Falls through silently so a
+  // stray data file is not announced as a config near-miss.
+  if (knownPresent.length === 0) return { kind: 'data' };
+
+  const unknownKeys = presentKeys.filter((key) => !knownKeys.has(key));
+  if (unknownKeys.length > 0) return { kind: 'near-miss', unknownKeys };
+
+  // Every top-level key is a known section: validate the values. A malformed
+  // value throws (a config-shaped file with a broken section is a real error).
+  return { kind: 'config', config: fullConfig.parse(raw) };
 };
 
-export const readConfigFile = async (
-  configFile: File,
-  options: ReadConfigFileOptions = {}
-) => {
-  const decoder = new TextDecoder();
-  const ab = await configFile.arrayBuffer();
-  const text = decoder.decode(new Uint8Array(ab));
-  const rawConfig = JSON.parse(text);
-  // Processing is always built. The `processing` config section is only parsed
-  // in when the caller trusts this source (handleConfig passes
-  // `processing: false` for untrusted remote sources); provider registration is
-  // then further gated by the origin allow-list in applyProcessingConfig.
-  if (options.processing === false) {
-    return config.parse(rawConfig);
-  }
-
-  const { withProcessingConfig } = await import('@/src/processing/config');
-  return withProcessingConfig(config).parse(rawConfig);
+export const recognizeConfigFile = async (
+  file: File
+): Promise<ConfigRecognition> => {
+  const text = new TextDecoder().decode(
+    new Uint8Array(await file.arrayBuffer())
+  );
+  return recognizeConfig(JSON.parse(text));
 };
 
 const applyLabels = (manifest: Config) => {
@@ -187,7 +224,7 @@ const applyDisabledViewTypes = (manifest: Config) => {
 
 const applyProcessing = async (manifest: Config) => {
   const { applyProcessingConfig } = await import('@/src/processing/config');
-  applyProcessingConfig(manifest);
+  await applyProcessingConfig(manifest);
 };
 
 export const applyPreStateConfig = async (manifest: Config) => {
