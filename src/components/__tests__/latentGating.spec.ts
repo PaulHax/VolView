@@ -51,7 +51,6 @@ const moduleNames = (wrapper: VueWrapper) =>
 const sampleProvider: ProcessingProviderConfig = {
   id: 'p1',
   label: 'Fake Provider',
-  protocol: 'slicer-cli',
   baseUrl: 'http://localhost/',
 };
 

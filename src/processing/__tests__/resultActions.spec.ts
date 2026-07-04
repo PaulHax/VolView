@@ -19,11 +19,9 @@ const result = (
 });
 
 describe('naturalIntent', () => {
-  it('consumes the facade-emitted intent directly (no role dispatch)', () => {
-    // The client reads `intent` and never switches on `role`.
-    expect(
-      naturalIntent(result({ role: 'segmentGroup', intent: 'add-layer' }))
-    ).toBe('add-layer');
+  it('consumes the facade-emitted intent directly', () => {
+    // The client reads the neutral `intent` and applies it verbatim.
+    expect(naturalIntent(result({ intent: 'add-layer' }))).toBe('add-layer');
   });
 
   it('resolves a labelmap output to add-segment-group', () => {

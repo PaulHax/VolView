@@ -14,21 +14,14 @@
 // `/info` discovery, sync drivers, the interactive loop) is out of v1 scope:
 // this is the seam, not the full binding descriptor.
 //
-// NOTE (Chunk 13 relocation): the wire validators still live under the doomed
-// `adapters/slicer-cli/` tree. The neutral format is settled, so the default
-// descriptor references them here; the deletion sweep that removes the adapter
-// relocates those validators (they are the neutral result-format, not
-// slicer-specific parsing).
+// The wire validators are the neutral result-format (`engine/wire.ts`), not
+// backend-specific parsing; the default descriptor delegates to them here.
 //
 // House rules: functional style; `type`, not `interface`.
 // ---------------------------------------------------------------------------
 
-import type { SlicerCliTaskSummary } from '@/src/processing/types';
-import {
-  parseJobRef,
-  parseJobStatus,
-  parseResults,
-} from '@/src/processing/adapters/slicer-cli/wire';
+import type { TaskSummary } from '@/src/processing/types';
+import { parseJobRef, parseJobStatus, parseResults } from './wire';
 import { parseTaskSpecEnvelope } from './taskSpec';
 import type { TransportDescriptor } from './transport';
 
@@ -55,9 +48,9 @@ export const defaultDescriptor: TransportDescriptor = {
   lifecycle: 'poll',
 
   format: {
-    // Task summaries are advisory display metadata; kept as the current
-    // pass-through (no schema) so this chunk changes transport, not vocabulary.
-    parseTasks: (raw) => raw as SlicerCliTaskSummary[],
+    // Task summaries are advisory display metadata, kept as a pass-through (no
+    // schema) — transport, not vocabulary.
+    parseTasks: (raw) => raw as TaskSummary[],
     parseSpec: parseTaskSpecEnvelope,
     parseRunResponse: parseJobRef,
     parseStatus: parseJobStatus,

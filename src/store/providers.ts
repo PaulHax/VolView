@@ -2,7 +2,7 @@
 //
 // Holds provider *configs* (registered on app boot from the manifest config
 // JSON) and *instances* (created lazily on first `getProvider` call —
-// dynamic-imports the adapter chunk).
+// dynamic-imports the generic engine provider chunk).
 //
 // Also owns the whole tracked-job lifecycle (contract "Seam 3 — job lifecycle";
 // decisions.md D5): the submitted-job records, the poll loop, the terminal
@@ -97,21 +97,16 @@ export type JobCompletion = {
 
 type CompletionListener = (completion: JobCompletion) => void;
 
-const loadAdapter = async (
+const loadProvider = async (
   config: ProcessingProviderConfig
 ): Promise<ProcessingProvider> => {
-  // Dynamic import — Vite emits a separate chunk that's only fetched when
-  // some surface (typically the Jobs tab) actually invokes this code path.
-  switch (config.protocol) {
-    case 'slicer-cli': {
-      const mod = await import('@/src/processing/adapters/slicer-cli');
-      return mod.createProvider(config);
-    }
-    default: {
-      const exhaustive: never = config.protocol;
-      throw new Error(`Unsupported processing protocol: ${exhaustive}`);
-    }
-  }
+  // Dynamic import — Vite emits a separate chunk for the generic engine that's
+  // only fetched when some surface (typically the Jobs tab) actually
+  // instantiates a provider, keeping the engine out of the boot bundle. There
+  // is one generic engine and no per-backend branch: every provider is the
+  // engine transport reading the neutral-facade default descriptor.
+  const { createProvider } = await import('@/src/processing/engine/provider');
+  return createProvider(config);
 };
 
 export const useProvidersStore = defineStore('providers', () => {
@@ -184,7 +179,7 @@ export const useProvidersStore = defineStore('providers', () => {
     if (inflight) return inflight;
     const config = configs.get(id);
     if (!config) throw new Error(`Unknown provider id: ${id}`);
-    const promise = loadAdapter(config).then((provider) => {
+    const promise = loadProvider(config).then((provider) => {
       instances.set(id, provider);
       loading.delete(id);
       return provider;
@@ -434,7 +429,7 @@ export const useProvidersStore = defineStore('providers', () => {
     try {
       const provider = await getProvider(providerId);
       const config = configs.get(providerId);
-      const ctx = config?.context ?? { loadedSources: [] };
+      const ctx = config?.context ?? {};
       const jobRef = await provider.runTask(taskId, values, ctx);
       const jobId = jobRef.jobId;
       recordSubmittedContext({

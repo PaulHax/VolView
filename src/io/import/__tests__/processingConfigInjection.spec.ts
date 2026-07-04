@@ -11,7 +11,6 @@ import type { DataSource } from '@/src/io/import/dataSource';
 type ProviderConfig = {
   id: string;
   label: string;
-  protocol: string;
   baseUrl: string;
 };
 
@@ -24,7 +23,6 @@ const configWithProvider = (
       {
         id: 'injected-provider',
         label: 'Injected',
-        protocol: 'slicer-cli',
         baseUrl,
       } satisfies ProviderConfig,
     ],

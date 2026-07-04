@@ -13,8 +13,8 @@
 // STRICT `knownResultIntentSchema` member — a name-known-but-shape-invalid
 // result must not be applied as if it were a valid segment group.
 //
-// Relocated out of the (doomed) slicer-cli adapter into the engine/core home in
-// Chunk 11; core imports it (`actions/processResults`, `processing/resultActions`).
+// Lives in the engine/core home; core imports it (`actions/processResults`,
+// `processing/resultActions`).
 // ---------------------------------------------------------------------------
 
 import {

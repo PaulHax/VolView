@@ -26,7 +26,6 @@ describe('config-by-shape recognition', () => {
           {
             id: 'p',
             label: 'Analysis',
-            protocol: 'slicer-cli',
             baseUrl: '/volview_processing',
           },
         ],
@@ -90,7 +89,6 @@ describe('config-by-shape recognition', () => {
           {
             id: 'p',
             label: 'Analysis',
-            protocol: 'slicer-cli',
             baseUrl: 'https://analysis.example/api',
           },
         ],

@@ -13,10 +13,10 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import type { SlicerCliTaskSummary } from '@/src/processing/types';
+import type { TaskSummary } from '@/src/processing/types';
 
 const props = defineProps<{
-  tasks: SlicerCliTaskSummary[];
+  tasks: TaskSummary[];
   modelValue?: string | null;
 }>();
 const emit = defineEmits<{

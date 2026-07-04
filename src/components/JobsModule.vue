@@ -74,7 +74,7 @@ import { autoLoadProcessingResults } from '@/src/actions/processResults';
 import type {
   ProcessingProvider,
   ProcessingValue,
-  SlicerCliTaskSummary,
+  TaskSummary,
 } from '@/src/processing/types';
 import {
   buildTaskFormModel,
@@ -116,7 +116,7 @@ const provider = ref<ProcessingProvider | null>(null);
 const loadingProvider = ref(false);
 const providerError = ref<string | null>(null);
 
-const tasks = ref<SlicerCliTaskSummary[]>([]);
+const tasks = ref<TaskSummary[]>([]);
 const selectedTaskId = ref<string | null>(null);
 
 const taskModel = ref<TaskFormModel | null>(null);
@@ -159,7 +159,7 @@ watch(
     try {
       const p = await providers.getProvider(id);
       provider.value = p;
-      const ctx = providers.configs.get(id)?.context ?? { loadedSources: [] };
+      const ctx = providers.configs.get(id)?.context ?? {};
       tasks.value = await p.listTasks(ctx);
       if (tasks.value.length > 0) {
         // Will trigger the selectedTaskId watcher below.
@@ -235,15 +235,11 @@ async function onSubmit(values: Record<string, ProcessingValue>) {
 
   submitting.value = true;
   try {
-    const config = providers.configs.get(selectedProviderId.value);
     await providers.submitJob(
       selectedProviderId.value,
       selectedTaskId.value,
       finalValues,
-      {
-        activeSourceRef: config?.context?.activeSourceRef,
-        activeDatasetId: currentImageID.value ?? undefined,
-      }
+      { activeDatasetId: currentImageID.value ?? undefined }
     );
   } catch {
     // Item 4: the failure is already surfaced by the store (message center);

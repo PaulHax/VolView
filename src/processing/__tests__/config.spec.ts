@@ -20,7 +20,6 @@ function processingConfig(baseUrl: string, id = 'analysis-provider'): Config {
         {
           id,
           label: 'Analysis',
-          protocol: 'slicer-cli',
           baseUrl,
         },
       ],
@@ -129,78 +128,5 @@ describe('processing config provider origins', () => {
     // The allow-list fetch targets the fixed same-origin path — not any origin
     // the config could name.
     expect(vi.mocked(fetch).mock.calls[0][0]).toBe(PROCESSING_ORIGINS_PATH);
-  });
-});
-
-describe('loadedSources match keys (item 3.6 wire validation)', () => {
-  const parseSources = (loadedSources: unknown[]) =>
-    (
-      withProcessingConfig(baseConfig).parse({
-        processing: {
-          providers: [
-            {
-              id: 'p',
-              label: 'Analysis',
-              protocol: 'slicer-cli',
-              baseUrl: '/volview_processing',
-              context: { loadedSources },
-            },
-          ],
-        },
-      }) as Config & {
-        processing: {
-          providers: Array<{
-            context: {
-              loadedSources: Array<{ name: string; matchKey?: unknown }>;
-            };
-          }>;
-        };
-      }
-    ).processing.providers[0].context.loadedSources;
-
-  it('preserves a valid series match key', () => {
-    const [src] = parseSources([
-      {
-        datasetId: 'i1',
-        name: 'Brain',
-        sourceRef: 'series:f:1.2.3',
-        matchKey: {
-          kind: 'series',
-          seriesInstanceUID: '1.2.3',
-          seriesDescription: 'Brain',
-        },
-      },
-    ]);
-    expect(src.matchKey).toEqual({
-      kind: 'series',
-      seriesInstanceUID: '1.2.3',
-      seriesDescription: 'Brain',
-    });
-  });
-
-  it('preserves a valid name match key', () => {
-    const [src] = parseSources([
-      {
-        datasetId: 'i1',
-        name: 'mask.nrrd',
-        sourceRef: 'file:1',
-        matchKey: { kind: 'name', name: 'mask.nrrd' },
-      },
-    ]);
-    expect(src.matchKey).toEqual({ kind: 'name', name: 'mask.nrrd' });
-  });
-
-  it('degrades a malformed match key to undefined without failing the parse', () => {
-    const [src] = parseSources([
-      {
-        datasetId: 'i1',
-        name: 'mystery',
-        sourceRef: 'file:1',
-        matchKey: { kind: 'bogus' },
-      },
-    ]);
-    // The source still loads; it just cannot be matched by key.
-    expect(src.matchKey).toBeUndefined();
-    expect(src.name).toBe('mystery');
   });
 });

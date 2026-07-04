@@ -3,50 +3,15 @@ import { z } from 'zod';
 import { useProvidersStore } from '@/src/store/providers';
 import { isOriginAllowed, resolveOrigin } from '@/src/io/originGate';
 import type { Config } from '@/src/io/import/configJson';
-import type {
-  ProcessingProviderConfig,
-  ProcessingSourceMatchKey,
-  SourceRef,
-} from '@/src/processing/types';
-
-const sourceRef = z.string().transform((s) => s as SourceRef);
-
-// Volume identity used by the client to bind the on-screen volume (item 3.6).
-// It arrives as untrusted wire JSON, so a malformed key degrades to `undefined`
-// (the source still loads, it just can't be matched by key) rather than failing
-// the whole `.parse()` of the per-launch config.
-const processingSourceMatchKey = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('series'),
-    seriesInstanceUID: z.string(),
-    seriesDescription: z.string().optional(),
-  }),
-  z.object({
-    kind: z.literal('name'),
-    name: z.string(),
-  }),
-  // `satisfies` keeps this runtime schema and the core type from drifting
-  // apart (mirrors the segmentDescriptor pattern in intents.ts).
-]) satisfies z.ZodType<ProcessingSourceMatchKey>;
-
-const loadedProcessingSource = z.object({
-  datasetId: z.string(),
-  name: z.string(),
-  uri: z.string().optional(),
-  sourceRef: sourceRef.optional(),
-  matchKey: processingSourceMatchKey.optional().catch(undefined),
-});
+import type { ProcessingProviderConfig } from '@/src/processing/types';
 
 const processingContext = z.object({
   activeDatasetId: z.string().optional(),
-  activeSourceRef: sourceRef.optional().nullable(),
-  loadedSources: z.array(loadedProcessingSource).default([]),
 });
 
 const processingProviderConfig = z.object({
   id: z.string(),
   label: z.string(),
-  protocol: z.enum(['slicer-cli']),
   baseUrl: z.string(),
   context: processingContext.optional(),
 });

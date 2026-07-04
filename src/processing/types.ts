@@ -1,8 +1,10 @@
 // ---------------------------------------------------------------------------
 // Provider contract — VolView core consumes these types only.
 //
-// All adapter-specific code lives under `processing/adapters/<protocol>/`.
-// Core VolView must never import from an adapter package.
+// One generic engine speaks to every backend: there is no per-backend adapter
+// and no XML parser in the client (contract "one generic client engine, zero
+// per-backend client code"). The provider is composed by `engine/provider.ts`
+// from the generic transport + the default descriptor.
 // ---------------------------------------------------------------------------
 
 // Type-only import (erased at runtime — no import cycle with the engine).
@@ -11,12 +13,9 @@ import type { TaskSpecEnvelope } from '@/src/processing/engine/taskSpec';
 // (contract "Seam 1 — inputs"; Chunk 8). `{ type, format?, uris }`.
 import type { InputValue, ResultSource } from '@/processing-contract';
 
-export type ProcessingProtocol = 'slicer-cli';
-
 export type ProcessingProviderConfig = {
   id: string;
   label: string;
-  protocol: ProcessingProtocol;
   baseUrl: string;
   context?: ProcessingContext;
 };
@@ -24,13 +23,10 @@ export type ProcessingProviderConfig = {
 export type ProcessingProvider = {
   config: ProcessingProviderConfig;
 
-  listTasks: (context: ProcessingContext) => Promise<SlicerCliTaskSummary[]>;
+  listTasks: (context: ProcessingContext) => Promise<TaskSummary[]>;
   // Server-emitted, zod-validated task description (contract Seam 2). The engine
   // renders the parameter form from this — it parses no XML at runtime.
   getTaskSpec: (taskId: string) => Promise<TaskSpecEnvelope>;
-  // Retired at runtime (superseded by getTaskSpec); kept until the Chunk 13
-  // deletion sweep removes it along with the XML path.
-  getTaskXml: (taskId: string) => Promise<string>;
   getDefaultBindings: (
     taskId: string,
     context: ProcessingContext
@@ -44,7 +40,9 @@ export type ProcessingProvider = {
   getResults: (jobId: string) => Promise<ProcessingResult[]>;
 };
 
-export type SlicerCliTaskSummary = {
+// Advisory display metadata for the task picker (id/title + optional hints).
+// The facade emits it; the engine passes it through without a schema.
+export type TaskSummary = {
   id: string;
   title: string;
   description?: string;
@@ -54,26 +52,7 @@ export type SlicerCliTaskSummary = {
 
 export type ProcessingContext = {
   activeDatasetId?: string;
-  activeSourceRef?: SourceRef;
-  loadedSources: LoadedProcessingSource[];
   cropLpsBounds?: LpsBounds;
-};
-
-// Provider-supplied volume identity (facade item 3.2) used to bind the
-// on-screen volume to its advertised source. A discriminated union over the
-// two loaded formats: DICOM volumes carry the SeriesInstanceUID (names come
-// from headers, not filenames); non-DICOM single-file volumes carry the
-// dataset name VolView shows. Opaque to core matching — never a Girder id.
-export type ProcessingSourceMatchKey =
-  | { kind: 'series'; seriesInstanceUID: string; seriesDescription?: string }
-  | { kind: 'name'; name: string };
-
-export type LoadedProcessingSource = {
-  datasetId: string;
-  name: string;
-  uri?: string;
-  sourceRef?: SourceRef;
-  matchKey?: ProcessingSourceMatchKey;
 };
 
 export type LpsBounds = {
@@ -82,28 +61,16 @@ export type LpsBounds = {
   Axial: [number, number];
 };
 
-// Branded opaque handle. VolView passes it back to the provider verbatim;
-// the provider resolves it to backend ids server-side. Core VolView never
-// parses or constructs one — only the slicer-cli adapter does.
-export type SourceRef = string & { readonly __brand: 'SourceRef' };
-
 export type ProcessingValue =
   | string
   | number
   | boolean
   | string[]
   | number[]
-  | SourceRef
   // Seam-1 input value minted from the bound volume's own DataSource provenance
-  // (Chunk 8). Supersedes the branded `SourceRef` string as the sourceRef value.
+  // (contract "Seam 1 — inputs"; Chunk 8) — the value a `sourceRef` param carries.
   | InputValue
-  | ProcessingOutputRequest
   | null;
-
-export type ProcessingOutputRequest = {
-  name: string;
-  folderRef?: SourceRef;
-};
 
 /** Job lifecycle states (closed vocabulary; shared with the wire schema). */
 export const JOB_STATES = [
@@ -143,26 +110,10 @@ export type ProcessingSegmentDescriptor = {
   visible?: boolean;
 };
 
-/**
- * Result role names (closed vocabulary). VESTIGIAL: results now cross the wire
- * as declarative intents and the client no longer switches on `role` (the
- * `roleToIntent` dispatch was retired in Chunk 11). Kept only so the doomed
- * slicer-cli adapter wire validator still compiles until the Chunk 13 sweep.
- */
-export const RESULT_ROLES = [
-  'base',
-  'layer',
-  'segmentGroup',
-  'state',
-  'download',
-] as const;
-
 export type ProcessingResult = {
   id: string;
   name: string;
   url: string;
-  /** Vestigial — see `RESULT_ROLES`. The client applies `intent`, not `role`. */
-  role?: (typeof RESULT_ROLES)[number];
   /**
    * Provider-supplied result intent — the neutral v1 vocabulary the single
    * applier applies (contract Seam 2; `processing-contract/wire.ts`). Typed
@@ -196,5 +147,4 @@ export type SubmittedJobContext = {
   providerId: string;
   submittedAt: string;
   activeDatasetId?: string;
-  activeSourceRef?: SourceRef;
 };

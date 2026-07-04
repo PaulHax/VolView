@@ -24,8 +24,9 @@ const IMAGE_LIKE_MIMETYPES = [
 ];
 
 // The result's natural (default) intent — what the producer says VolView should
-// do with the file. The slicer-cli `role` field is the untranslated wire shape;
-// resolving through `resultToIntent` keeps this policy off the wire vocabulary.
+// do with the file. Resolving through `resultToIntent` (which degrades an
+// unknown/invalid intent to `download`) keeps this policy on the neutral intent
+// vocabulary, never a wire-specific one.
 export function naturalIntent(
   result: ProcessingResult
 ): ResultIntent['intent'] {

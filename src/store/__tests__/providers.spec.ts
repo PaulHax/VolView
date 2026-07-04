@@ -33,7 +33,6 @@ const makeProvider = (
   config: {
     id: 'p1',
     label: 'Fake',
-    protocol: 'slicer-cli',
     baseUrl: 'http://localhost/',
   },
   listTasks: vi.fn().mockResolvedValue([]),
@@ -44,7 +43,6 @@ const makeProvider = (
     parameters: [],
     outputs: [],
   }),
-  getTaskXml: vi.fn().mockResolvedValue(''),
   getDefaultBindings: vi.fn().mockResolvedValue({}),
   runTask: vi.fn(),
   getJob: vi.fn(),

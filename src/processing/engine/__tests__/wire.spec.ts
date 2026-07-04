@@ -4,7 +4,7 @@ import {
   parseJobRef,
   parseJobStatus,
   parseResults,
-} from '@/src/processing/adapters/slicer-cli/wire';
+} from '@/src/processing/engine/wire';
 import type {
   ProcessingJobStatus,
   ProcessingResult,
@@ -105,13 +105,13 @@ describe('parseResults', () => {
     expect(parseResults(valid)).toEqual(valid);
   });
 
-  it('preserves a segmentGroup result with descriptors and unknown keys', () => {
+  it('preserves a segment-group result with descriptors and unknown keys', () => {
     const raw = [
       {
         id: 'r1',
         name: 'seg.nrrd',
         url: 'https://example/seg.nrrd',
-        role: 'segmentGroup',
+        intent: 'add-segment-group',
         segments: [{ value: 1, name: 'liver', color: [255, 0, 0, 255] }],
         extra: 'keep-me',
       },
@@ -135,18 +135,6 @@ describe('parseResults', () => {
     expect(parsed[0]).toMatchObject({ id: 'r1', name: 'out.nrrd' });
     expect(parsed[0].mimeType).toBeUndefined();
     expect(parsed[0].size).toBeUndefined();
-  });
-
-  it('degrades an unrecognized role to undefined instead of rejecting the list', () => {
-    const raw = [
-      {
-        id: 'r1',
-        name: 'out.nrrd',
-        url: 'https://example/out.nrrd',
-        role: 'future-role',
-      },
-    ];
-    expect(parseResults(raw)[0].role).toBeUndefined();
   });
 
   it('throws on a non-array payload', () => {

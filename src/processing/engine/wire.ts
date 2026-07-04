@@ -1,23 +1,28 @@
 // ---------------------------------------------------------------------------
-// slicer-cli wire validation (item 4.3).
+// Engine wire validation (contract Seam 2/3).
 //
-// The adapter speaks HTTP to an untrusted facade: every job status, job ref,
-// and result list arrives as wire JSON. Before this module those payloads were
-// `fetchJson<T>` casts straight to typed shapes, so an unknown/missing
-// `state` (or a born-terminal ref carrying a garbage status) slipped past the
-// type system and made the poller (`store/providers.ts`) loop forever — never
-// terminal, never error. This module validates each payload with zod (mirroring
-// the rigor `intents.ts` applies to result intents) and converts an
-// unparseable status into a *terminal error* status so the lifecycle stops
-// instead of spinning.
+// The engine speaks HTTP to an untrusted facade: every job status, job ref, and
+// result list arrives as wire JSON. Before this module those payloads were
+// `fetchJson<T>` casts straight to typed shapes, so an unknown/missing `state`
+// (or a born-terminal ref carrying a garbage status) slipped past the type
+// system and made the poller (`store/providers.ts`) loop forever — never
+// terminal, never error. This module validates each payload with zod and
+// converts an unparseable status into a *terminal error* status so the lifecycle
+// stops instead of spinning.
+//
+// These are the neutral result-format validators the default transport
+// descriptor delegates to — not backend-specific parsing. A second backend
+// supplies its own `TransportFormat` without touching this module.
 //
 // Layering note: semantic bounds on result segment descriptors (label index,
 // RGBA range) intentionally live downstream at the intent boundary
-// (`intents.ts`), not here. The wire schema validates *structure* only so a
+// (`resultToIntent`), not here. The wire schema validates *structure* only so a
 // single out-of-range descriptor cannot reject a whole result list and drop an
 // otherwise-valid base image.
 //
 // Pure module: zod schemas + parse helpers only, no fetch and no store access.
+//
+// House rules: functional style; `type`, not `interface`.
 // ---------------------------------------------------------------------------
 
 import { z } from 'zod';
@@ -26,7 +31,7 @@ import type {
   ProcessingJobStatus,
   ProcessingResult,
 } from '@/src/processing/types';
-import { JOB_STATES, RESULT_ROLES } from '@/src/processing/types';
+import { JOB_STATES } from '@/src/processing/types';
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -37,10 +42,10 @@ import { JOB_STATES, RESULT_ROLES } from '@/src/processing/types';
 
 const jobState = z.enum(JOB_STATES);
 
-// `satisfies` pins the schema to the core type (same idiom as
-// `intents.ts`/`config.ts`) so the two cannot drift. `resultSchema` below
-// cannot adopt it — its `.catch()`/`.nullish()` widen the inferred type past
-// `ProcessingResult` — which is why only the status schema carries the guard.
+// `satisfies` pins the schema to the core type (same idiom as `config.ts`) so
+// the two cannot drift. `resultSchema` below cannot adopt it — its
+// `.catch()`/`.nullish()` widen the inferred type past `ProcessingResult` —
+// which is why only the status schema carries the guard.
 const jobStatusSchema = z
   .object({
     // A usable job id is mandatory, same as the ref envelope below — nothing
@@ -52,13 +57,8 @@ const jobStatusSchema = z
   })
   .passthrough() satisfies z.ZodType<ProcessingJobStatus>;
 
-// Result `role` arrives as an untrusted, additively-extended enum; an
-// unrecognized value degrades to `undefined` (the adapter's `resultToIntent`
-// then treats it as a base image) rather than rejecting the whole result list.
-const resultRole = z.enum(RESULT_ROLES).optional().catch(undefined);
-
 // Structural-only segment descriptor (bounds enforced downstream in
-// `intents.ts`): channels and label index are plain numbers here.
+// `resultToIntent`): channels and label index are plain numbers here.
 const segmentDescriptorSchema = z
   .object({
     value: z.number(),
@@ -73,7 +73,6 @@ const resultSchema = z
     id: z.string(),
     name: z.string(),
     url: z.string(),
-    role: resultRole,
     intent: z.string().optional(),
     // The facade emits these straight from `fileDoc.get(...)`, which is JSON
     // `null` when the file doc lacks the key (e.g. an asset-store import with no

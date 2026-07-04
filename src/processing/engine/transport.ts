@@ -23,7 +23,7 @@ import type {
   ProcessingJobStatus,
   ProcessingResult,
   ProcessingValue,
-  SlicerCliTaskSummary,
+  TaskSummary,
 } from '@/src/processing/types';
 import type { TaskSpecEnvelope } from './taskSpec';
 
@@ -41,7 +41,7 @@ export type TransportLifecycle = 'poll' | 'inline';
 // engine's neutral shapes. The default instance delegates to the existing wire
 // validators; a second backend supplies its own without touching the engine.
 export type TransportFormat = {
-  parseTasks: (raw: unknown) => SlicerCliTaskSummary[];
+  parseTasks: (raw: unknown) => TaskSummary[];
   parseSpec: (raw: unknown) => TaskSpecEnvelope;
   parseRunResponse: (raw: unknown) => ProcessingJobRef;
   parseStatus: (jobId: string, raw: unknown) => ProcessingJobStatus;
@@ -93,7 +93,7 @@ const requestJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
 // ---------------------------------------------------------------------------
 
 export type EngineTransport = {
-  listTasks: () => Promise<SlicerCliTaskSummary[]>;
+  listTasks: () => Promise<TaskSummary[]>;
   getTaskSpec: (taskId: string) => Promise<TaskSpecEnvelope>;
   runTask: (
     taskId: string,
