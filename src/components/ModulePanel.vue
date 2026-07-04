@@ -114,7 +114,7 @@ export default defineComponent({
     );
 
     const serverStore = useServerStore();
-    const analysisModule = ref<Module | null>(null);
+    const jobsModule = ref<Module | null>(null);
     let stopProviderCountWatch: (() => void) | null = null;
     let disposed = false;
 
@@ -123,12 +123,10 @@ export default defineComponent({
       stopProviderCountWatch?.();
     });
 
-    // Processing ships in every build; the Analysis tab stays latent until a
+    // Processing ships in every build; the Jobs tab stays latent until a
     // provider registers. `providerCount > 0` is the sole runtime gate — with
     // no provider configured the tab never appears (latent = inert).
-    const AnalysisModule = defineAsyncComponent(
-      () => import('./AnalysisModule.vue')
-    );
+    const JobsModule = defineAsyncComponent(() => import('./JobsModule.vue'));
 
     import('@/src/store/providers')
       .then(({ useProvidersStore }) => {
@@ -137,12 +135,12 @@ export default defineComponent({
         stopProviderCountWatch = watch(
           () => providersStore.providerCount,
           (providerCount) => {
-            analysisModule.value =
+            jobsModule.value =
               providerCount > 0
                 ? {
-                    name: 'Analysis',
+                    name: 'Jobs',
                     icon: 'flask-outline',
-                    component: AnalysisModule,
+                    component: JobsModule,
                   }
                 : null;
           },
@@ -150,13 +148,13 @@ export default defineComponent({
         );
       })
       .catch((err) => {
-        console.warn('Failed to initialize analysis providers', err);
+        console.warn('Failed to initialize processing providers', err);
       });
 
     const modules = computed(() => {
       const filtered = [
         ...CoreModules,
-        ...(analysisModule.value ? [analysisModule.value] : []),
+        ...(jobsModule.value ? [jobsModule.value] : []),
         RemoteModule,
       ];
 

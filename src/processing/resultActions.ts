@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // Result action policy — which load actions (Open / Add as layer / Add as
-// segment group) a processing result supports in the Analysis job list.
+// segment group) a processing result supports in the Jobs list.
 //
 // The policy keys on the result's *resolved intent* (`resultToIntent`, which
 // consumes the facade-emitted `intent` and degrades an unknown/invalid one to

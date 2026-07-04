@@ -68,11 +68,22 @@ export type TransportDescriptor = {
 // $fetch helpers — bearer-aware, never raw fetch
 // ---------------------------------------------------------------------------
 
+// The HTTP status rides on the thrown error so the job poller can classify it
+// (transient vs permanent vs session-expiry vs resource-gone; store/providers.ts
+// `classifyError`). A rejected `$fetch` (offline / DNS) carries no status and is
+// treated as transient. Functional style: a plain `Error` with a `status` field,
+// not an Error subclass.
+export type HttpError = Error & { status: number };
+
 const requestJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
   const res = await $fetch(url, { credentials: 'same-origin', ...init });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`Request failed: ${res.status} ${res.statusText} ${body}`);
+    const err = new Error(
+      `Request failed: ${res.status} ${res.statusText} ${body}`
+    ) as HttpError;
+    err.status = res.status;
+    throw err;
   }
   return res.json() as Promise<T>;
 };

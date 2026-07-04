@@ -1,16 +1,16 @@
 // Chunk 1 (one-build collapse) acceptance: processing and remote-save code ship
 // in every build but stay latent = inert until a runtime signal turns them on.
 // These tests pin the two runtime gates that replace the deleted build flags:
-//   - Analysis tab   ⇒ ModulePanel reveals it only when `providerCount > 0`.
+//   - Jobs tab       ⇒ ModulePanel reveals it only when `providerCount > 0`.
 //   - Remote save     ⇒ the surface/egress engage only when `saveUrl !== ''`.
 
 import { describe, it, beforeEach, afterEach, expect, vi } from 'vitest';
 import { shallowMount, flushPromises, VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 
-// Keep the Analysis async-component cheap and DOM-safe if it ever renders.
-vi.mock('@/src/components/AnalysisModule.vue', () => ({
-  default: { name: 'AnalysisModule', template: '<div />' },
+// Keep the Jobs async-component cheap and DOM-safe if it ever renders.
+vi.mock('@/src/components/JobsModule.vue', () => ({
+  default: { name: 'JobsModule', template: '<div />' },
 }));
 
 // Observe remote-save egress without a network round-trip or the heavy
@@ -55,7 +55,7 @@ const sampleProvider: ProcessingProviderConfig = {
   baseUrl: 'http://localhost/',
 };
 
-describe('Analysis tab is latent — gated on provider presence', () => {
+describe('Jobs tab is latent — gated on provider presence', () => {
   let wrapper: VueWrapper | null = null;
 
   beforeEach(() => {
@@ -67,22 +67,22 @@ describe('Analysis tab is latent — gated on provider presence', () => {
     wrapper = null;
   });
 
-  it('shows no Analysis tab when no provider is configured', async () => {
+  it('shows no Jobs tab when no provider is configured', async () => {
     wrapper = mountModulePanel();
     await flushPromises();
 
-    expect(moduleNames(wrapper)).not.toContain('Analysis');
+    expect(moduleNames(wrapper)).not.toContain('Jobs');
   });
 
-  it('reveals the Analysis tab once a provider registers', async () => {
+  it('reveals the Jobs tab once a provider registers', async () => {
     wrapper = mountModulePanel();
     await flushPromises();
-    expect(moduleNames(wrapper)).not.toContain('Analysis');
+    expect(moduleNames(wrapper)).not.toContain('Jobs');
 
     useProvidersStore().registerProviderConfig(sampleProvider);
     await flushPromises();
 
-    expect(moduleNames(wrapper)).toContain('Analysis');
+    expect(moduleNames(wrapper)).toContain('Jobs');
   });
 });
 

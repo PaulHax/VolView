@@ -1,11 +1,11 @@
 <template>
-  <div class="analysis-module pa-3">
-    <div class="text-h6 mb-2">Analysis</div>
+  <div class="jobs-module pa-3">
+    <div class="text-h6 mb-2">Jobs</div>
     <div
       v-if="providers.providerCount === 0"
       class="text-caption text-medium-emphasis"
     >
-      No analysis providers are configured for this dataset.
+      No processing providers are configured for this dataset.
     </div>
 
     <template v-else>
@@ -236,7 +236,7 @@ async function onSubmit(values: Record<string, ProcessingValue>) {
   submitting.value = true;
   try {
     const config = providers.configs.get(selectedProviderId.value);
-    const jobId = await providers.submitJob(
+    await providers.submitJob(
       selectedProviderId.value,
       selectedTaskId.value,
       finalValues,
@@ -245,10 +245,9 @@ async function onSubmit(values: Record<string, ProcessingValue>) {
         activeDatasetId: currentImageID.value ?? undefined,
       }
     );
-
-    console.log('[analysis] submitted jobId=', jobId);
-  } catch (err) {
-    console.error('[analysis] submit failed', err);
+  } catch {
+    // Item 4: the failure is already surfaced by the store (message center);
+    // swallow here only to reset `submitting` and avoid an unhandled rejection.
   } finally {
     submitting.value = false;
   }
@@ -350,43 +349,64 @@ watch(
 
 // ---------------------------------------------------------------------------
 // Result loading + completion toasts
+//
+// The dedup seen-set lives in the store now (Chunk 12): a job that finishes
+// while this tab is unmounted replays into a fresh subscription exactly once on
+// remount, so no completion (toast + auto-load) is lost across a tab switch.
 // ---------------------------------------------------------------------------
 
-const seenToastJobs = new Set<string>();
 let unsubscribe: (() => void) | null = null;
 
 onMounted(() => {
-  unsubscribe = providers.onJobComplete((status, results, context) => {
-    if (seenToastJobs.has(status.jobId)) return;
-    seenToastJobs.add(status.jobId);
-    if (status.state === 'success') {
-      // Auto-load only overlays (segment groups). Everything else waits for
-      // a user click in JobList so we don't clobber the current view.
-      autoLoadProcessingResults(results, context).catch((err) => {
-        console.error('Failed to auto-load results', err);
-      });
-      const count = results.length;
-      toast.success(
-        `Job complete. ${count} result${count === 1 ? '' : 's'} available — open from the Jobs panel.`,
-        { timeout: 5000 }
-      );
-    } else if (status.state === 'error') {
-      toast.error(
-        `Job failed${status.errorTail ? `: ${status.errorTail.slice(0, 80)}` : ''}`
-      );
-    } else if (status.state === 'cancelled') {
-      toast.info('Job cancelled');
+  unsubscribe = providers.onJobComplete(
+    ({ status, results, context, baseImageMissing }) => {
+      if (status.state === 'success') {
+        // Item 8: if the originating base image was closed mid-job the store
+        // already surfaced a message; skip the auto-attach (there is no parent
+        // to attach to) but the results still show in the Jobs panel.
+        if (!baseImageMissing) {
+          // Auto-load only overlays (segment groups). Everything else waits for
+          // a user click in JobList so we don't clobber the current view.
+          autoLoadProcessingResults(results, context).catch((err) => {
+            console.error('Failed to auto-load results', err);
+          });
+        }
+        const count = results.length;
+        toast.success(
+          `Job complete. ${count} result${count === 1 ? '' : 's'} available — open from the Jobs panel.`,
+          { timeout: 5000 }
+        );
+      } else if (status.state === 'error') {
+        toast.error(
+          `Job failed${status.errorTail ? `: ${status.errorTail.slice(0, 80)}` : ''}`
+        );
+      } else if (status.state === 'cancelled') {
+        toast.info('Job cancelled');
+      }
     }
-  });
+  );
 });
 
 onBeforeUnmount(() => {
   unsubscribe?.();
 });
+
+// Item 7: a mid-job 401/403 means the whole same-origin session is dead. Prompt
+// a reload — clicking the toast reloads so the user re-authenticates.
+watch(
+  () => providers.sessionExpired,
+  (expired) => {
+    if (!expired) return;
+    toast.error('Session expired. Click here to reload and sign in again.', {
+      timeout: false,
+      onClick: () => window.location.reload(),
+    });
+  }
+);
 </script>
 
 <style scoped>
-.analysis-module {
+.jobs-module {
   height: 100%;
   overflow: auto;
 }
