@@ -307,6 +307,16 @@ const SegmentMask = z.object({
   visible: z.boolean().default(true),
 });
 
+// Provenance of a segment group produced by a processing job: the tier-2
+// scene-state idempotency key (contract Seam 2/3; D5; Chunk 5/19). Optional and
+// additive — a hand-painted group has none. Round-trips the `.volview.zip` so
+// cold-reload re-attach applies a result iff its `source` isn't already in the
+// scene. Structurally mirrors the processing-contract `resultSource` wire tag.
+export const SegmentGroupSource = z.object({
+  jobId: z.string(),
+  outputId: z.string(),
+});
+
 export const SegmentGroupMetadata = z.object({
   name: z.string(),
   parentImage: z.string(),
@@ -314,6 +324,7 @@ export const SegmentGroupMetadata = z.object({
     order: z.number().array(),
     byValue: z.record(z.string(), SegmentMask),
   }),
+  source: SegmentGroupSource.optional(),
 });
 
 export const SegmentGroup = z

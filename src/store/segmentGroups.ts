@@ -49,6 +49,14 @@ export type SegmentGroupMetadata = {
     order: number[];
     byValue: Record<number, SegmentMask>;
   };
+  // Provenance of a job-produced segment group (tier-2 idempotency key; D5 /
+  // Chunk 19). Optional + additive — hand-painted groups have none. Flows
+  // through addLabelmap and round-trips the `.volview.zip` (see the matching
+  // `SegmentGroupSource` in io/state-file/schema.ts).
+  source?: {
+    jobId: string;
+    outputId: string;
+  };
 };
 
 export function createLabelmapFromImage(imageData: vtkImageData) {
