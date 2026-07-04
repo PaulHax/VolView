@@ -11,6 +11,7 @@ import {
   DataSelection,
 } from '@/src/utils/dataSelection';
 import { useSegmentGroupStore } from '@/src/store/segmentGroups';
+import { useJobResultReviewStore } from '@/src/store/jobResultReview';
 import { useGlobalLayerColorConfig } from '@/src/composables/useGlobalLayerColorConfig';
 import { usePaintToolStore } from '@/src/store/tools/paint';
 import { Maybe } from '@/src/types';
@@ -21,6 +22,8 @@ import { isCineImage } from '@/src/core/cine/isCineImage';
 const UNNAMED_GROUP_NAME = 'Unnamed Segment Group';
 
 const segmentGroupStore = useSegmentGroupStore();
+// Chunk 22: the live-only "new job result" badge on freshly auto-shown groups.
+const reviewStore = useJobResultReviewStore();
 const { currentImageID } = useCurrentImage();
 const dataStore = useDatasetStore();
 const isCurrentImageCine = computed(() => isCineImage(currentImageID.value));
@@ -34,6 +37,9 @@ const currentSegmentGroups = computed(() => {
     return {
       id,
       name: metadataByID[id].name,
+      // Cosmetic, live-session-only cue that this group is an unreviewed job
+      // result (born-persistent; managed by the same visibility/delete UI).
+      isNewResult: reviewStore.isNew(id),
       visibility: sampledConfig.value?.config?.blendConfig.visibility ?? true,
       toggleVisibility: () => {
         const currentBlend = sampledConfig.value!.config!.blendConfig;
@@ -63,6 +69,9 @@ watch(currentSegmentGroups, () => {
 });
 
 function deleteGroup(id: string) {
+  // Reject = the existing delete UI (Chunk 22): a pure scene edit that sticks via
+  // session save. Drop the live-only badge too (harmless if it was never set).
+  reviewStore.dismiss(id);
   segmentGroupStore.removeGroup(id);
 }
 
@@ -323,6 +332,16 @@ function deleteSelected() {
             :disabled="group.id === currentSegmentGroupID"
           />
           <span class="group-name">{{ group.name }}</span>
+          <v-chip
+            v-if="group.isNewResult"
+            class="ml-2 flex-shrink-0"
+            color="primary"
+            size="x-small"
+            variant="tonal"
+            label
+          >
+            new job result
+          </v-chip>
           <v-spacer />
           <v-btn
             icon

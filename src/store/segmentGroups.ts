@@ -310,12 +310,18 @@ export const useSegmentGroupStore = defineStore('segmentGroup', () => {
 
   /**
    * Converts an image to a labelmap.
+   *
+   * Returns the created segment-group id(s) — one per component of the source
+   * image (one for the common single-component case). Awaits the per-component
+   * adds so the caller can act on the created groups synchronously afterwards
+   * (Chunk 22: corroboration/present + descriptor application key off the
+   * returned ids rather than racing `orderByParent`).
    */
   async function convertImageToLabelmap(
     imageID: DataSelection,
     parentID: DataSelection,
     source?: SegmentGroupMetadata['source']
-  ) {
+  ): Promise<string[]> {
     if (imageID === parentID)
       throw new Error('Cannot convert an image to be a labelmap of itself');
 
@@ -349,32 +355,38 @@ export const useSegmentGroupStore = defineStore('segmentGroup', () => {
     const images =
       componentCount === 1 ? [childImage] : extractEachComponent(childImage);
 
-    images.forEach(async (image, component) => {
-      const matchingParentSpace = await ensureSameSpace(
-        parentImage,
-        image,
-        true
-      );
-      const labelmapImage = toLabelMap(matchingParentSpace);
+    return Promise.all(
+      images.map(async (image, component) => {
+        const matchingParentSpace = await ensureSameSpace(
+          parentImage,
+          image,
+          true
+        );
+        const labelmapImage = toLabelMap(matchingParentSpace);
 
-      const segments = await decodeSegments(imageID, labelmapImage, component);
-      const { order, byKey } = normalizeForStore(segments, 'value');
-      const segmentGroupStore = useSegmentGroupStore();
+        const segments = await decodeSegments(
+          imageID,
+          labelmapImage,
+          component
+        );
+        const { order, byKey } = normalizeForStore(segments, 'value');
+        const segmentGroupStore = useSegmentGroupStore();
 
-      const name = pickUniqueName(
-        (index: number) => `${baseName} ${numberer(index)}`,
-        parentID
-      );
-      segmentGroupStore.addLabelmap(labelmapImage, {
-        name,
-        parentImage: parentID,
-        segments: { order, byValue: byKey },
-        // Job-produced groups carry a `source: {jobId, outputId}` provenance
-        // tag (contract Seam 2/3; Chunk 11) so they round-trip the .volview.zip;
-        // hand-painted / session-restore conversions pass none.
-        ...(source ? { source } : {}),
-      });
-    });
+        const name = pickUniqueName(
+          (index: number) => `${baseName} ${numberer(index)}`,
+          parentID
+        );
+        return segmentGroupStore.addLabelmap(labelmapImage, {
+          name,
+          parentImage: parentID,
+          segments: { order, byValue: byKey },
+          // Job-produced groups carry a `source: {jobId, outputId}` provenance
+          // tag (contract Seam 2/3; Chunk 11) so they round-trip the
+          // .volview.zip; hand-painted / session-restore conversions pass none.
+          ...(source ? { source } : {}),
+        });
+      })
+    );
   }
 
   /**

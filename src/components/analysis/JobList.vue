@@ -94,6 +94,20 @@
                 >
                   Add as segment group
                 </v-btn>
+                <!-- Download floor (contract Seam 2): every result stays a
+                     downloadable file. This is the fallback when a result is not
+                     auto-shown (failed corroboration) or has only the `download`
+                     intent (no in-app representation). -->
+                <v-btn
+                  size="x-small"
+                  variant="text"
+                  :href="result.url"
+                  :download="result.name"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  Download
+                </v-btn>
               </div>
             </div>
           </div>
