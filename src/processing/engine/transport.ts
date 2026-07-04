@@ -46,6 +46,9 @@ export type TransportFormat = {
   parseRunResponse: (raw: unknown) => ProcessingJobRef;
   parseStatus: (jobId: string, raw: unknown) => ProcessingJobStatus;
   parseResults: (raw: unknown) => ProcessingResult[];
+  // Optional: validate a staging response into the facade-minted URIs. Paired
+  // with the optional `stage` endpoint below (see `stageInput`).
+  parseStageResponse?: (raw: unknown) => string[];
 };
 
 export type TransportDescriptor = {
@@ -56,6 +59,11 @@ export type TransportDescriptor = {
     runTask: (baseUrl: string, taskId: string) => string;
     jobStatus: (baseUrl: string, jobId: string) => string;
     jobResults: (baseUrl: string, jobId: string) => string;
+    // Optional staging endpoint (contract Seam 1, client-created labelmap
+    // inputs): POST client-held bytes, receive facade-minted URIs. Present on
+    // the neutral facade; a facade-less backend (MONAI, #2) may omit it, and
+    // `stageInput` then fails closed rather than inventing a route.
+    stage?: (baseUrl: string) => string;
   };
   // Input-placement axis — how the bound input values ride in the run request
   // (the neutral default posts `{ values }` as a JSON body).
@@ -101,6 +109,12 @@ export type EngineTransport = {
   ) => Promise<ProcessingJobRef>;
   getJob: (jobId: string) => Promise<ProcessingJobStatus>;
   getResults: (jobId: string) => Promise<ProcessingResult[]>;
+  // Stage client-held bytes as a transient input, returning the facade-minted
+  // URIs (contract Seam 1). Fails closed if the descriptor advertises no
+  // staging endpoint. The bytes ride as the request body (a `Blob`, so the
+  // browser sets Content-Length); the optional `name` is recorded for the
+  // staged file.
+  stageInput: (body: Blob, name?: string) => Promise<string[]>;
 };
 
 export const createEngineTransport = (
@@ -140,5 +154,21 @@ export const createEngineTransport = (
       format.parseResults(
         await requestJson(endpoints.jobResults(baseUrl, jobId))
       ),
+
+    stageInput: async (body, name) => {
+      // Fail closed: staging is a descriptor capability, not a hardcoded route.
+      // A descriptor with no `stage` endpoint (or no response parser) does not
+      // support client-created inputs — refuse rather than guess a URL.
+      const { stage } = endpoints;
+      if (!stage || !format.parseStageResponse) {
+        throw new Error(
+          'This provider does not support staging client-created inputs'
+        );
+      }
+      const base = stage(baseUrl);
+      const url = name ? `${base}?name=${encodeURIComponent(name)}` : base;
+      const raw = await requestJson<unknown>(url, { method: 'POST', body });
+      return format.parseStageResponse(raw);
+    },
   };
 };

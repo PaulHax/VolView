@@ -38,6 +38,11 @@ export type ProcessingProvider = {
   ) => Promise<ProcessingJobRef>;
   getJob: (jobId: string) => Promise<ProcessingJobStatus>;
   getResults: (jobId: string) => Promise<ProcessingResult[]>;
+  // Stage client-held bytes (a serialized segment group) as a transient input,
+  // returning the facade-minted URIs the client round-trips as a
+  // `{ type: "labelmap", uris }` value (contract "Seam 1 — inputs"; Chunk 15).
+  // Fails closed when the backend advertises no staging endpoint.
+  stageInput: (body: Blob, name?: string) => Promise<string[]>;
 };
 
 // Advisory display metadata for the task picker (id/title + optional hints).

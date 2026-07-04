@@ -87,7 +87,17 @@ import {
   bindImageInputs,
   type SourceRefBindingState,
 } from '@/src/processing/engine/mintInput';
+import {
+  bindLabelmapInputs,
+  labelmapStageTargets,
+  mintLabelmapValue,
+  type SegmentGroupView,
+} from '@/src/processing/engine/mintLabelmap';
 import { cropPlanesToWorldBounds } from '@/src/processing/engine/bounds';
+import { usePaintToolStore } from '@/src/store/tools/paint';
+import { useSegmentGroupStore } from '@/src/store/segmentGroups';
+import { useMessageStore } from '@/src/store/messages';
+import { writeSegmentation } from '@/src/io/readWriteImage';
 
 import TaskPicker from './analysis/TaskPicker.vue';
 import TaskForm from './analysis/TaskForm.vue';
@@ -98,6 +108,8 @@ const { currentImageID } = useCurrentImage('global');
 const imageCache = useImageCacheStore();
 const datasetStore = useDatasetStore();
 const cropStore = useCropStore();
+const paintStore = usePaintToolStore();
+const segmentGroupStore = useSegmentGroupStore();
 const toast = useToast();
 
 const providerItems = computed(() =>
@@ -234,11 +246,26 @@ async function onSubmit(values: Record<string, ProcessingValue>) {
   }
 
   submitting.value = true;
+
+  // Seam-1 labelmap half (Chunk 15): stage the bound segment group(s) for
+  // facade-minted URIs BEFORE submit. A staging failure is not surfaced by the
+  // store, so surface it here (fail loud) and abort before running the job.
+  let stagedValues: Record<string, ProcessingValue>;
+  try {
+    stagedValues = await stageLabelmapInputs(model, finalValues);
+  } catch (err) {
+    useMessageStore().addError('Failed to stage segment group input', {
+      error: err instanceof Error ? err : undefined,
+    });
+    submitting.value = false;
+    return;
+  }
+
   try {
     await providers.submitJob(
       selectedProviderId.value,
       selectedTaskId.value,
-      finalValues,
+      stagedValues,
       { activeDatasetId: currentImageID.value ?? undefined }
     );
   } catch {
@@ -299,8 +326,29 @@ function activeDataSource() {
   return datasetStore.getDataSource(currentImageID.value);
 }
 
+// A pure read-only view of the segment-group store for the labelmap binder
+// (contract Seam 1, client half; Chunk 15). The bound background is the active
+// image, so the fallback chain + `parentImage` guard resolve against it.
+function segmentGroupView(): SegmentGroupView {
+  return {
+    orderByParent: segmentGroupStore.orderByParent,
+    metadataByID: segmentGroupStore.metadataByID,
+  };
+}
+
+function bindLabelmaps(model: TaskFormModel) {
+  return bindLabelmapInputs(
+    model,
+    currentImageID.value ?? undefined,
+    paintStore.activeSegmentGroupID,
+    segmentGroupView()
+  );
+}
+
 // Apply every active-image-derived binding (crop bounds + the minted image
-// input) onto a base value set, overwriting only the bound params.
+// input) onto a base value set, overwriting only the bound params. The labelmap
+// value is NOT set here: a segment group has no server provenance, so it earns
+// URIs only at Run via the async staging POST (`stageLabelmapInputs`).
 function applyActiveBindings(
   model: TaskFormModel,
   base: Record<string, ProcessingValue>
@@ -311,26 +359,73 @@ function applyActiveBindings(
 }
 
 // Recompute the submit-gating issues and refresh the per-widget bind state. The
-// image params are gated by the mint (fail closed on no-provenance or >1 image
-// input), which owns them fully, so the generic per-param check is suppressed
-// for them to avoid a duplicate "required" message.
+// image and labelmap sourceRef params are gated by their binders (fail closed on
+// no-provenance / no segment group / >1 input), which own them fully, so the
+// generic per-param check is suppressed for them to avoid a duplicate "required"
+// message. A no-provenance background blocks submit via the image binder even
+// when a labelmap is resolvable — the labelmap flow is blocked "for free".
 function computeIssues(
   model: TaskFormModel,
   values: Record<string, ProcessingValue>
 ): FormValidationIssue[] {
   const image = bindImageInputs(model, activeDataSource());
-  sourceRefStates.value = image.states;
-  const imageParams = new Set(Object.keys(image.states));
+  const labelmap = bindLabelmaps(model);
+  sourceRefStates.value = { ...image.states, ...labelmap.states };
+  const boundParams = new Set([
+    ...Object.keys(image.states),
+    ...Object.keys(labelmap.states),
+  ]);
   const generic = validateFormValues(model, values).filter(
-    (i) => !imageParams.has(i.parameter)
+    (i) => !boundParams.has(i.parameter)
   );
-  return [...image.issues, ...generic];
+  return [...image.issues, ...labelmap.issues, ...generic];
+}
+
+// Seam-1 labelmap half (Chunk 15), the ASYNC step. After the fail-closed gate
+// passes, serialize each bound segment group to a compressed `seg.nrrd` (the
+// literal 'seg.nrrd' token is required so `maybeBuildSegNrrdMetadata` embeds
+// segment names/colors; gzip is automatic), POST it to the facade staging
+// endpoint, and mint `{ type:"labelmap", uris }` from the facade-minted
+// response. Two HTTP calls (stage, then run) behind one Run click; staging is
+// automatic — the one explicit carve-out to the never-silent-upload pin.
+async function stageLabelmapInputs(
+  model: TaskFormModel,
+  values: Record<string, ProcessingValue>
+): Promise<Record<string, ProcessingValue>> {
+  const p = provider.value;
+  if (!p) return values;
+  const targets = labelmapStageTargets(bindLabelmaps(model));
+  if (targets.length === 0) return values;
+
+  const staged = await Promise.all(
+    targets.map(async ({ parameterId, segmentGroupId }) => {
+      const metadata = segmentGroupStore.metadataByID[segmentGroupId];
+      const labelmap = segmentGroupStore.dataIndex[segmentGroupId];
+      const serialized = await writeSegmentation(
+        'seg.nrrd',
+        labelmap,
+        metadata
+      );
+      const uris = await p.stageInput(
+        new Blob([serialized]),
+        `${metadata.name}.seg.nrrd`
+      );
+      return [parameterId, mintLabelmapValue(uris)] as const;
+    })
+  );
+  return { ...values, ...Object.fromEntries(staged) };
 }
 
 watch(
   () => {
     const id = currentImageID.value;
-    return { id, crop: id ? cropStore.croppingByImageID[id] : undefined };
+    return {
+      id,
+      crop: id ? cropStore.croppingByImageID[id] : undefined,
+      // Refresh the labelmap widget state as the user paints / selects a group.
+      activeSegmentGroup: paintStore.activeSegmentGroupID,
+      groupCount: id ? (segmentGroupStore.orderByParent[id]?.length ?? 0) : 0,
+    };
   },
   () => {
     const model = taskModel.value;

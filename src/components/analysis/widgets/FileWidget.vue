@@ -12,16 +12,27 @@
         The active volume was not loaded from the server, so it cannot be used
         as an input.
       </span>
+      <span v-else-if="binding === 'no-segment-group'" class="text-error">
+        Paint or select a segment group first.
+      </span>
       <span v-else-if="binding === 'ambiguous'" class="text-error">
-        This task needs more than one image input, which this version cannot
-        bind automatically.
+        This task needs more than one
+        {{ isLabelmap ? 'segment group' : 'image' }}
+        input, which this version cannot bind automatically.
+      </span>
+      <span v-else-if="isLabelmap && binding === 'bound'" class="text-success">
+        ✓ bound to a segment group
       </span>
       <span v-else-if="boundUriCount > 0" class="text-success">
         ✓ bound to the active dataset ({{ boundUriCount }}
         {{ boundUriCount === 1 ? 'file' : 'files' }})
       </span>
       <span v-else class="text-medium-emphasis">
-        Input — binds to the active dataset at submit
+        {{
+          isLabelmap
+            ? 'Input — binds to a painted segment group at submit'
+            : 'Input — binds to the active dataset at submit'
+        }}
       </span>
     </div>
   </div>
@@ -30,17 +41,28 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { VolViewTaskParameter, InputValue } from '@/processing-contract';
+import { TYPE_TAG_LABELMAP } from '@/processing-contract';
 import type { SourceRefBindingState } from '@/src/processing/engine/mintInput';
 
 // Renders a `sourceRef` input. The bound value ({ type, format?, uris }) is
-// minted from the active volume's provenance by the parent (Chunk 8); this
-// widget only reflects that state — it never mints, and there is no picker (v1).
+// authored by the parent at submit — from provenance for an `image` input
+// (Chunk 8), or from the staging response for a `labelmap` input (Chunk 15).
+// This widget only reflects the resolved state; it never mints and there is no
+// picker (v1).
 const props = defineProps<{
   param: VolViewTaskParameter;
   modelValue: InputValue | null | undefined;
-  // Fail-closed/bound state resolved by the parent's provenance mint.
+  // Fail-closed/bound state resolved by the parent's binder.
   binding?: SourceRefBindingState;
 }>();
+
+// A labelmap sourceRef binds to a segment group (staged at Run), not the active
+// dataset — so its bound/hint copy differs from an image input's.
+const isLabelmap = computed(
+  () =>
+    props.param.kind === 'sourceRef' &&
+    props.param.accepts.includes(TYPE_TAG_LABELMAP)
+);
 
 const boundUriCount = computed(() => props.modelValue?.uris.length ?? 0);
 </script>

@@ -103,6 +103,14 @@ const jobRefEnvelopeSchema = z.object({
   status: z.unknown().optional(),
 });
 
+// The staging response (contract Seam 1, client-created labelmap inputs): the
+// facade mints `{ uris }` for the bytes the client POSTed. At least one URI is
+// mandatory — the client CONSTRUCTS no URI, so an empty/malformed response must
+// fail closed rather than mint a labelmap value with no provenance.
+const stageResponseSchema = z.object({
+  uris: z.array(z.string()).min(1),
+});
+
 // ---------------------------------------------------------------------------
 // Parse helpers
 // ---------------------------------------------------------------------------
@@ -164,4 +172,17 @@ export const parseResults = (raw: unknown): ProcessingResult[] => {
     );
   }
   return parsed.data;
+};
+
+// Validate a staging response into the facade-minted URIs. A malformed/empty
+// response throws so the caller never mints a `{ type:"labelmap", uris }` value
+// with no provenance (contract Seam 1 "the client constructs no URI").
+export const parseStageResponse = (raw: unknown): string[] => {
+  const parsed = stageResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `Malformed staging response from provider: ${formatIssues(parsed.error)}`
+    );
+  }
+  return parsed.data.uris;
 };

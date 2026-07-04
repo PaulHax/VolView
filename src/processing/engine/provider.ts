@@ -37,5 +37,9 @@ export const createProvider = (
     runTask: (taskId, values) => transport.runTask(taskId, values),
     getJob: (jobId) => transport.getJob(jobId),
     getResults: (jobId) => transport.getResults(jobId),
+    // Client-created labelmap inputs stage through the engine transport (the
+    // default descriptor's `stage` endpoint); a descriptor without one fails
+    // closed inside the transport.
+    stageInput: (body, name) => transport.stageInput(body, name),
   };
 };

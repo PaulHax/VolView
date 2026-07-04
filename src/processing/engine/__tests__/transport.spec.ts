@@ -117,4 +117,41 @@ describe('engine transport reads its descriptor + uses $fetch', () => {
     const engine = createEngineTransport('http://host', inline);
     await expect(engine.runTask('t1', {})).rejects.toThrow(/lifecycle/);
   });
+
+  // Staging (Chunk 15): client-created labelmap bytes POST to the descriptor's
+  // stage endpoint (bearer-carrying $fetch), and the minted URIs come back
+  // through the descriptor's response parser — never constructed by the client.
+  it('stages bytes through the descriptor stage endpoint and returns minted URIs', async () => {
+    const base = descriptorFor('A');
+    const staging: TransportDescriptor = {
+      ...base,
+      endpoints: { ...base.endpoints, stage: (b) => `${b}/A/stage` },
+      format: {
+        ...base.format,
+        parseStageResponse: (raw) => (raw as { uris: string[] }).uris,
+      },
+    };
+    const calls = stubFetch({
+      uris: ['/api/v1/file/abc/proxiable/seg.seg.nrrd'],
+    });
+    const engine = createEngineTransport('http://host', staging);
+
+    const uris = await engine.stageInput(new Blob(['bytes']), 'seg.seg.nrrd');
+
+    expect(uris).toEqual(['/api/v1/file/abc/proxiable/seg.seg.nrrd']);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('http://host/A/stage?name=seg.seg.nrrd');
+    expect(calls[0].init?.method).toBe('POST');
+    expect(authOf(calls[0])).toBe('Bearer test-token');
+  });
+
+  // Fail closed: a descriptor with no stage endpoint does not support
+  // client-created inputs — the transport refuses rather than guess a route.
+  it('fails closed when the descriptor advertises no stage endpoint', async () => {
+    stubFetch({});
+    const engine = createEngineTransport('http://host', descriptorFor('A'));
+    await expect(engine.stageInput(new Blob(['x']))).rejects.toThrow(
+      /does not support staging/i
+    );
+  });
 });

@@ -104,11 +104,14 @@ export const mintInputValue = (
 
 // Per-`sourceRef`-widget display state. Only `bound` is a success; the rest are
 // fail-closed states the widget surfaces inline and the submit gate refuses on.
+// Shared by the `image` binder (this module) and the `labelmap` binder
+// (`mintLabelmap.ts`); `no-segment-group` is the labelmap-only fail-closed leaf.
 export type SourceRefBindingState =
   | 'bound'
   | 'unbound' // no active dataset yet
   | 'no-provenance' // active volume has no server URIs → not bindable
-  | 'ambiguous'; // more than one image input → no v1 picker
+  | 'no-segment-group' // labelmap input with no bindable segment group
+  | 'ambiguous'; // more than one image/labelmap input → no v1 picker
 
 type ImageSourceRefField = Extract<FormField, { kind: 'sourceRef' }>;
 

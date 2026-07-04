@@ -21,7 +21,12 @@
 // ---------------------------------------------------------------------------
 
 import type { TaskSummary } from '@/src/processing/types';
-import { parseJobRef, parseJobStatus, parseResults } from './wire';
+import {
+  parseJobRef,
+  parseJobStatus,
+  parseResults,
+  parseStageResponse,
+} from './wire';
 import { parseTaskSpecEnvelope } from './taskSpec';
 import type { TransportDescriptor } from './transport';
 
@@ -37,6 +42,10 @@ export const defaultDescriptor: TransportDescriptor = {
     runTask: (baseUrl, taskId) => join(baseUrl, `tasks/${id(taskId)}/run`),
     jobStatus: (baseUrl, jobId) => join(baseUrl, `jobs/${id(jobId)}`),
     jobResults: (baseUrl, jobId) => join(baseUrl, `jobs/${id(jobId)}/results`),
+    // Client-created labelmap inputs POST here for facade-minted URIs (Chunk 14
+    // facade half; Chunk 15 client half). Matches the facade route
+    // `POST folder/:folderId/volview_processing/stage`.
+    stage: (baseUrl) => join(baseUrl, 'stage'),
   },
 
   buildRunRequest: (values) => ({
@@ -55,5 +64,6 @@ export const defaultDescriptor: TransportDescriptor = {
     parseRunResponse: parseJobRef,
     parseStatus: parseJobStatus,
     parseResults,
+    parseStageResponse,
   },
 };

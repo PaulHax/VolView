@@ -47,6 +47,7 @@ const makeProvider = (
   runTask: vi.fn(),
   getJob: vi.fn(),
   getResults: vi.fn().mockResolvedValue([]),
+  stageInput: vi.fn().mockResolvedValue([]),
   ...overrides,
 });
 
