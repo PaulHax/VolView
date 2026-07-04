@@ -20,6 +20,13 @@ const makeProvider = (
     baseUrl: 'http://localhost/',
   },
   listTasks: vi.fn().mockResolvedValue([]),
+  getTaskSpec: vi.fn().mockResolvedValue({
+    specVersion: 1,
+    id: 't',
+    title: 'T',
+    parameters: [],
+    outputs: [],
+  }),
   getTaskXml: vi.fn().mockResolvedValue(''),
   getDefaultBindings: vi.fn().mockResolvedValue({}),
   runTask: vi.fn(),

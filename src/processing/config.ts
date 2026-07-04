@@ -48,7 +48,6 @@ const processingProviderConfig = z.object({
   label: z.string(),
   protocol: z.enum(['slicer-cli']),
   baseUrl: z.string(),
-  auth: z.enum(['same-origin', 'bearer', 'tokenUrl']).optional(),
   context: processingContext.optional(),
 });
 

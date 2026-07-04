@@ -41,9 +41,12 @@
         </div>
 
         <div v-if="loadingTask" class="text-caption">Loading task spec…</div>
+        <div v-else-if="taskError" class="text-error text-caption">
+          {{ taskError }}
+        </div>
         <TaskForm
-          v-else-if="doc"
-          :doc="doc"
+          v-else-if="taskModel"
+          :model="taskModel"
           :initial-values="initialValues"
           :issues="issues"
           :submitting="submitting"
@@ -64,19 +67,21 @@ import { useToast } from 'vue-toastification';
 import { useProvidersStore } from '@/src/store/providers';
 import { useCurrentImage } from '@/src/composables/useCurrentImage';
 import { useImageCacheStore } from '@/src/store/image-cache';
-import { useDICOMStore } from '@/src/store/datasets-dicom';
-import { matchActiveSource } from '@/src/processing/matchSource';
+import { useCropStore } from '@/src/store/tools/crop';
 import { autoLoadProcessingResults } from '@/src/actions/processResults';
 import type {
   ProcessingProvider,
   ProcessingValue,
   SlicerCliTaskSummary,
 } from '@/src/processing/types';
-import type {
-  SlicerCliDocument,
-  SlicerCliValidationIssue,
-} from '@/src/processing/adapters/slicer-cli';
-import type { ParsedParam } from '@/src/processing/adapters/slicer-cli/parser';
+import {
+  buildTaskFormModel,
+  initialFormValues,
+  validateFormValues,
+  type TaskFormModel,
+  type FormValidationIssue,
+} from '@/src/processing/engine/formModel';
+import { cropPlanesToWorldBounds } from '@/src/processing/engine/bounds';
 
 import TaskPicker from './analysis/TaskPicker.vue';
 import TaskForm from './analysis/TaskForm.vue';
@@ -85,7 +90,7 @@ import JobList from './analysis/JobList.vue';
 const providers = useProvidersStore();
 const { currentImageID } = useCurrentImage('global');
 const imageCache = useImageCacheStore();
-const dicomStore = useDICOMStore();
+const cropStore = useCropStore();
 const toast = useToast();
 
 const providerItems = computed(() =>
@@ -107,11 +112,12 @@ const providerError = ref<string | null>(null);
 const tasks = ref<SlicerCliTaskSummary[]>([]);
 const selectedTaskId = ref<string | null>(null);
 
-const doc = ref<SlicerCliDocument | null>(null);
+const taskModel = ref<TaskFormModel | null>(null);
 const loadingTask = ref(false);
+const taskError = ref<string | null>(null);
 const initialValues = ref<Record<string, ProcessingValue>>({});
 const currentValues = ref<Record<string, ProcessingValue>>({});
-const issues = ref<SlicerCliValidationIssue[]>([]);
+const issues = ref<FormValidationIssue[]>([]);
 const submitting = ref(false);
 
 watch(
@@ -136,7 +142,7 @@ watch(
   async (id) => {
     provider.value = null;
     tasks.value = [];
-    doc.value = null;
+    taskModel.value = null;
     selectedTaskId.value = null;
     if (!id) return;
     loadingProvider.value = true;
@@ -163,41 +169,42 @@ watch(selectedTaskId, (id) => {
   onTaskSelected(id);
 });
 
+// ---------------------------------------------------------------------------
+// Task spec → form model
+//
+// Fetch the server-emitted, zod-validated task spec and render the form from
+// it. No XML is parsed at runtime; the engine hides any param it cannot type
+// and refuses submit if a required one was hidden (fail closed).
+// ---------------------------------------------------------------------------
+
 async function onTaskSelected(taskId: string | null) {
   selectedTaskId.value = taskId;
   if (!taskId || !provider.value) {
-    doc.value = null;
+    taskModel.value = null;
     return;
   }
   loadingTask.value = true;
-  doc.value = null;
+  taskError.value = null;
+  taskModel.value = null;
   try {
-    const xml = await provider.value.getTaskXml(taskId);
-    const adapter = await import('@/src/processing/adapters/slicer-cli');
-    const parsed = adapter.parseXml(xml);
-    doc.value = parsed;
-    const defaults = await provider.value.getDefaultBindings(taskId, {
-      loadedSources: [],
-    });
-    const initial = adapter.getInitialValues(parsed, defaults);
-    // Pre-bind first required image/file input to the active source ref.
-    const first = firstRequiredInput(parsed);
-    if (first && !initial[first.id] && activeSourceRef.value) {
-      initial[first.id] = activeSourceRef.value;
-    }
+    const envelope = await provider.value.getTaskSpec(taskId);
+    const model = buildTaskFormModel(envelope);
+    taskModel.value = model;
+    const initial = applyBoundsBindings(model, initialFormValues(model));
     initialValues.value = initial;
     currentValues.value = { ...initial };
-    issues.value = adapter.validate(parsed, currentValues.value);
+    issues.value = validateFormValues(model, currentValues.value);
+  } catch (err) {
+    taskError.value = (err as Error).message;
   } finally {
     loadingTask.value = false;
   }
 }
 
-async function onValuesUpdate(values: Record<string, ProcessingValue>) {
+function onValuesUpdate(values: Record<string, ProcessingValue>) {
   currentValues.value = values;
-  if (!doc.value) return;
-  const adapter = await import('@/src/processing/adapters/slicer-cli');
-  issues.value = adapter.validate(doc.value, values);
+  if (!taskModel.value) return;
+  issues.value = validateFormValues(taskModel.value, values);
 }
 
 async function onSubmit(values: Record<string, ProcessingValue>) {
@@ -211,8 +218,7 @@ async function onSubmit(values: Record<string, ProcessingValue>) {
       selectedTaskId.value,
       values,
       {
-        activeSourceRef:
-          config?.context?.activeSourceRef ?? activeSourceRef.value,
+        activeSourceRef: config?.context?.activeSourceRef,
         activeDatasetId: currentImageID.value ?? undefined,
       }
     );
@@ -226,71 +232,55 @@ async function onSubmit(values: Record<string, ProcessingValue>) {
 }
 
 // ---------------------------------------------------------------------------
-// Active-dataset binding
+// `bounds` binds from the crop tool
+//
+// A `bounds` parameter takes its value from the crop box of the active image,
+// converted to a world-space LPS 6-tuple. It tracks the crop tool: re-binding
+// whenever the active image or its crop box changes.
 // ---------------------------------------------------------------------------
 
-const activeSourceRef = computed(() => {
-  const config = providers.configs.get(selectedProviderId.value ?? '');
-  if (!config?.context) return undefined;
-  const sources = config.context.loadedSources ?? [];
-
-  // Single advertised source — nothing to disambiguate.
-  if (sources.length === 1 && sources[0].sourceRef) {
-    return sources[0].sourceRef;
-  }
-
-  // Multiple volumes: bind the on-screen volume by its facade-supplied match
-  // key (item 3.2) instead of guessing `sources[0]`, which can run the job on
-  // the wrong volume. DICOM matches by SeriesInstanceUID, non-DICOM by name.
+function worldBoundsForActive() {
   const id = currentImageID.value;
-  const matched = id
-    ? matchActiveSource(sources, {
-        seriesInstanceUID: dicomStore.volumeInfo[id]?.SeriesInstanceUID,
-        name: imageCache.getImageMetadata(id)?.name ?? undefined,
-      })
-    : undefined;
-  if (matched?.sourceRef) return matched.sourceRef;
-
-  // An explicit operator/config-provided ref is a deliberate signal, not a
-  // silent guess — honor it when key matching is inconclusive.
-  if (config.context.activeSourceRef) return config.context.activeSourceRef;
-
-  // Otherwise refuse to bind `sources[0]` blindly: surface the ambiguity and
-  // leave the input unbound rather than running on the wrong volume.
-  if (sources.length > 0) {
-    console.warn(
-      '[analysis] active volume did not match any advertised source; not auto-binding an input.'
-    );
-  }
-  return undefined;
-});
-
-const firstRequiredInput = (d: SlicerCliDocument | null) => {
-  if (!d) return null;
-  const required = d.parameters.find(
-    (p: ParsedParam) =>
-      (p.type === 'image' || p.type === 'file') &&
-      p.channel === 'input' &&
-      p.required
+  if (!id) return null;
+  const planes = cropStore.croppingByImageID[id];
+  if (!planes) return null;
+  const meta = imageCache.getImageMetadata(id);
+  if (!meta) return null;
+  return cropPlanesToWorldBounds(
+    planes,
+    meta.indexToWorld,
+    meta.lpsOrientation
   );
-  if (required) return required;
-  return (
-    d.parameters.find(
-      (p: ParsedParam) =>
-        (p.type === 'image' || p.type === 'file') && p.channel === 'input'
-    ) ?? null
-  );
-};
+}
 
-// When the active source ref changes after the form has been rendered (e.g.
-// the active dataset changes mid-flow), re-bind the first input.
-watch(activeSourceRef, (nextRef) => {
-  if (!nextRef || !doc.value) return;
-  const first = firstRequiredInput(doc.value);
-  if (!first) return;
-  if (initialValues.value[first.id]) return;
-  initialValues.value = { ...initialValues.value, [first.id]: nextRef };
-});
+function applyBoundsBindings(
+  model: TaskFormModel,
+  values: Record<string, ProcessingValue>
+): Record<string, ProcessingValue> {
+  const world = worldBoundsForActive();
+  if (!world) return values;
+  const next = { ...values };
+  model.fields.forEach((f) => {
+    if (f.kind === 'bounds') next[f.id] = [...world];
+  });
+  return next;
+}
+
+watch(
+  () => {
+    const id = currentImageID.value;
+    return id ? cropStore.croppingByImageID[id] : undefined;
+  },
+  () => {
+    const model = taskModel.value;
+    if (!model) return;
+    const rebound = applyBoundsBindings(model, currentValues.value);
+    initialValues.value = rebound;
+    currentValues.value = { ...rebound };
+    issues.value = validateFormValues(model, currentValues.value);
+  },
+  { deep: true }
+);
 
 // ---------------------------------------------------------------------------
 // Result loading + completion toasts

@@ -1,68 +1,45 @@
 <template>
   <div class="task-form">
-    <div class="text-h6 mb-1">{{ doc.title }}</div>
-    <div class="text-caption text-medium-emphasis mb-4">
-      {{ doc.description }}
+    <div class="text-h6 mb-1">{{ model.title }}</div>
+    <div
+      v-if="model.description"
+      class="text-caption text-medium-emphasis mb-4"
+    >
+      {{ model.description }}
     </div>
 
-    <template
-      v-for="panel in doc.panels"
-      :key="panel.groups[0]?.label ?? Math.random()"
+    <!-- Fail closed: params the engine could not type are hidden, not rendered.
+         A required one blocks submit (surfaced here and in `issues`). -->
+    <v-alert
+      v-if="model.hidden.length > 0"
+      type="info"
+      density="compact"
+      class="mb-3"
     >
-      <v-expansion-panels
-        v-if="panel.advanced"
-        variant="accordion"
-        class="mb-3"
-      >
-        <v-expansion-panel>
-          <v-expansion-panel-title>Advanced parameters</v-expansion-panel-title>
-          <v-expansion-panel-text>
-            <div
-              v-for="group in visibleGroups(panel.groups)"
-              :key="group.label"
-              class="mb-3"
-            >
-              <div class="text-subtitle-2">{{ group.label }}</div>
-              <div v-if="group.description" class="text-caption mb-2">
-                {{ group.description }}
-              </div>
-              <div
-                v-for="p in visibleParams(group.parameters)"
-                :key="p.id"
-                class="mb-3"
-              >
-                <component
-                  :is="widgetFor(p)"
-                  :param="p"
-                  :model-value="values[p.id] as never"
-                  @update:model-value="(v: ProcessingValue) => update(p.id, v)"
-                />
-              </div>
-            </div>
-          </v-expansion-panel-text>
-        </v-expansion-panel>
-      </v-expansion-panels>
-      <div v-else class="mb-4">
-        <div v-for="group in panel.groups" :key="group.label" class="mb-3">
-          <div class="text-subtitle-2">{{ group.label }}</div>
-          <div v-if="group.description" class="text-caption mb-2">
-            {{ group.description }}
-          </div>
-          <div
-            v-for="p in visibleParams(group.parameters)"
-            :key="p.id"
-            class="mb-3"
-          >
-            <component
-              :is="widgetFor(p)"
-              :param="p"
-              :model-value="values[p.id] as never"
-              @update:model-value="(v: ProcessingValue) => update(p.id, v)"
-            />
-          </div>
-        </div>
+      <div class="text-caption mb-1">
+        Some parameters are not supported by this client and were hidden:
       </div>
-    </template>
+      <div v-for="h in model.hidden" :key="h.id" class="text-caption">
+        • {{ h.id }} ({{ h.reason }})
+        <span v-if="h.required">
+          — required, so this task cannot be submitted</span
+        >
+      </div>
+    </v-alert>
+
+    <div v-for="section in sections" :key="section.label" class="mb-4">
+      <div v-if="section.label" class="text-subtitle-2 mb-2">
+        {{ section.label }}
+      </div>
+      <div v-for="field in section.fields" :key="field.id" class="mb-3">
+        <component
+          :is="widgetFor(field.kind)"
+          :param="field"
+          :model-value="values[field.id] as never"
+          @update:model-value="(v: ProcessingValue) => update(field.id, v)"
+        />
+      </div>
+    </div>
 
     <v-alert
       v-if="issues.length > 0"
@@ -87,26 +64,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { ref, watch, computed } from 'vue';
 
 import type { ProcessingValue } from '@/src/processing/types';
 import type {
-  SlicerCliDocument,
-  SlicerCliValidationIssue,
-} from '@/src/processing/adapters/slicer-cli';
-import type { ParsedParam } from '@/src/processing/adapters/slicer-cli/parser';
+  FormField,
+  TaskFormModel,
+  FormValidationIssue,
+} from '@/src/processing/engine/formModel';
 
 import BooleanWidget from './widgets/BooleanWidget.vue';
 import NumberWidget from './widgets/NumberWidget.vue';
 import StringWidget from './widgets/StringWidget.vue';
 import EnumerationWidget from './widgets/EnumerationWidget.vue';
 import FileWidget from './widgets/FileWidget.vue';
-import NewFileWidget from './widgets/NewFileWidget.vue';
+import BoundsWidget from './widgets/BoundsWidget.vue';
 
 const props = defineProps<{
-  doc: SlicerCliDocument;
+  model: TaskFormModel;
   initialValues: Record<string, ProcessingValue>;
-  issues: SlicerCliValidationIssue[];
+  issues: FormValidationIssue[];
   submitting?: boolean;
 }>();
 const emit = defineEmits<{
@@ -132,34 +109,39 @@ function onSubmit() {
   emit('submit', values.value);
 }
 
-// Output filenames are auto-generated server-side — never render them in the form.
-function visibleParams(params: ParsedParam[]): ParsedParam[] {
-  return params.filter((p) => p.channel !== 'output' && p.type !== 'new-file');
-}
+// Group renderable fields by their advisory `section` hint, preserving the
+// (order-sorted) sequence the model hands us.
+const sections = computed(() => {
+  const order: string[] = [];
+  const bySection = new Map<string, FormField[]>();
+  props.model.fields.forEach((f) => {
+    const key = f.section ?? '';
+    const existing = bySection.get(key);
+    if (existing) {
+      existing.push(f);
+    } else {
+      bySection.set(key, [f]);
+      order.push(key);
+    }
+  });
+  return order.map((label) => ({ label, fields: bySection.get(label) ?? [] }));
+});
 
-function visibleGroups<T extends { parameters: ParsedParam[] }>(
-  groups: T[]
-): T[] {
-  return groups.filter((g) => visibleParams(g.parameters).length > 0);
-}
-
-function widgetFor(p: ParsedParam) {
-  switch (p.type) {
-    case 'boolean':
+function widgetFor(kind: FormField['kind']) {
+  switch (kind) {
+    case 'bool':
       return BooleanWidget;
-    case 'number':
+    case 'int':
+    case 'float':
       return NumberWidget;
     case 'string':
       return StringWidget;
-    case 'string-enumeration':
-    case 'number-enumeration':
+    case 'enum':
       return EnumerationWidget;
-    case 'image':
-    case 'file':
-    case 'item':
+    case 'sourceRef':
       return FileWidget;
-    case 'new-file':
-      return NewFileWidget;
+    case 'bounds':
+      return BoundsWidget;
     default:
       return StringWidget;
   }

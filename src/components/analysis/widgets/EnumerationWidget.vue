@@ -3,7 +3,7 @@
     :model-value="modelValue ?? null"
     :items="items"
     :label="param.title || param.id"
-    :hint="param.description"
+    :hint="param.help"
     density="compact"
     hide-details="auto"
     persistent-hint
@@ -13,19 +13,20 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { ParsedParam } from '@/src/processing/adapters/slicer-cli/parser';
-
-type EnumValue = string | number;
+import type { VolViewTaskParameter } from '@/processing-contract';
 
 const props = defineProps<{
-  param: ParsedParam;
-  modelValue: EnumValue | null | undefined;
+  param: VolViewTaskParameter;
+  modelValue: string | null | undefined;
 }>();
 const emit = defineEmits<{
-  (e: 'update:modelValue', v: EnumValue | null): void;
+  (e: 'update:modelValue', v: string | null): void;
 }>();
 
-const items = computed(() => (props.param.values ?? []) as EnumValue[]);
+// The enum options live only on the `enum` kind.
+const items = computed(() =>
+  props.param.kind === 'enum' ? props.param.options : []
+);
 const onUpdate = (v: unknown) =>
-  emit('update:modelValue', v as EnumValue | null);
+  emit('update:modelValue', (v ?? null) as string | null);
 </script>

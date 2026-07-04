@@ -5,6 +5,9 @@
 // Core VolView must never import from an adapter package.
 // ---------------------------------------------------------------------------
 
+// Type-only import (erased at runtime — no import cycle with the engine).
+import type { TaskSpecEnvelope } from '@/src/processing/engine/taskSpec';
+
 export type ProcessingProtocol = 'slicer-cli';
 
 export type ProcessingProviderConfig = {
@@ -12,7 +15,6 @@ export type ProcessingProviderConfig = {
   label: string;
   protocol: ProcessingProtocol;
   baseUrl: string;
-  auth?: 'same-origin' | 'bearer' | 'tokenUrl';
   context?: ProcessingContext;
 };
 
@@ -20,6 +22,11 @@ export type ProcessingProvider = {
   config: ProcessingProviderConfig;
 
   listTasks: (context: ProcessingContext) => Promise<SlicerCliTaskSummary[]>;
+  // Server-emitted, zod-validated task description (contract Seam 2). The engine
+  // renders the parameter form from this — it parses no XML at runtime.
+  getTaskSpec: (taskId: string) => Promise<TaskSpecEnvelope>;
+  // Retired at runtime (superseded by getTaskSpec); kept until the Chunk 13
+  // deletion sweep removes it along with the XML path.
   getTaskXml: (taskId: string) => Promise<string>;
   getDefaultBindings: (
     taskId: string,

@@ -2,7 +2,7 @@
   <v-text-field
     :model-value="modelValue ?? ''"
     :label="param.title || param.id"
-    :hint="param.description"
+    :hint="param.help"
     density="compact"
     hide-details="auto"
     persistent-hint
@@ -11,10 +11,10 @@
 </template>
 
 <script setup lang="ts">
-import type { ParsedParam } from '@/src/processing/adapters/slicer-cli/parser';
+import type { VolViewTaskParameter } from '@/processing-contract';
 
 defineProps<{
-  param: ParsedParam;
+  param: VolViewTaskParameter;
   modelValue: string | null | undefined;
 }>();
 const emit = defineEmits<{

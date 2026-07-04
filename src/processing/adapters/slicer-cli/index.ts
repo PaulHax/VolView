@@ -8,17 +8,15 @@
 // directly — it dynamic-import()s it through the providers store.
 
 import type {
-  ProcessingJobRef,
-  ProcessingJobStatus,
   ProcessingProvider,
   ProcessingProviderConfig,
-  ProcessingResult,
   ProcessingValue,
-  SlicerCliTaskSummary,
 } from '@/src/processing/types';
+import { $fetch } from '@/src/utils/fetch';
+import { createEngineTransport } from '@/src/processing/engine/transport';
+import { defaultDescriptor } from '@/src/processing/engine/descriptor';
 import { parseSlicerCli, type SlicerCliDocument } from './parser';
 import type { ParsedParam } from './parser';
-import { parseJobRef, parseJobStatus, parseResults } from './wire';
 
 // ---------------------------------------------------------------------------
 // Schema-driven form helpers (consumed by TaskForm.vue, not core VolView).
@@ -104,82 +102,45 @@ export const validate = (
 
 export type { SlicerCliDocument };
 
+// ---------------------------------------------------------------------------
+// Provider — composed from the generic engine transport.
+//
+// Every live HTTP path (tasks / spec / run / status / results) is driven by the
+// generic engine reading the neutral-facade default descriptor, over the
+// bearer-aware `$fetch`. This adapter no longer holds any transport of its own;
+// it only supplies the retired `getTaskXml` (kept until the Chunk 13 deletion
+// sweep) and the no-op `getDefaultBindings`.
+// ---------------------------------------------------------------------------
+
 const join = (base: string, path: string) =>
   `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
 
-const fetchJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
-  const res = await fetch(url, {
-    credentials: 'same-origin',
-    ...init,
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Request failed: ${res.status} ${res.statusText} ${body}`);
-  }
-  return res.json();
-};
-
+// Retired path — routed through `$fetch` (never raw `fetch`) so no bypass of
+// the bearer header survives. The `tasks/{id}/xml` endpoint is deleted with the
+// XML path in Chunk 13, so it is not promoted into the descriptor.
 const fetchText = async (url: string): Promise<string> => {
-  const res = await fetch(url, { credentials: 'same-origin' });
+  const res = await $fetch(url, { credentials: 'same-origin' });
   if (!res.ok) {
     throw new Error(`Request failed: ${res.status} ${res.statusText}`);
   }
   return res.text();
 };
 
-export class SlicerCliProvider implements ProcessingProvider {
-  config: ProcessingProviderConfig;
-
-  constructor(config: ProcessingProviderConfig) {
-    this.config = config;
-  }
-
-  async listTasks(): Promise<SlicerCliTaskSummary[]> {
-    return fetchJson<SlicerCliTaskSummary[]>(
-      join(this.config.baseUrl, 'tasks')
-    );
-  }
-
-  async getTaskXml(taskId: string): Promise<string> {
-    return fetchText(
-      join(this.config.baseUrl, `tasks/${encodeURIComponent(taskId)}/xml`)
-    );
-  }
-
-  async getDefaultBindings(): Promise<Record<string, ProcessingValue>> {
-    return {};
-  }
-
-  async runTask(
-    taskId: string,
-    values: Record<string, ProcessingValue>
-  ): Promise<ProcessingJobRef> {
-    const raw = await fetchJson<unknown>(
-      join(this.config.baseUrl, `tasks/${encodeURIComponent(taskId)}/run`),
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ values }),
-      }
-    );
-    return parseJobRef(raw);
-  }
-
-  async getJob(jobId: string): Promise<ProcessingJobStatus> {
-    const raw = await fetchJson<unknown>(
-      join(this.config.baseUrl, `jobs/${encodeURIComponent(jobId)}`)
-    );
-    return parseJobStatus(jobId, raw);
-  }
-
-  async getResults(jobId: string): Promise<ProcessingResult[]> {
-    const raw = await fetchJson<unknown>(
-      join(this.config.baseUrl, `jobs/${encodeURIComponent(jobId)}/results`)
-    );
-    return parseResults(raw);
-  }
-}
-
 export const createProvider = (
   config: ProcessingProviderConfig
-): ProcessingProvider => new SlicerCliProvider(config);
+): ProcessingProvider => {
+  const transport = createEngineTransport(config.baseUrl, defaultDescriptor);
+  return {
+    config,
+    listTasks: () => transport.listTasks(),
+    getTaskSpec: (taskId) => transport.getTaskSpec(taskId),
+    getTaskXml: (taskId) =>
+      fetchText(
+        join(config.baseUrl, `tasks/${encodeURIComponent(taskId)}/xml`)
+      ),
+    getDefaultBindings: async () => ({}),
+    runTask: (taskId, values) => transport.runTask(taskId, values),
+    getJob: (jobId) => transport.getJob(jobId),
+    getResults: (jobId) => transport.getResults(jobId),
+  };
+};

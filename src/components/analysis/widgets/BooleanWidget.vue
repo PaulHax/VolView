@@ -2,7 +2,7 @@
   <v-checkbox
     :model-value="modelValue === true"
     :label="param.title || param.id"
-    :hint="param.description"
+    :hint="param.help"
     persistent-hint
     density="compact"
     hide-details="auto"
@@ -11,10 +11,10 @@
 </template>
 
 <script setup lang="ts">
-import type { ParsedParam } from '@/src/processing/adapters/slicer-cli/parser';
+import type { VolViewTaskParameter } from '@/processing-contract';
 
 defineProps<{
-  param: ParsedParam;
+  param: VolViewTaskParameter;
   modelValue: boolean | null | undefined;
 }>();
 const emit = defineEmits<{
