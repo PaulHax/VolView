@@ -98,7 +98,7 @@ import { computed, reactive } from 'vue';
 
 import { useProvidersStore } from '@/src/store/providers';
 import { applyIntent } from '@/src/actions/processResults';
-import type { ResultIntent } from '@/src/processing/intents';
+import type { ResultIntent } from '@/processing-contract';
 import {
   canOpen,
   canBeLayer,
@@ -143,9 +143,10 @@ function actionToIntent(
       return { intent: 'add-layer', ...file };
     case 'segmentGroup':
       return {
-        intent: 'attach-segment-group',
+        intent: 'add-segment-group',
         ...file,
-        segments: result.segments ?? [],
+        ...(result.segments ? { segments: result.segments } : {}),
+        ...(result.source ? { source: result.source } : {}),
       };
     default: {
       const exhaustive: never = action;

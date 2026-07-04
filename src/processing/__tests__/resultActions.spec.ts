@@ -19,29 +19,32 @@ const result = (
 });
 
 describe('naturalIntent', () => {
-  it('prefers the validated intent over role', () => {
-    // The facade emits a consistent role+intent; resultToIntent prefers intent.
+  it('consumes the facade-emitted intent directly (no role dispatch)', () => {
+    // The client reads `intent` and never switches on `role`.
     expect(
       naturalIntent(result({ role: 'segmentGroup', intent: 'add-layer' }))
     ).toBe('add-layer');
   });
 
-  it('falls back to role translation when no intent is present', () => {
-    expect(naturalIntent(result({ role: 'segmentGroup' }))).toBe(
-      'attach-segment-group'
+  it('resolves a labelmap output to add-segment-group', () => {
+    expect(naturalIntent(result({ intent: 'add-segment-group' }))).toBe(
+      'add-segment-group'
     );
   });
 
-  it('treats an unset role/intent as add-base-image', () => {
-    expect(naturalIntent(result())).toBe('add-base-image');
+  it('degrades a result with no intent to the download floor', () => {
+    // Facade always emits `intent` now; a missing one fails closed to download
+    // rather than falling back to a role (which no longer exists).
+    expect(naturalIntent(result())).toBe('download');
+  });
+
+  it('degrades an unknown intent name to download', () => {
+    expect(naturalIntent(result({ intent: 'add-polygon' }))).toBe('download');
   });
 });
 
 describe('canOpen', () => {
-  it('hides Open for a download-only output (the role-omitted facade case)', () => {
-    // The facade omits `role` for non-labelmaps but always emits `intent`, so a
-    // non-image download output arrives as { intent: 'download' } with no role.
-    // Role-only gating wrongly offered Open; intent gating must not.
+  it('hides Open for a download-only output', () => {
     expect(canOpen(result({ name: 'report.csv', intent: 'download' }))).toBe(
       false
     );
@@ -51,10 +54,8 @@ describe('canOpen', () => {
     expect(canOpen(result({ intent: 'add-base-image' }))).toBe(true);
   });
 
-  it('shows Open for a segment group (matches prior behavior)', () => {
-    expect(
-      canOpen(result({ role: 'segmentGroup', intent: 'attach-segment-group' }))
-    ).toBe(true);
+  it('shows Open for a segment group', () => {
+    expect(canOpen(result({ intent: 'add-segment-group' }))).toBe(true);
   });
 });
 
@@ -68,18 +69,22 @@ describe('canBeLayer', () => {
       false
     );
     expect(canBeLayer(result({ intent: 'restore-state' }))).toBe(false);
-    expect(canBeLayer(result({ intent: 'attach-segment-group' }))).toBe(false);
+    expect(canBeLayer(result({ intent: 'add-segment-group' }))).toBe(false);
   });
 
   it('offers the layer action for an image base output, not a non-image one', () => {
-    expect(canBeLayer(result({ name: 'vol.nrrd' }))).toBe(true);
-    expect(canBeLayer(result({ name: 'notes.txt' }))).toBe(false);
+    expect(
+      canBeLayer(result({ intent: 'add-base-image', name: 'vol.nrrd' }))
+    ).toBe(true);
+    expect(
+      canBeLayer(result({ intent: 'add-base-image', name: 'notes.txt' }))
+    ).toBe(false);
   });
 });
 
 describe('canBeSegmentGroup', () => {
   it('is true for a segment-group result', () => {
-    expect(canBeSegmentGroup(result({ intent: 'attach-segment-group' }))).toBe(
+    expect(canBeSegmentGroup(result({ intent: 'add-segment-group' }))).toBe(
       true
     );
   });
@@ -93,8 +98,12 @@ describe('canBeSegmentGroup', () => {
   });
 
   it('lets an image base output seed a segment group, not a non-image one', () => {
-    expect(canBeSegmentGroup(result({ name: 'vol.nrrd' }))).toBe(true);
-    expect(canBeSegmentGroup(result({ name: 'notes.txt' }))).toBe(false);
+    expect(
+      canBeSegmentGroup(result({ intent: 'add-base-image', name: 'vol.nrrd' }))
+    ).toBe(true);
+    expect(
+      canBeSegmentGroup(result({ intent: 'add-base-image', name: 'notes.txt' }))
+    ).toBe(false);
   });
 });
 

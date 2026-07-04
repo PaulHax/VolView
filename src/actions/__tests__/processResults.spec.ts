@@ -55,6 +55,8 @@ vi.mock('pinia', async (orig) => {
 });
 
 const file = { url: 'https://example/out.nrrd', name: 'out.nrrd' };
+const rgba = (r: number, g: number, b: number, a: number) =>
+  [r, g, b, a] as [number, number, number, number];
 
 const context = (activeDatasetId?: string): SubmittedJobContext => ({
   jobId: 'j1',
@@ -129,28 +131,20 @@ describe('applyIntent', () => {
     });
   });
 
-  it('attach-segment-group converts the labelmap and applies descriptors', async () => {
+  it('add-segment-group converts the labelmap and applies descriptors', async () => {
     mocks.orderByParent.value = { parent: ['group-1'] };
     const segments = [
-      {
-        value: 1,
-        name: 'liver',
-        color: [255, 0, 0, 255] as [number, number, number, number],
-      },
-      {
-        value: 2,
-        name: 'tumor',
-        color: [0, 255, 0, 255] as [number, number, number, number],
-        visible: false,
-      },
+      { value: 1, name: 'liver', color: rgba(255, 0, 0, 255) },
+      { value: 2, name: 'tumor', color: rgba(0, 255, 0, 255), visible: false },
     ];
     await applyIntent(
-      { intent: 'attach-segment-group', ...file, segments },
+      { intent: 'add-segment-group', ...file, segments },
       context('parent')
     );
     expect(mocks.convertImageToLabelmap).toHaveBeenCalledWith(
       'child-selection',
-      'parent'
+      'parent',
+      undefined
     );
     expect(mocks.updateSegment).toHaveBeenCalledTimes(2);
     expect(mocks.updateSegment).toHaveBeenCalledWith('group-1', 1, {
@@ -165,9 +159,39 @@ describe('applyIntent', () => {
     expect(mocks.loadUrls).not.toHaveBeenCalled();
   });
 
-  it('attach-segment-group with no originating dataset falls back to opening', async () => {
+  it('add-segment-group with no segments still converts (embedded metadata)', async () => {
+    mocks.orderByParent.value = { parent: ['group-1'] };
     await applyIntent(
-      { intent: 'attach-segment-group', ...file, segments: [] },
+      { intent: 'add-segment-group', ...file },
+      context('parent')
+    );
+    expect(mocks.convertImageToLabelmap).toHaveBeenCalledWith(
+      'child-selection',
+      'parent',
+      undefined
+    );
+    // No folded sidecar -> the group keeps its own decoded segments.
+    expect(mocks.updateSegment).not.toHaveBeenCalled();
+  });
+
+  it('stamps the source:{jobId,outputId} tag on the created group', async () => {
+    const source = { jobId: 'job-abc123', outputId: 'outputLabelmap' };
+    await applyIntent(
+      { intent: 'add-segment-group', ...file, source },
+      context('parent')
+    );
+    // The tag threads through convertImageToLabelmap -> addLabelmap so it
+    // round-trips the .volview.zip (Chunk 11 stamp; Chunk 19 idempotency).
+    expect(mocks.convertImageToLabelmap).toHaveBeenCalledWith(
+      'child-selection',
+      'parent',
+      source
+    );
+  });
+
+  it('add-segment-group with no originating dataset falls back to opening', async () => {
+    await applyIntent(
+      { intent: 'add-segment-group', ...file },
       context(undefined)
     );
     expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
@@ -176,19 +200,76 @@ describe('applyIntent', () => {
       names: [file.name],
     });
   });
+
+  it('is additive-only: writes into the NEW group, never a pre-existing one', async () => {
+    // A pre-existing group is present for the parent. Applying a segment-group
+    // result must create a NEW group (convertImageToLabelmap) and apply
+    // descriptors to it — never merge into the existing group.
+    mocks.orderByParent.value = { parent: ['existing-group'] };
+    mocks.convertImageToLabelmap.mockImplementation(async () => {
+      mocks.orderByParent.value.parent.push('new-group');
+    });
+    await applyIntent(
+      {
+        intent: 'add-segment-group',
+        ...file,
+        segments: [{ value: 1, name: 'liver', color: rgba(1, 2, 3, 4) }],
+      },
+      context('parent')
+    );
+    expect(mocks.convertImageToLabelmap).toHaveBeenCalledTimes(1);
+    // Descriptors land on the freshly-created group, not the existing one.
+    expect(mocks.updateSegment).toHaveBeenCalledWith(
+      'new-group',
+      1,
+      expect.anything()
+    );
+    expect(mocks.updateSegment).not.toHaveBeenCalledWith(
+      'existing-group',
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('degrades an UNKNOWN intent to download (no store mutation)', async () => {
+    await applyIntent(
+      { intent: 'add-polygon', ...file } as never,
+      context('parent')
+    );
+    expect(mocks.loadUrls).not.toHaveBeenCalled();
+    expect(mocks.addLayer).not.toHaveBeenCalled();
+    expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
+  });
+
+  it('degrades a known name with an INVALID payload to download', async () => {
+    // `add-segment-group` name but a shape-invalid segment (value 0 = the
+    // reserved background) fails the strict member — it must NOT be applied as
+    // a segment group; it degrades to the download floor (in-flight decision).
+    await applyIntent(
+      {
+        intent: 'add-segment-group',
+        ...file,
+        segments: [{ value: 0, name: 'bad', color: rgba(1, 2, 3, 4) }],
+      },
+      context('parent')
+    );
+    expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
+    expect(mocks.loadUrls).not.toHaveBeenCalled();
+  });
 });
 
 describe('autoLoadProcessingResults', () => {
-  it('auto-applies only attach-segment-group results, ignoring the rest', async () => {
+  it('auto-applies only add-segment-group results, ignoring the rest', async () => {
     mocks.orderByParent.value = { parent: ['group-1'] };
     await autoLoadProcessingResults(
       [
-        result({ id: 'a', role: 'base' }),
-        result({ id: 'b', role: 'layer' }),
+        result({ id: 'a', intent: 'add-base-image' }),
+        result({ id: 'b', intent: 'add-layer' }),
         result({
           id: 'c',
-          role: 'segmentGroup',
-          segments: [{ value: 1, name: 'liver', color: [1, 2, 3, 4] }],
+          intent: 'add-segment-group',
+          source: { jobId: 'j1', outputId: 'seg' },
+          segments: [{ value: 1, name: 'liver', color: rgba(1, 2, 3, 4) }],
         }),
       ],
       context('parent')
@@ -196,7 +277,8 @@ describe('autoLoadProcessingResults', () => {
     expect(mocks.convertImageToLabelmap).toHaveBeenCalledTimes(1);
     expect(mocks.convertImageToLabelmap).toHaveBeenCalledWith(
       'child-selection',
-      'parent'
+      'parent',
+      { jobId: 'j1', outputId: 'seg' }
     );
     expect(mocks.updateSegment).toHaveBeenCalledTimes(1);
     // The base / layer results must not auto-load.
@@ -204,9 +286,19 @@ describe('autoLoadProcessingResults', () => {
     expect(mocks.addLayer).not.toHaveBeenCalled();
   });
 
+  it('does not auto-apply an unknown intent (degraded to download)', async () => {
+    mocks.orderByParent.value = { parent: ['group-1'] };
+    await autoLoadProcessingResults(
+      [result({ intent: 'add-polygon' })],
+      context('parent')
+    );
+    expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
+    expect(mocks.loadUrls).not.toHaveBeenCalled();
+  });
+
   it('applies nothing when there is no originating dataset', async () => {
     await autoLoadProcessingResults(
-      [result({ role: 'segmentGroup', segments: [] })],
+      [result({ intent: 'add-segment-group' })],
       context(undefined)
     );
     expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
@@ -221,8 +313,8 @@ describe('autoLoadProcessingResults', () => {
       .mockResolvedValueOnce(undefined);
     await autoLoadProcessingResults(
       [
-        result({ id: 'a', role: 'segmentGroup', segments: [] }),
-        result({ id: 'b', role: 'segmentGroup', segments: [] }),
+        result({ id: 'a', intent: 'add-segment-group' }),
+        result({ id: 'b', intent: 'add-segment-group' }),
       ],
       context('parent')
     );

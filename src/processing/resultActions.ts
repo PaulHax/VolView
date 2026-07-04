@@ -2,19 +2,18 @@
 // Result action policy — which load actions (Open / Add as layer / Add as
 // segment group) a processing result supports in the Analysis job list.
 //
-// The policy keys on the result's *resolved intent* (`resultToIntent` prefers
-// the validated `intent` field and falls back to translating the legacy `role`)
-// rather than the raw wire `role`. This is what lets the UI honor the
-// `download` intent the facade emits for non-image outputs: the facade omits
-// `role` for everything but labelmaps, so role-only gating could never tell a
-// download-only file apart from a base image and wrongly offered "Open" on it.
+// The policy keys on the result's *resolved intent* (`resultToIntent`, which
+// consumes the facade-emitted `intent` and degrades an unknown/invalid one to
+// `download`) rather than any wire `role`. This is what lets the UI honor the
+// `download` intent the facade emits for non-image outputs: a download-only
+// file is never offered "Open".
 //
 // Pure module (no Vue, no store, no fetch) so the gating decisions are unit
 // testable on their own — the JobList SFC just renders these predicates.
 // ---------------------------------------------------------------------------
 
-import type { ResultIntent } from '@/src/processing/intents';
-import { resultToIntent } from '@/src/processing/adapters/slicer-cli/resultToIntent';
+import type { ResultIntent } from '@/processing-contract';
+import { resultToIntent } from '@/src/processing/engine';
 import type { ProcessingResult } from '@/src/processing/types';
 
 const IMAGE_LIKE_MIMETYPES = [
@@ -58,14 +57,14 @@ export function canBeLayer(result: ProcessingResult): boolean {
   const intent = naturalIntent(result);
   if (intent === 'restore-state' || intent === 'download') return false;
   if (intent === 'add-layer') return true;
-  if (intent === 'attach-segment-group') return false;
+  if (intent === 'add-segment-group') return false;
   // add-base-image: offer the layer action when the file is an image.
   return looksLikeImage(result);
 }
 
 export function canBeSegmentGroup(result: ProcessingResult): boolean {
   const intent = naturalIntent(result);
-  if (intent === 'attach-segment-group') return true;
+  if (intent === 'add-segment-group') return true;
   if (intent === 'add-layer') return false;
   if (intent === 'restore-state' || intent === 'download') return false;
   // add-base-image: an image result can seed a segment group.

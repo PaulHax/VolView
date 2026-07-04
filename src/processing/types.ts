@@ -9,7 +9,7 @@
 import type { TaskSpecEnvelope } from '@/src/processing/engine/taskSpec';
 // The neutral Seam-1 input value the client mints from provenance at submit
 // (contract "Seam 1 — inputs"; Chunk 8). `{ type, format?, uris }`.
-import type { InputValue } from '@/processing-contract';
+import type { InputValue, ResultSource } from '@/processing-contract';
 
 export type ProcessingProtocol = 'slicer-cli';
 
@@ -143,7 +143,12 @@ export type ProcessingSegmentDescriptor = {
   visible?: boolean;
 };
 
-/** Result role names (closed vocabulary; shared with the wire schema). */
+/**
+ * Result role names (closed vocabulary). VESTIGIAL: results now cross the wire
+ * as declarative intents and the client no longer switches on `role` (the
+ * `roleToIntent` dispatch was retired in Chunk 11). Kept only so the doomed
+ * slicer-cli adapter wire validator still compiles until the Chunk 13 sweep.
+ */
 export const RESULT_ROLES = [
   'base',
   'layer',
@@ -156,23 +161,31 @@ export type ProcessingResult = {
   id: string;
   name: string;
   url: string;
+  /** Vestigial — see `RESULT_ROLES`. The client applies `intent`, not `role`. */
   role?: (typeof RESULT_ROLES)[number];
   /**
-   * Provider-supplied result intent (the five-name v1 vocabulary, see
-   * `processing/intents`). Emitted additively alongside `role`; the adapter
-   * prefers a present, valid intent and falls back to `role` translation
-   * otherwise. Typed loosely because it arrives as untrusted wire JSON and is
-   * zod-validated at the adapter boundary.
+   * Provider-supplied result intent — the neutral v1 vocabulary the single
+   * applier applies (contract Seam 2; `processing-contract/wire.ts`). Typed
+   * loosely because it arrives as untrusted wire JSON; `resultToIntent`
+   * resolves it against the canonical schema and degrades an unknown/invalid
+   * one to `download`.
    */
   intent?: string;
   mimeType?: string;
   size?: number;
   /**
-   * Provider-supplied segment descriptors. Only meaningful for
-   * `role: 'segmentGroup'` results. When present, VolView applies these
+   * Provider-supplied segment descriptors. Only meaningful for an
+   * `add-segment-group` intent. When present, VolView applies these
    * names/colors to the created segment group instead of auto-generating.
    */
   segments?: ProcessingSegmentDescriptor[];
+  /**
+   * Provenance tag the facade stamps on an `add-segment-group` result
+   * (`{ jobId, outputId }`). The applier threads it onto the created segment
+   * group so it round-trips the `.volview.zip` (tier-2 idempotency key, D5 /
+   * Chunk 19). Structurally the `source?` field on `SegmentGroupMetadata`.
+   */
+  source?: ResultSource;
 };
 
 // VolView remembers which dataset / source was active at submission time so

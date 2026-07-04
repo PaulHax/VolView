@@ -313,7 +313,8 @@ export const useSegmentGroupStore = defineStore('segmentGroup', () => {
    */
   async function convertImageToLabelmap(
     imageID: DataSelection,
-    parentID: DataSelection
+    parentID: DataSelection,
+    source?: SegmentGroupMetadata['source']
   ) {
     if (imageID === parentID)
       throw new Error('Cannot convert an image to be a labelmap of itself');
@@ -368,6 +369,10 @@ export const useSegmentGroupStore = defineStore('segmentGroup', () => {
         name,
         parentImage: parentID,
         segments: { order, byValue: byKey },
+        // Job-produced groups carry a `source: {jobId, outputId}` provenance
+        // tag (contract Seam 2/3; Chunk 11) so they round-trip the .volview.zip;
+        // hand-painted / session-restore conversions pass none.
+        ...(source ? { source } : {}),
       });
     });
   }

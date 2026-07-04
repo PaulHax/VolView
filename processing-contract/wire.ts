@@ -138,13 +138,20 @@ const download = z.object({
   ...resultFile,
 });
 
-const knownIntent = z.discriminatedUnion('intent', [
+// The STRICT half of the vocabulary: exactly the five v1 intents, each with its
+// declared shape. Exported so the single applier can gate on which union member
+// strictly matched — a name-known-but-shape-invalid result (e.g. a broken
+// `segments`) fails here and must degrade to `download` exactly like an unknown
+// name, rather than being applied as if it were a valid segment group.
+export const knownResultIntentSchema = z.discriminatedUnion('intent', [
   addBaseImage,
   addLayer,
   addSegmentGroup,
   restoreState,
   download,
 ]);
+
+export type KnownResultIntent = z.infer<typeof knownResultIntentSchema>;
 
 // The fail-OPEN branch: an intent name outside the v1 vocabulary still parses
 // (as long as it references a file), so the applier degrades it to `download`
@@ -157,7 +164,10 @@ const unknownIntent = z
   })
   .catchall(z.unknown());
 
-export const resultIntentSchema = z.union([knownIntent, unknownIntent]);
+export const resultIntentSchema = z.union([
+  knownResultIntentSchema,
+  unknownIntent,
+]);
 
 export type ResultIntent = z.infer<typeof resultIntentSchema>;
 

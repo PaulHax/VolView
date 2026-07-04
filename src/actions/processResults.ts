@@ -1,32 +1,41 @@
-// Apply the result intents produced by a finished provider job.
+// Apply the declarative result intents produced by a finished provider job.
 //
-// Results arrive from the provider as `ProcessingResult[]` (with the slicer-cli
-// `role` field); the adapter translates each into a declarative `ResultIntent`
-// (see processing/adapters/slicer-cli/resultToIntent) and a single client-side
-// applier maps each intent to the store calls that perform it. The intent
-// vocabulary — not a store-method name — is the producer-facing contract
-// (decisions.md D3/D4).
+// Results cross the wire as a declarative `ResultIntent` the server emits
+// (contract Seam 2; decisions.md D3/D4) — never a store-method name, never a
+// closed `role` enum. A single client-side applier maps each intent to the
+// store calls that perform it. The producer names no client method; the intent
+// vocabulary is the whole contract.
 //
-// Per the architecture doc, the default is **not** to auto-load anything that
-// could clobber the user's current view. Auto-load is reserved for true
-// overlays (`attach-segment-group`); every other intent is requested
-// explicitly from a JobList action button (decisions.md D6 MVP stance).
+// Additive-only (D4): every intent creates NEW objects — it never mutates or
+// overwrites a user-editable one. `add-segment-group` adds a new segment group
+// (through the same state-file restore path VolView session-restore uses:
+// `convertImageToLabelmap` -> `addLabelmap`), `add-layer`/`add-base-image` add
+// new datasets/layers.
 //
-// Intent → store call:
-//   `attach-segment-group` → convertImageToLabelmap + updateSegment (overlay)
-//   `add-layer`            → useLayersStore.addLayer
-//   `add-base-image`       → loadUrls (new top-level dataset)
-//   `restore-state`        → loadUrls (no dedicated session restore yet)
-//   `download`             → no store mutation; surfaced as a link in JobList
+// Fail closed (contract Seam 2): an unknown intent name — or a known name whose
+// payload is shape-invalid — degrades to `download` (no store mutation); every
+// result is a file, so the download floor is always safe.
+//
+// Intent -> store call:
+//   `add-base-image`     -> loadUrls (new top-level dataset)
+//   `add-layer`          -> useLayersStore.addLayer (new layer)
+//   `add-segment-group`  -> convertImageToLabelmap (new segment group) + descriptors
+//   `restore-state`      -> loadUrls (no dedicated session restore yet)
+//   `download`           -> no store mutation; surfaced as a link in JobList
+//   <unknown/invalid>    -> download floor
 
 import { storeToRefs } from 'pinia';
+import {
+  knownResultIntentSchema,
+  type ResultIntent,
+  type KnownResultIntent,
+  type SegmentDescriptor,
+} from '@/processing-contract';
 import type {
   ProcessingResult,
-  ProcessingSegmentDescriptor,
   SubmittedJobContext,
 } from '@/src/processing/types';
-import type { ResultIntent } from '@/src/processing/intents';
-import { resultToIntent } from '@/src/processing/adapters/slicer-cli/resultToIntent';
+import { resultToIntent } from '@/src/processing/engine';
 import { uriToDataSource } from '@/src/io/import/dataSource';
 import {
   importDataSources,
@@ -38,6 +47,11 @@ import { useSegmentGroupStore } from '@/src/store/segmentGroups';
 import { loadUrls } from './loadUserFiles';
 
 type ResultFile = { url: string; name: string };
+
+type SegmentGroupIntent = Extract<
+  KnownResultIntent,
+  { intent: 'add-segment-group' }
+>;
 
 async function loadAsImport(file: ResultFile) {
   const ds = uriToDataSource(file.url, file.name);
@@ -55,7 +69,7 @@ async function loadAsImport(file: ResultFile) {
  */
 function applySegmentDescriptors(
   parentSelection: string,
-  segments: ProcessingSegmentDescriptor[]
+  segments: SegmentDescriptor[]
 ) {
   const segmentGroupStore = useSegmentGroupStore();
   const { orderByParent } = storeToRefs(segmentGroupStore);
@@ -79,27 +93,36 @@ function applySegmentDescriptors(
   });
 }
 
-async function attachSegmentGroup(
-  intent: Extract<ResultIntent, { intent: 'attach-segment-group' }>,
+async function applySegmentGroup(
+  intent: SegmentGroupIntent,
   parentSelection: string
 ) {
   const childSelection = await loadAsImport(intent);
   if (!childSelection) return;
   const segmentGroupStore = useSegmentGroupStore();
+  // Additive-only: convertImageToLabelmap creates a NEW group (never writes
+  // into an existing one) and threads the `source: {jobId, outputId}` tag
+  // through addLabelmap so it round-trips the .volview.zip (Chunk 11 stamps it;
+  // Chunk 19 reads it for cold-reload idempotency).
   await segmentGroupStore.convertImageToLabelmap(
     childSelection,
-    parentSelection
+    parentSelection,
+    intent.source
   );
-  if (intent.segments.length) {
+  // `segments` (folded labels sidecar) is optional; a seg.nrrd with embedded
+  // metadata carries none and the group keeps its own decoded segments.
+  if (intent.segments?.length) {
     applySegmentDescriptors(parentSelection, intent.segments);
   }
 }
 
 /**
  * The single result applier: map a declarative intent to the store calls that
- * perform it. `add-layer` / `attach-segment-group` need an originating dataset
- * to attach to; with none they fall back to opening the file as a new dataset
- * (matching the legacy behavior when no active dataset was recorded).
+ * perform it. `add-layer` / `add-segment-group` need an originating dataset to
+ * attach to; with none they fall back to opening the file as a new dataset.
+ *
+ * Fail closed: an unknown intent name, or a known name whose payload fails the
+ * strict schema, applies nothing (the safe `download` floor).
  */
 export async function applyIntent(
   intent: ResultIntent,
@@ -111,44 +134,53 @@ export async function applyIntent(
   const openAsDataset = (file: ResultFile) =>
     loadUrls({ urls: [file.url], names: [file.name] });
 
-  switch (intent.intent) {
+  // Gate on the STRICT known-intent member: a name-known-but-shape-invalid
+  // result (e.g. broken `segments`) must not be applied as a segment group —
+  // it degrades to download exactly like an unknown name.
+  const known = knownResultIntentSchema.safeParse(intent);
+  if (!known.success) return; // unknown / invalid -> download floor (no-op)
+  const resolved = known.data;
+
+  switch (resolved.intent) {
     case 'add-base-image':
     case 'restore-state':
-      await openAsDataset(intent);
+      await openAsDataset(resolved);
       return;
     case 'download':
       // No store mutation — the file is surfaced as a link in JobList.
       return;
     case 'add-layer': {
       if (!parentSelection) {
-        await openAsDataset(intent);
+        await openAsDataset(resolved);
         return;
       }
-      const childSelection = await loadAsImport(intent);
+      const childSelection = await loadAsImport(resolved);
       if (!childSelection) return;
       await useLayersStore().addLayer(parentSelection, childSelection);
       return;
     }
-    case 'attach-segment-group': {
+    case 'add-segment-group': {
       if (!parentSelection) {
-        await openAsDataset(intent);
+        await openAsDataset(resolved);
         return;
       }
-      await attachSegmentGroup(intent, parentSelection);
+      await applySegmentGroup(resolved, parentSelection);
       return;
     }
     default: {
-      const exhaustive: never = intent;
-      throw new Error(`Unhandled result intent: ${JSON.stringify(exhaustive)}`);
+      // Exhaustive over the five known intents.
+      const exhaustive: never = resolved;
+      void exhaustive;
     }
   }
 }
 
 /**
- * Auto-actions on job completion. Only overlays (`attach-segment-group`)
- * auto-apply, and only when there is an originating dataset to attach to;
- * everything else waits for an explicit JobList action so we never clobber the
- * current view (decisions.md D6).
+ * Auto-actions on job completion. Conservative for v1 (decisions.md D6): only a
+ * validated segment group auto-applies — as a NEW group, and only when there is
+ * an originating dataset to attach to; every other intent waits for an explicit
+ * JobList click so we never clobber the current view. The full auto-preview UX
+ * (confirm/reject, visibility toggle) is Chunk 22.
  */
 export async function autoLoadProcessingResults(
   results: ProcessingResult[],
@@ -159,9 +191,9 @@ export async function autoLoadProcessingResults(
 
   for (const result of results) {
     const intent = resultToIntent(result);
-    if (intent.intent !== 'attach-segment-group') continue;
+    if (intent.intent !== 'add-segment-group') continue;
     try {
-      await attachSegmentGroup(intent, parentSelection);
+      await applyIntent(intent, context);
     } catch (err) {
       console.error('Failed to auto-load segment group result', result, err);
     }
