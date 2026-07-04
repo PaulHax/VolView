@@ -35,13 +35,27 @@ const join = (base: string, path: string) =>
 
 const id = (taskOrJobId: string) => encodeURIComponent(taskOrJobId);
 
+// Job routes are addressed by job id alone (D5) — the launch folder is not part
+// of a job's identity, so the facade serves them off a folder-free
+// `volview_processing` surface. The launch-context endpoints (tasks/spec/run/
+// stage) genuinely operate per-folder and keep the folder-scoped baseUrl; the
+// job endpoints re-root by dropping the `folder/<id>/` segment. A baseUrl that
+// carries no folder (already the processing root) is left unchanged.
+const jobsRoot = (baseUrl: string) =>
+  baseUrl.replace(/\/folder\/[^/]+(?=\/[^/]+\/?$)/, '');
+
 export const defaultDescriptor: TransportDescriptor = {
   endpoints: {
     listTasks: (baseUrl) => join(baseUrl, 'tasks'),
     taskSpec: (baseUrl, taskId) => join(baseUrl, `tasks/${id(taskId)}/spec`),
     runTask: (baseUrl, taskId) => join(baseUrl, `tasks/${id(taskId)}/run`),
-    jobStatus: (baseUrl, jobId) => join(baseUrl, `jobs/${id(jobId)}`),
-    jobResults: (baseUrl, jobId) => join(baseUrl, `jobs/${id(jobId)}/results`),
+    // Job-addressed + folder-free (D5): matches the facade routes
+    // `GET|POST volview_processing/jobs/:jobId[/results|/cancel]`.
+    jobStatus: (baseUrl, jobId) => join(jobsRoot(baseUrl), `jobs/${id(jobId)}`),
+    jobResults: (baseUrl, jobId) =>
+      join(jobsRoot(baseUrl), `jobs/${id(jobId)}/results`),
+    cancel: (baseUrl, jobId) =>
+      join(jobsRoot(baseUrl), `jobs/${id(jobId)}/cancel`),
     // Client-created labelmap inputs POST here for facade-minted URIs (Chunk 14
     // facade half; Chunk 15 client half). Matches the facade route
     // `POST folder/:folderId/volview_processing/stage`.

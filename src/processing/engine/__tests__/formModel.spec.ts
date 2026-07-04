@@ -28,8 +28,9 @@ const KNOWN_KINDS = [
 describe('form model renders every golden task-spec fixture', () => {
   const fixtures = loadFixtureDir('task-spec');
 
-  it('loads the four golden fixtures', () => {
+  it('loads the golden fixtures', () => {
     expect(fixtures.map((f) => f.name).sort()).toEqual([
+      'masked-median-filter',
       'median-filter',
       'otsu-segmentation',
       'synthetic-bounds-enum',

@@ -9,28 +9,48 @@
         :subtitle="subtitleFor(job)"
       >
         <template #append>
-          <v-chip
-            v-if="job.state === 'success'"
-            color="success"
-            size="x-small"
-            variant="tonal"
-          >
-            ✓
-          </v-chip>
-          <v-chip
-            v-else-if="job.state === 'error'"
-            color="error"
-            size="x-small"
-            variant="tonal"
-          >
-            !
-          </v-chip>
-          <v-progress-circular
-            v-else-if="job.state === 'running' || job.state === 'pending'"
-            indeterminate
-            size="16"
-            width="2"
-          />
+          <div class="d-flex align-center" style="gap: 4px">
+            <v-chip
+              v-if="job.state === 'success'"
+              color="success"
+              size="x-small"
+              variant="tonal"
+            >
+              ✓
+            </v-chip>
+            <v-chip
+              v-else-if="job.state === 'error'"
+              color="error"
+              size="x-small"
+              variant="tonal"
+            >
+              !
+            </v-chip>
+            <v-chip
+              v-else-if="job.state === 'cancelled'"
+              color="grey"
+              size="x-small"
+              variant="tonal"
+            >
+              ✕
+            </v-chip>
+            <template
+              v-else-if="job.state === 'running' || job.state === 'pending'"
+            >
+              <v-progress-circular indeterminate size="16" width="2" />
+              <!-- Best-effort cancel (contract Seam 3; D5): one neutral store
+                   call. The poller converges the job to its terminal state, so
+                   this button disappears once it settles. -->
+              <v-btn
+                size="x-small"
+                variant="text"
+                :loading="cancellingJobIds.has(job.jobId)"
+                @click="cancel(job.jobId)"
+              >
+                Cancel
+              </v-btn>
+            </template>
+          </div>
         </template>
 
         <!-- Per-result actions: shown only on successful jobs with results. -->
@@ -114,6 +134,20 @@ const failedJobs = computed(() =>
 );
 
 const loadingResultIds = reactive(new Set<string>());
+// Jobs with an in-flight cancel request (drives the Cancel button spinner).
+const cancellingJobIds = reactive(new Set<string>());
+
+// Best-effort cancel: fire the one neutral store call and let the poller
+// converge the job to its terminal state (the store never fabricates
+// `cancelled`). Errors are surfaced by the store; we only own the button state.
+async function cancel(jobId: string) {
+  cancellingJobIds.add(jobId);
+  try {
+    await providers.cancelJob(jobId);
+  } finally {
+    cancellingJobIds.delete(jobId);
+  }
+}
 
 function resultsFor(jobId: string): ProcessingResult[] {
   return providers.jobResults.get(jobId) ?? [];

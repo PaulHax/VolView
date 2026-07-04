@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import { createEngineTransport, type TransportDescriptor } from '../transport';
+import type { ProcessingJobStatus } from '@/src/processing/types';
 import { setGlobalHeader, deleteGlobalHeader } from '@/src/utils/fetch';
 
 // ---------------------------------------------------------------------------
@@ -39,6 +40,7 @@ const descriptorFor = (label: string): TransportDescriptor => ({
     runTask: (b, t) => `${b}/${label}/run/${t}`,
     jobStatus: (b, j) => `${b}/${label}/status/${j}`,
     jobResults: (b, j) => `${b}/${label}/results/${j}`,
+    cancel: (b, j) => `${b}/${label}/cancel/${j}`,
   },
   buildRunRequest: (values) => ({
     method: 'POST',
@@ -152,6 +154,47 @@ describe('engine transport reads its descriptor + uses $fetch', () => {
     const engine = createEngineTransport('http://host', descriptorFor('A'));
     await expect(engine.stageInput(new Blob(['x']))).rejects.toThrow(
       /does not support staging/i
+    );
+  });
+
+  // Cancel (Chunk 18): the engine POSTs to the descriptor's cancel endpoint
+  // (bearer-carrying $fetch) and validates the projected status back through the
+  // SAME neutral status parser as polling — never a hardcoded path, and the
+  // best-effort terminal state comes straight off the response, not fabricated.
+  it('cancels through the descriptor cancel endpoint and parses the projected status', async () => {
+    const base = descriptorFor('A');
+    const descriptor: TransportDescriptor = {
+      ...base,
+      format: {
+        ...base.format,
+        parseStatus: (jobId, raw): ProcessingJobStatus => ({
+          jobId,
+          state: (raw as { state: ProcessingJobStatus['state'] }).state,
+        }),
+      },
+    };
+    const calls = stubFetch({ state: 'cancelled' });
+    const engine = createEngineTransport('http://host', descriptor);
+
+    const status = await engine.cancelJob('j1');
+
+    expect(status).toEqual({ jobId: 'j1', state: 'cancelled' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('http://host/A/cancel/j1');
+    expect(calls[0].init?.method).toBe('POST');
+    expect(authOf(calls[0])).toBe('Bearer test-token');
+  });
+
+  // Fail closed: a descriptor with no cancel endpoint (a backend with no
+  // cancellation surface) refuses rather than guess a route.
+  it('fails closed when the descriptor advertises no cancel endpoint', async () => {
+    stubFetch({});
+    const base = descriptorFor('A');
+    const endpoints = { ...base.endpoints };
+    delete endpoints.cancel;
+    const engine = createEngineTransport('http://host', { ...base, endpoints });
+    await expect(engine.cancelJob('j1')).rejects.toThrow(
+      /does not support cancelling/i
     );
   });
 });

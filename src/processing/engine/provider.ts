@@ -37,6 +37,9 @@ export const createProvider = (
     runTask: (taskId, values) => transport.runTask(taskId, values),
     getJob: (jobId) => transport.getJob(jobId),
     getResults: (jobId) => transport.getResults(jobId),
+    // Best-effort cancel (contract Seam 3; D5) — a single neutral engine call;
+    // convergence is the store poller's job, not this one.
+    cancelJob: (jobId) => transport.cancelJob(jobId),
     // Client-created labelmap inputs stage through the engine transport (the
     // default descriptor's `stage` endpoint); a descriptor without one fails
     // closed inside the transport.

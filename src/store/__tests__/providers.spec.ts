@@ -47,6 +47,7 @@ const makeProvider = (
   runTask: vi.fn(),
   getJob: vi.fn(),
   getResults: vi.fn().mockResolvedValue([]),
+  cancelJob: vi.fn().mockResolvedValue({ jobId: 'x', state: 'cancelled' }),
   stageInput: vi.fn().mockResolvedValue([]),
   ...overrides,
 });
@@ -156,6 +157,99 @@ describe('Providers store — job lifecycle (D5 async-with-sync-fast-path)', () 
     // Poller stopped after terminal — no further getJob calls.
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 2);
     expect(getJob).toHaveBeenCalledTimes(2);
+  });
+
+  // Cancel (contract Seam 3 best-effort; D5): the cancel action is ONE neutral
+  // engine call. It does not terminalize the job itself — the EXISTING poller
+  // converges on whatever terminal state the backend reports, so `cancelled` is
+  // never fabricated and completion still fires exactly once.
+  it('cancel action fires one engine call; the poller converges on cancelled', async () => {
+    const store = useProvidersStore();
+
+    const getJob = vi
+      .fn()
+      .mockResolvedValueOnce({ jobId: 'job-cancel', state: 'running' })
+      .mockResolvedValue({ jobId: 'job-cancel', state: 'cancelled' });
+    const getResults = vi.fn().mockResolvedValue(sampleResults);
+    const cancelJob = vi
+      .fn()
+      .mockResolvedValue({ jobId: 'job-cancel', state: 'cancelled' });
+    const runTask = vi
+      .fn()
+      .mockResolvedValue({ jobId: 'job-cancel' } as ProcessingJobRef);
+    const provider = makeProvider({ runTask, getJob, getResults, cancelJob });
+    store.instances.set('p1', provider);
+
+    const listener = vi.fn();
+    store.onJobComplete(listener);
+
+    const jobId = await store.submitJob('p1', 'task-1', {}, {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getJob).toHaveBeenCalledTimes(1);
+
+    // The user cancels — one neutral engine call with the job id.
+    await store.cancelJob(jobId);
+    expect(cancelJob).toHaveBeenCalledTimes(1);
+    expect(cancelJob).toHaveBeenCalledWith('job-cancel');
+    // Cancel itself did NOT complete the job — the poller is still the driver.
+    expect(listener).not.toHaveBeenCalled();
+    expect(store.jobs.get('job-cancel')?.state).toBe('running');
+
+    // The existing poller observes the backend's terminal `cancelled`.
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    expect(store.jobs.get('job-cancel')?.state).toBe('cancelled');
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: { jobId: 'job-cancel', state: 'cancelled' },
+        results: [],
+        context: expect.objectContaining({ jobId: 'job-cancel' }),
+      })
+    );
+    // A cancelled (non-success) terminal fetches no results.
+    expect(getResults).not.toHaveBeenCalled();
+
+    // Poller stopped after terminal.
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 2);
+    expect(getJob).toHaveBeenCalledTimes(2);
+  });
+
+  // Fail closed: cancelling a job the store never tracked is a no-op that never
+  // reaches a provider and never throws to the UI.
+  it('cancel of an untracked job is a no-op', async () => {
+    const store = useProvidersStore();
+    const cancelJob = vi.fn();
+    store.instances.set('p1', makeProvider({ cancelJob }));
+
+    await expect(store.cancelJob('ghost')).resolves.toBeUndefined();
+    expect(cancelJob).not.toHaveBeenCalled();
+  });
+
+  // Best-effort: a failed cancel request is surfaced (not thrown), and the
+  // poller keeps running so a job that terminates on its own still converges.
+  it('surfaces a cancel failure without throwing and keeps polling', async () => {
+    const store = useProvidersStore();
+
+    const getJob = vi
+      .fn()
+      .mockResolvedValue({ jobId: 'job-cf', state: 'running' });
+    const cancelJob = vi.fn().mockRejectedValue(httpError(500));
+    const runTask = vi
+      .fn()
+      .mockResolvedValue({ jobId: 'job-cf' } as ProcessingJobRef);
+    store.instances.set('p1', makeProvider({ runTask, getJob, cancelJob }));
+
+    const jobId = await store.submitJob('p1', 'task-1', {}, {});
+    await vi.advanceTimersByTimeAsync(0);
+
+    await expect(store.cancelJob(jobId)).resolves.toBeUndefined();
+
+    const errs = useMessageStore().messages.filter(
+      (m) => m.type === MessageType.Error
+    );
+    expect(errs.some((m) => /cancel/i.test(m.title))).toBe(true);
+    // Poller is untouched — the job is still tracked and polling.
+    expect(store.jobs.get('job-cf')?.state).toBe('running');
   });
 
   // An adapter that meets a malformed wire status returns an `error` job state

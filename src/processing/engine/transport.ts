@@ -59,6 +59,12 @@ export type TransportDescriptor = {
     runTask: (baseUrl: string, taskId: string) => string;
     jobStatus: (baseUrl: string, jobId: string) => string;
     jobResults: (baseUrl: string, jobId: string) => string;
+    // Optional cancel endpoint (contract Seam 3, best-effort job cancel; D5).
+    // Present on the neutral facade; a facade-less backend (#2) with no
+    // cancellation surface may omit it, and `cancelJob` then fails closed rather
+    // than inventing a route. Kept a transport specific so the engine never
+    // hardcodes the cancel path.
+    cancel?: (baseUrl: string, jobId: string) => string;
     // Optional staging endpoint (contract Seam 1, client-created labelmap
     // inputs): POST client-held bytes, receive facade-minted URIs. Present on
     // the neutral facade; a facade-less backend (MONAI, #2) may omit it, and
@@ -109,6 +115,11 @@ export type EngineTransport = {
   ) => Promise<ProcessingJobRef>;
   getJob: (jobId: string) => Promise<ProcessingJobStatus>;
   getResults: (jobId: string) => Promise<ProcessingResult[]>;
+  // Best-effort cancel (contract Seam 3; D5). POSTs to the descriptor's cancel
+  // endpoint and validates the projected status back through the same neutral
+  // status parser as polling. Fails closed if the descriptor advertises no
+  // cancel endpoint.
+  cancelJob: (jobId: string) => Promise<ProcessingJobStatus>;
   // Stage client-held bytes as a transient input, returning the facade-minted
   // URIs (contract Seam 1). Fails closed if the descriptor advertises no
   // staging endpoint. The bytes ride as the request body (a `Blob`, so the
@@ -154,6 +165,23 @@ export const createEngineTransport = (
       format.parseResults(
         await requestJson(endpoints.jobResults(baseUrl, jobId))
       ),
+
+    cancelJob: async (jobId) => {
+      // Fail closed: cancel is a descriptor capability, not a hardcoded route.
+      // A descriptor with no `cancel` endpoint (a backend with no cancellation
+      // surface) is refused rather than sent to a guessed URL. The response is
+      // the neutral projected status — validated by the SAME parser as polling,
+      // so a best-effort backend that already finished honestly reports its real
+      // terminal state (never a fabricated `cancelled`).
+      const { cancel } = endpoints;
+      if (!cancel) {
+        throw new Error('This provider does not support cancelling jobs');
+      }
+      return format.parseStatus(
+        jobId,
+        await requestJson(cancel(baseUrl, jobId), { method: 'POST' })
+      );
+    },
 
     stageInput: async (body, name) => {
       // Fail closed: staging is a descriptor capability, not a hardcoded route.

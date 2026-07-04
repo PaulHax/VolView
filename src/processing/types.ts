@@ -38,6 +38,14 @@ export type ProcessingProvider = {
   ) => Promise<ProcessingJobRef>;
   getJob: (jobId: string) => Promise<ProcessingJobStatus>;
   getResults: (jobId: string) => Promise<ProcessingResult[]>;
+  // Best-effort cancel of a tracked job (contract "Seam 3 — job lifecycle"; D5).
+  // One neutral engine call: the caller holds no Girder route/id/JobStatus
+  // knowledge. Returns the job's projected status after the attempt, but the
+  // store's poller — not this return — is what converges the UI on whatever
+  // terminal state the backend ultimately reports (a job may finish before the
+  // cancel lands, so `cancelled` is never fabricated). Fails closed when the
+  // backend advertises no cancel endpoint.
+  cancelJob: (jobId: string) => Promise<ProcessingJobStatus>;
   // Stage client-held bytes (a serialized segment group) as a transient input,
   // returning the facade-minted URIs the client round-trips as a
   // `{ type: "labelmap", uris }` value (contract "Seam 1 — inputs"; Chunk 15).

@@ -467,6 +467,37 @@ export const useProvidersStore = defineStore('providers', () => {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Cancel (contract "Seam 3 — job lifecycle" best-effort; D5)
+  // -------------------------------------------------------------------------
+
+  // Request cancellation of a tracked job. One neutral engine call — no Girder
+  // route/id/JobStatus knowledge here. Deliberately does NOT record a terminal
+  // status itself: cancel is best-effort (the job may finish before the cancel
+  // lands), so the EXISTING poller stays the single source of convergence and
+  // fires completion exactly once on whatever terminal state the backend
+  // reports. A cancel of an unknown/untracked job is a no-op (fail closed,
+  // never throws to the UI).
+  async function cancelJob(jobId: string) {
+    const context = submittedContexts.get(jobId);
+    if (!context) return;
+    try {
+      const provider = await getProvider(context.providerId);
+      await provider.cancelJob(jobId);
+    } catch (err) {
+      // Best-effort: surface the failure but leave the poller running so a job
+      // that terminates on its own still converges. A mid-cancel 401/403 is the
+      // same dead-session signal the poller uses.
+      if (classifyError(err) === 'session-expired') {
+        markSessionExpired(err);
+        return;
+      }
+      useMessageStore().addError('Failed to cancel job', {
+        error: err instanceof Error ? err : undefined,
+      });
+    }
+  }
+
   return {
     configs,
     instances,
@@ -483,6 +514,7 @@ export const useProvidersStore = defineStore('providers', () => {
     recordJob,
     recordSubmittedContext,
     submitJob,
+    cancelJob,
     onJobComplete,
     stopPolling,
   };
