@@ -38,14 +38,19 @@ export type InputValue = z.infer<typeof inputValueSchema>;
 // Seam 3 — neutral job status
 // ---------------------------------------------------------------------------
 
-// Exactly these five states. `cancelled` is present day one so v1 cancel needs
-// no wire change; the terminal states (`succeeded | failed | cancelled`) also
-// carry the born-terminal sync fast-path at zero cost (D5).
+// Exactly these five states, named to match what the facade projects and the
+// client store consumes at runtime (`pending | running | success | error |
+// cancelled`): girder's native job status maps onto these with no translation
+// layer, so the producer and the consumer already agree and this canonical
+// schema is reconciled TO them (Chunk 12 -> Chunk 23, driver 2026-07-04 — the
+// smallest-blast-radius rename; see DECISIONS-LOG). `cancelled` is present day
+// one so v1 cancel needs no wire change; the terminal states (`success | error |
+// cancelled`) also carry the born-terminal sync fast-path at zero cost (D5).
 export const JOB_STATES = [
-  'queued',
+  'pending',
   'running',
-  'succeeded',
-  'failed',
+  'success',
+  'error',
   'cancelled',
 ] as const;
 export type JobState = (typeof JOB_STATES)[number];

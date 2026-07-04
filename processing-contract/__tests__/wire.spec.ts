@@ -55,20 +55,22 @@ describe('input value fixtures', () => {
 
 describe('neutral job status fixtures', () => {
   it('has exactly the five v1 states, cancelled included', () => {
+    // Runtime names (Chunk 12 -> Chunk 23 reconcile): the facade projects and the
+    // client store consumes these; the canonical schema is named TO them.
     expect([...JOB_STATES]).toEqual([
-      'queued',
+      'pending',
       'running',
-      'succeeded',
-      'failed',
+      'success',
+      'error',
       'cancelled',
     ]);
   });
 
   it.each([
-    'status.queued',
+    'status.pending',
     'status.running',
-    'status.succeeded',
-    'status.failed',
+    'status.success',
+    'status.error',
     'status.cancelled',
     'status.error-tail',
   ])('validates %s', (name) => {
@@ -80,15 +82,17 @@ describe('neutral job status fixtures', () => {
     expect(s.state).toBe('cancelled');
   });
 
-  it('carries an errorTail on a failed job', () => {
+  it('carries an errorTail on an errored job', () => {
     const s = neutralJobStatusSchema.parse(wire['status.error-tail']);
-    expect(s.state).toBe('failed');
+    expect(s.state).toBe('error');
     expect(s.errorTail).toBeTruthy();
   });
 
-  it('rejects a state outside the five', () => {
+  it('rejects a state outside the five (e.g. the retired `queued`)', () => {
+    // `queued`/`succeeded`/`failed` are the pre-reconcile spellings and are now
+    // rejected; the runtime names (`pending`/`success`/`error`) are the valid five.
     expect(
-      neutralJobStatusSchema.safeParse({ jobId: 'j', state: 'pending' }).success
+      neutralJobStatusSchema.safeParse({ jobId: 'j', state: 'queued' }).success
     ).toBe(false);
   });
 });
@@ -184,9 +188,9 @@ describe('tier-2 handle + result-read payloads', () => {
     expect(results.intents.length).toBe(1);
   });
 
-  it('validates a getJobResults error payload (non-succeeded)', () => {
+  it('validates a getJobResults error payload (non-success)', () => {
     const err = jobResultsErrorSchema.parse(wire['job-results.error']);
     expect(err.error).toBeTruthy();
-    expect(err.state).toBe('failed');
+    expect(err.state).toBe('error');
   });
 });

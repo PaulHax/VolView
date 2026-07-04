@@ -18,8 +18,10 @@ if [ ! -d "$facade_repo" ]; then
   exit 1
 fi
 
-# Regenerate the JSON Schemas first so the copy is never stale.
+# Regenerate the JSON Schemas + the published OpenAPI first so the copy is never
+# stale (both land in generated/, both are vendored below).
 (cd "$pkg_dir/.." && npx tsx processing-contract/scripts/generate-json-schema.ts)
+(cd "$pkg_dir/.." && npx tsx processing-contract/scripts/generate-openapi.ts)
 
 mkdir -p "$dest"
 rm -rf "$dest/fixtures" "$dest/generated"

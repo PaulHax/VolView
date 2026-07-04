@@ -1,14 +1,20 @@
 # processing-contract
 
-The neutral client↔facade processing contract, as a self-contained artifact.
-The VolView client and any server-side **facade** (girder_volview today, a MONAI
-shim tomorrow) build against the shapes defined here; no backend speaks them
-natively — a facade **translates** its native task format into this one neutral
-spec (contract Seam 2; decision D2).
+The neutral client↔facade processing contract, published as a self-contained,
+backend-decoupled artifact. The VolView client and any server-side **facade**
+(girder_volview today, a MONAI shim tomorrow) build against the shapes defined
+here; no backend speaks them natively — a facade **translates** its native task
+format into this one neutral spec (contract Seam 2; decision D2).
 
-This is the **contract keystone** (WORKORDER Chunk 5): everything after depends
-on it. Chunk 23 later adds the OpenAPI of the neutral REST surface + a runnable
-facade conformance kit on top of these same fixtures.
+**Bring a new backend online = implement the [OpenAPI](#the-neutral-rest-surface-openapi)
++ pass the [conformance kit](#the-facade-conformance-kit); zero VolView client
+change.** That is the whole point of this package: adding a second backend is a
+_conformance exercise_, not a reverse-engineering of girder_volview.
+
+This is the **contract keystone** (WORKORDER Chunk 5), reframed by Chunk 23 as a
+published artifact: **girder_volview is one _consumer_ of this package**, not its
+owner. It vendors the fixtures + generated schemas (`tests/contract/`) and
+validates against them; it defines nothing here.
 
 ## Layout
 
@@ -18,9 +24,14 @@ processing-contract/
   wire.ts             neutral wire shapes: input value (Seam 1), job status +
                       NeutralJobHandle + result-read payloads (Seam 3), and the
                       v1 result-intent vocabulary (Seam 2)
+  openapi.ts          the neutral REST surface as an OpenAPI 3.1 document, built
+                      single-source (wire component schemas injected from the zod
+                      codegen); the facade's obligation surface (Chunk 23)
   schema-json.ts      zod -> JSON Schema codegen (the D4 single-source mechanism)
-  index.ts            re-exports the schemas + types
-  generated/          checked-in JSON Schemas the facade validates against
+  index.ts            re-exports the schemas + types (NOT the codegen/openapi —
+                      those are imported directly by scripts + tests)
+  generated/          checked-in artifacts the facade validates against:
+                      *.schema.json (one per wire schema) + openapi.json
   fixtures/
     task-spec/        golden task specs (MedianFilter / Otsu / Threshold + a
                       synthetic bounds+enum+UI-hints spec)
@@ -30,9 +41,12 @@ processing-contract/
                       result-read payloads
   scripts/
     generate-json-schema.ts   regenerates generated/*.schema.json
-    sync-facade.sh            copies fixtures + generated schemas into girder_volview
+    generate-openapi.ts       regenerates generated/openapi.json
+    sync-facade.sh            vendors fixtures + generated/ into a facade repo
   __tests__/          vitest: every fixture validates; negatives fail; generated
-                      schema is in sync with the zod source
+                      schema + openapi are in sync with the zod source; the
+                      openapi covers exactly the neutral surface and leaks nothing
+  CONFORMANCE.md      the runnable conformance checklist a new facade executes
 ```
 
 ## The single normative definition
@@ -41,32 +55,84 @@ The **zod sources here are the one normative definition** of the contract.
 JSON Schema is deliberately NOT the wire contract (D2) — it describes validity
 but not rendering, and there is exactly one producer (our facade) and one
 consumer (our renderer). The **golden JSON fixtures** are the interchange format
-both sides pin.
+both sides pin, and the generated JSON Schemas are the facade's _validator_,
+codegen'd from the zod source so the two can't drift (D4).
 
-## Two in-flight decisions taken (Chunk 5)
+## The neutral REST surface (OpenAPI)
 
-**Fixture home.** Canonical fixtures + zod source live **here**, in the VolView
-repo, next to the normative definition. girder_volview holds a **copy** for its
-facade tests (`tests/contract/`), produced by `scripts/sync-facade.sh` — never
-hand-edited. Chunk 23 reframes this as "girder_volview is one consumer of the
-package."
+`generated/openapi.json` (built from `openapi.ts`) describes **exactly the
+endpoints the client calls**, in **neutral terms** — no Girder routes, no
+`folderId`, no file ids, no `JobStatus` enum, no proxiable-URL shape. A reviewer
+can enumerate what a non-Girder facade must implement **without reading
+girder_volview source**:
 
-**Parity mechanism (D4): single source via codegen.** Rather than a
-hand-maintained second schema on the Python side, `schema-json.ts` generates a
-JSON Schema from the zod source (Zod 4's built-in `z.toJSONSchema`). One
-definition (zod), two validators (zod in TS; the generated JSON Schema in
-Python). The generated files are checked in and guarded against drift by
-`__tests__/generated-schema.spec.ts`. The **fixtures** are still physically
-copied into girder_volview (a separate repo/CI cannot import a sibling
-checkout); `sync-facade.sh` is the single writer and Chunk 24 re-checks parity.
+| operation        | method + neutral path        | request → response                    |
+| ---------------- | ---------------------------- | ------------------------------------- |
+| `listTasks`      | `GET /tasks`                 | → `TaskSummary[]`                     |
+| `getTaskSpec`    | `GET /tasks/{taskId}/spec`   | → `TaskSpec`                          |
+| `runTask`        | `POST /tasks/{taskId}/run`   | `RunTaskRequest` → `JobRef`          |
+| `listRecentJobs` | `GET /jobs`                  | → `NeutralJobHandle[]` (tier-2, opt.) |
+| `stageInput`     | `POST /stage`                | bytes → `StageResponse` (opt.)       |
+| `getJob`         | `GET /jobs/{jobId}`          | → `NeutralJobStatus`                 |
+| `getJobResults`  | `GET /jobs/{jobId}/results`  | → result intents, or explicit error  |
+| `cancelJob`      | `POST /jobs/{jobId}/cancel`  | → `NeutralJobStatus`                 |
 
-zod's cross-field refinements (`min<=max`, default-in-range, enum default) are
-not representable in JSON Schema and stay the zod side's extra rigor (exercised
-by the negative constraint-violation fixture).
+The component schemas are the wire schemas above (`TaskSpec`, `InputValue`,
+`NeutralJobStatus`, `ResultIntent`, `NeutralJobHandle`, …), injected from the
+same zod codegen, so the published surface can never drift from the normative
+definition. The lifecycle is **poll-only** in v1 (`getJob`); push (SSE) is an
+additive backend-only enhancement, never a neutral client requirement, so it is
+_not_ described here. Job-addressed routes (`getJob` / `getJobResults` /
+`cancelJob`) are keyed by the opaque job id **alone** — the job's own access
+control is the gate, so no context leaks into the path (D5).
+
+## The facade conformance kit
+
+The golden fixtures + generated schemas + the OpenAPI, together, are a runnable
+kit a facade executes to prove conformance. See **[CONFORMANCE.md](./CONFORMANCE.md)**
+for the checklist and how to run it. girder_volview is the **reference
+implementation** and the kit's first consumer: its `tests/` validate the
+facade-emitted specs, intents, and job statuses against these exact artifacts.
+
+## Two reusability tiers
+
+1. **Now — the facade as a conformance exercise (this package).** "Add a backend"
+   in v1 means "write a conforming facade": implement the OpenAPI, pass the
+   conformance kit. The cost moved server-side; it did not vanish.
+2. **Later — the north-star binding descriptor (deferred to backend #2).** The
+   end state is _config, not even a facade_: the provider config carries a
+   declarative **binding descriptor** the generic engine _executes_, so a new
+   backend is data, not code. That is deferred on purpose (it can only be
+   designed against two real backends — MONAI + Girder). See
+   `client-processing-contract.md`, **"North star — the binding descriptor"** and
+   **"v1 pre-builds the seam, not the descriptor."** This OpenAPI is the
+   **server-facing dual** of that seam: it states the neutral surface for facade
+   authors; the client-side default transport descriptor
+   (`src/processing/engine/descriptor.ts`) reads the same surface as engine
+   config. **This package does NOT build the descriptor** — it publishes the
+   seam.
+
+## Job-state names (Chunk 12 → Chunk 23 reconcile)
+
+The neutral job states are `pending | running | success | error | cancelled` —
+the names the facade projects and the client store consumes at runtime. Girder's
+native job status maps onto these with no translation layer, so the canonical
+schema is named _to_ the runtime (driver decision, 2026-07-04; DECISIONS-LOG
+"Chunk 12 → ORCHESTRATOR RESOLUTION"). A facade-side status-conformance test
+(girder_volview `tests/test_status_conformance.py`) validates its projected
+status against the generated `neutral-job-status` schema so this can't silently
+drift again.
 
 ## Regenerating
 
 ```
-npx tsx processing-contract/scripts/generate-json-schema.ts   # rewrite generated/
-processing-contract/scripts/sync-facade.sh                    # vendor into girder_volview
+npx tsx processing-contract/scripts/generate-json-schema.ts   # rewrite generated/*.schema.json
+npx tsx processing-contract/scripts/generate-openapi.ts       # rewrite generated/openapi.json
+processing-contract/scripts/sync-facade.sh [FACADE_REPO]      # regen + vendor into a facade repo
 ```
+
+`sync-facade.sh` is the **single writer** of a facade's vendored copy (never
+hand-edit `tests/contract/`); it regenerates first, then copies, so a facade's
+copy is never stale. The vitest drift guards
+(`__tests__/generated-schema.spec.ts`, `__tests__/openapi.spec.ts`) fail if the
+checked-in artifacts fall out of sync with the zod source.
