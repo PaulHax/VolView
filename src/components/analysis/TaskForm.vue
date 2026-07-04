@@ -36,6 +36,9 @@
           :is="widgetFor(field.kind)"
           :param="field"
           :model-value="values[field.id] as never"
+          :binding="
+            field.kind === 'sourceRef' ? sourceRefStates?.[field.id] : undefined
+          "
           @update:model-value="(v: ProcessingValue) => update(field.id, v)"
         />
       </div>
@@ -72,6 +75,7 @@ import type {
   TaskFormModel,
   FormValidationIssue,
 } from '@/src/processing/engine/formModel';
+import type { SourceRefBindingState } from '@/src/processing/engine/mintInput';
 
 import BooleanWidget from './widgets/BooleanWidget.vue';
 import NumberWidget from './widgets/NumberWidget.vue';
@@ -84,6 +88,8 @@ const props = defineProps<{
   model: TaskFormModel;
   initialValues: Record<string, ProcessingValue>;
   issues: FormValidationIssue[];
+  // Per-`sourceRef`-param bind state (Seam-1 mint); read by FileWidget.
+  sourceRefStates?: Record<string, SourceRefBindingState>;
   submitting?: boolean;
 }>();
 const emit = defineEmits<{

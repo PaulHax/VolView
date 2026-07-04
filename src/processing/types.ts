@@ -7,6 +7,9 @@
 
 // Type-only import (erased at runtime — no import cycle with the engine).
 import type { TaskSpecEnvelope } from '@/src/processing/engine/taskSpec';
+// The neutral Seam-1 input value the client mints from provenance at submit
+// (contract "Seam 1 — inputs"; Chunk 8). `{ type, format?, uris }`.
+import type { InputValue } from '@/processing-contract';
 
 export type ProcessingProtocol = 'slicer-cli';
 
@@ -91,6 +94,9 @@ export type ProcessingValue =
   | string[]
   | number[]
   | SourceRef
+  // Seam-1 input value minted from the bound volume's own DataSource provenance
+  // (Chunk 8). Supersedes the branded `SourceRef` string as the sourceRef value.
+  | InputValue
   | ProcessingOutputRequest
   | null;
 

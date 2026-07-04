@@ -141,6 +141,15 @@ export const useDatasetStore = defineStore('dataset', () => {
     return [...volumeKeys, ...images];
   });
 
+  // Provenance lookup by dataset id: the loaded volume's `DataSource` (its
+  // parent chain records where every byte came from). The Seam-1 mint (Chunk 8)
+  // reads this to author a bound input's verbatim URIs; a volume with no URI
+  // ancestor here is not bindable. Returns undefined for an unknown id.
+  const getDataSource = (
+    id: string | null | undefined
+  ): DataSource | undefined =>
+    id ? loadedData.value.find((d) => d.dataID === id)?.dataSource : undefined;
+
   // --- actions --- //
 
   async function serialize(stateFile: Schema.StateFile) {
@@ -195,6 +204,7 @@ export const useDatasetStore = defineStore('dataset', () => {
 
   return {
     idsAsSelections,
+    getDataSource,
     addDataSources,
     serialize,
     remove,

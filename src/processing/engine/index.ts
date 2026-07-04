@@ -12,4 +12,5 @@ export * from './transport';
 export * from './descriptor';
 export * from './taskSpec';
 export * from './formModel';
+export * from './mintInput';
 export * from './bounds';

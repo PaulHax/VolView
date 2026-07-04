@@ -49,6 +49,7 @@
           :model="taskModel"
           :initial-values="initialValues"
           :issues="issues"
+          :source-ref-states="sourceRefStates"
           :submitting="submitting"
           @update:values="onValuesUpdate"
           @submit="onSubmit"
@@ -67,6 +68,7 @@ import { useToast } from 'vue-toastification';
 import { useProvidersStore } from '@/src/store/providers';
 import { useCurrentImage } from '@/src/composables/useCurrentImage';
 import { useImageCacheStore } from '@/src/store/image-cache';
+import { useDatasetStore } from '@/src/store/datasets';
 import { useCropStore } from '@/src/store/tools/crop';
 import { autoLoadProcessingResults } from '@/src/actions/processResults';
 import type {
@@ -81,6 +83,10 @@ import {
   type TaskFormModel,
   type FormValidationIssue,
 } from '@/src/processing/engine/formModel';
+import {
+  bindImageInputs,
+  type SourceRefBindingState,
+} from '@/src/processing/engine/mintInput';
 import { cropPlanesToWorldBounds } from '@/src/processing/engine/bounds';
 
 import TaskPicker from './analysis/TaskPicker.vue';
@@ -90,6 +96,7 @@ import JobList from './analysis/JobList.vue';
 const providers = useProvidersStore();
 const { currentImageID } = useCurrentImage('global');
 const imageCache = useImageCacheStore();
+const datasetStore = useDatasetStore();
 const cropStore = useCropStore();
 const toast = useToast();
 
@@ -118,6 +125,8 @@ const taskError = ref<string | null>(null);
 const initialValues = ref<Record<string, ProcessingValue>>({});
 const currentValues = ref<Record<string, ProcessingValue>>({});
 const issues = ref<FormValidationIssue[]>([]);
+// Per-`sourceRef`-param bind state, surfaced inline by FileWidget (Seam-1 mint).
+const sourceRefStates = ref<Record<string, SourceRefBindingState>>({});
 const submitting = ref(false);
 
 watch(
@@ -190,10 +199,10 @@ async function onTaskSelected(taskId: string | null) {
     const envelope = await provider.value.getTaskSpec(taskId);
     const model = buildTaskFormModel(envelope);
     taskModel.value = model;
-    const initial = applyBoundsBindings(model, initialFormValues(model));
+    const initial = applyActiveBindings(model, initialFormValues(model));
     initialValues.value = initial;
     currentValues.value = { ...initial };
-    issues.value = validateFormValues(model, currentValues.value);
+    issues.value = computeIssues(model, initial);
   } catch (err) {
     taskError.value = (err as Error).message;
   } finally {
@@ -204,19 +213,33 @@ async function onTaskSelected(taskId: string | null) {
 function onValuesUpdate(values: Record<string, ProcessingValue>) {
   currentValues.value = values;
   if (!taskModel.value) return;
-  issues.value = validateFormValues(taskModel.value, values);
+  issues.value = computeIssues(taskModel.value, values);
 }
 
 async function onSubmit(values: Record<string, ProcessingValue>) {
   if (!provider.value || !selectedTaskId.value || !selectedProviderId.value)
     return;
+  const model = taskModel.value;
+  if (!model) return;
+
+  // Seam-1 client half (Chunk 8): mint the bound input value from the active
+  // volume's OWN provenance at submit, then fail closed if anything is
+  // unbindable or invalid — never submit a volume with no server URIs.
+  const finalValues = applyActiveBindings(model, values);
+  const finalIssues = computeIssues(model, finalValues);
+  if (finalIssues.length > 0) {
+    currentValues.value = finalValues;
+    issues.value = finalIssues;
+    return;
+  }
+
   submitting.value = true;
   try {
     const config = providers.configs.get(selectedProviderId.value);
     const jobId = await providers.submitJob(
       selectedProviderId.value,
       selectedTaskId.value,
-      values,
+      finalValues,
       {
         activeSourceRef: config?.context?.activeSourceRef,
         activeDatasetId: currentImageID.value ?? undefined,
@@ -266,18 +289,61 @@ function applyBoundsBindings(
   return next;
 }
 
+// ---------------------------------------------------------------------------
+// Seam-1 input binding (contract "Seam 1 — inputs", client half; Chunk 8)
+//
+// The background image input auto-binds to the ACTIVE dataset: its value is
+// minted from that volume's OWN provenance (its verbatim server URIs), never a
+// facade-advertised source. A volume with no URI provenance (local drop /
+// archive / restored state) is not bindable — the widget says so inline and
+// submit is refused. Bounds and image inputs both track the active image, so
+// they rebind together whenever it (or its crop box) changes.
+// ---------------------------------------------------------------------------
+
+function activeDataSource() {
+  return datasetStore.getDataSource(currentImageID.value);
+}
+
+// Apply every active-image-derived binding (crop bounds + the minted image
+// input) onto a base value set, overwriting only the bound params.
+function applyActiveBindings(
+  model: TaskFormModel,
+  base: Record<string, ProcessingValue>
+): Record<string, ProcessingValue> {
+  const withBounds = applyBoundsBindings(model, base);
+  const image = bindImageInputs(model, activeDataSource());
+  return { ...withBounds, ...image.values };
+}
+
+// Recompute the submit-gating issues and refresh the per-widget bind state. The
+// image params are gated by the mint (fail closed on no-provenance or >1 image
+// input), which owns them fully, so the generic per-param check is suppressed
+// for them to avoid a duplicate "required" message.
+function computeIssues(
+  model: TaskFormModel,
+  values: Record<string, ProcessingValue>
+): FormValidationIssue[] {
+  const image = bindImageInputs(model, activeDataSource());
+  sourceRefStates.value = image.states;
+  const imageParams = new Set(Object.keys(image.states));
+  const generic = validateFormValues(model, values).filter(
+    (i) => !imageParams.has(i.parameter)
+  );
+  return [...image.issues, ...generic];
+}
+
 watch(
   () => {
     const id = currentImageID.value;
-    return id ? cropStore.croppingByImageID[id] : undefined;
+    return { id, crop: id ? cropStore.croppingByImageID[id] : undefined };
   },
   () => {
     const model = taskModel.value;
     if (!model) return;
-    const rebound = applyBoundsBindings(model, currentValues.value);
+    const rebound = applyActiveBindings(model, currentValues.value);
     initialValues.value = rebound;
     currentValues.value = { ...rebound };
-    issues.value = validateFormValues(model, currentValues.value);
+    issues.value = computeIssues(model, rebound);
   },
   { deep: true }
 );
