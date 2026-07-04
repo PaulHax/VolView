@@ -17,6 +17,7 @@ describe('task-spec golden fixtures validate', () => {
 
   it('loads the expected fixtures', () => {
     expect(fixtures.map((f) => f.name).sort()).toEqual([
+      'masked-median-filter',
       'median-filter',
       'otsu-segmentation',
       'synthetic-bounds-enum',
@@ -58,6 +59,20 @@ describe('task-spec field kinds', () => {
     );
     expect(input).toMatchObject({ kind: 'sourceRef', accepts: ['image'] });
     expect(input).toMatchObject({ required: true });
+  });
+
+  it('models a labelmap-consuming task (Chunk 16): image input + labelmap input', () => {
+    const spec = specByName['masked-median-filter'];
+    const background = spec.parameters.find((p) => p.id === 'inputVolume');
+    const mask = spec.parameters.find((p) => p.id === 'inputLabelmap');
+    expect(background).toMatchObject({ kind: 'sourceRef', accepts: ['image'] });
+    expect(mask).toMatchObject({ kind: 'sourceRef', accepts: ['labelmap'] });
+    // v1 multi-input shape: exactly one background + one labelmap, no more.
+    expect(spec.parameters.filter((p) => p.kind === 'sourceRef')).toHaveLength(
+      2
+    );
+    // Its output loads back as a plain image (add-base-image intent).
+    expect(spec.outputs.map((o) => o.type)).toEqual(['image']);
   });
 
   it('carries numeric constraints + default on an int param', () => {
