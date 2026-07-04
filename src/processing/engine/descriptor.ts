@@ -22,6 +22,7 @@
 
 import type { TaskSummary } from '@/src/processing/types';
 import {
+  parseJobHandles,
   parseJobRef,
   parseJobStatus,
   parseResults,
@@ -60,6 +61,12 @@ export const defaultDescriptor: TransportDescriptor = {
     // facade half; Chunk 15 client half). Matches the facade route
     // `POST folder/:folderId/volview_processing/stage`.
     stage: (baseUrl) => join(baseUrl, 'stage'),
+    // Tier-2 cold-reload re-discovery (Chunk 19, D5). Context-scoped (keeps the
+    // folder-scoped baseUrl, unlike the job-addressed routes above): matches the
+    // facade route `GET folder/:folderId/volview_processing/jobs`. Its presence
+    // advertises the durable-enumeration capability; the engine calls it on load
+    // and degrades to tier-1 (in-session replay) when a descriptor omits it.
+    listRecentJobs: (baseUrl) => join(baseUrl, 'jobs'),
   },
 
   buildRunRequest: (values) => ({
@@ -79,5 +86,6 @@ export const defaultDescriptor: TransportDescriptor = {
     parseStatus: parseJobStatus,
     parseResults,
     parseStageResponse,
+    parseJobHandles,
   },
 };

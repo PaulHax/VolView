@@ -18,6 +18,7 @@
 // ---------------------------------------------------------------------------
 
 import { $fetch } from '@/src/utils/fetch';
+import type { NeutralJobHandle } from '@/processing-contract';
 import type {
   ProcessingJobRef,
   ProcessingJobStatus,
@@ -49,6 +50,11 @@ export type TransportFormat = {
   // Optional: validate a staging response into the facade-minted URIs. Paired
   // with the optional `stage` endpoint below (see `stageInput`).
   parseStageResponse?: (raw: unknown) => string[];
+  // Optional: validate a tier-2 `listRecentJobs` response into NeutralJobHandle[]
+  // (contract Seam 3; Chunk 19). Paired with the optional `listRecentJobs`
+  // endpoint below — a backend with no durable job enumeration (MONAI `/infer`)
+  // supplies neither, and the engine degrades to tier-1.
+  parseJobHandles?: (raw: unknown) => NeutralJobHandle[];
 };
 
 export type TransportDescriptor = {
@@ -70,6 +76,13 @@ export type TransportDescriptor = {
     // the neutral facade; a facade-less backend (MONAI, #2) may omit it, and
     // `stageInput` then fails closed rather than inventing a route.
     stage?: (baseUrl: string) => string;
+    // Optional tier-2 re-discovery endpoint (contract Seam 3; Chunk 19, D5):
+    // GET the launch-context's recent jobs as NeutralJobHandle[]. This IS the
+    // capability flag — durable job enumeration is a real backend capability
+    // (Girder yes; MONAI `/infer` ephemeral, no). Present on the neutral facade;
+    // absent elsewhere, and the store degrades to tier-1 (in-session replay).
+    // Context-scoped (folder-scoped baseUrl), unlike the folder-free job routes.
+    listRecentJobs?: (baseUrl: string) => string;
   };
   // Input-placement axis — how the bound input values ride in the run request
   // (the neutral default posts `{ values }` as a JSON body).
@@ -126,6 +139,12 @@ export type EngineTransport = {
   // browser sets Content-Length); the optional `name` is recorded for the
   // staged file.
   stageInput: (body: Blob, name?: string) => Promise<string[]>;
+  // Tier-2 cold-reload re-discovery (contract Seam 3; Chunk 19). Present ONLY
+  // when the descriptor advertises the capability (endpoint + parser) — its
+  // presence IS the capability flag the store reads to decide tier-2-vs-tier-1.
+  // A backend without durable enumeration omits it entirely (not a throwing
+  // stub), so the store degrades cleanly rather than catching an exception.
+  listRecentJobs?: () => Promise<NeutralJobHandle[]>;
 };
 
 export const createEngineTransport = (
@@ -133,7 +152,18 @@ export const createEngineTransport = (
   descriptor: TransportDescriptor
 ): EngineTransport => {
   const { endpoints, format } = descriptor;
+  // Tier-2 is capability-gated: the method exists ONLY when the descriptor
+  // advertises both the endpoint and the parser (Chunk 19, D5). The store reads
+  // its presence to choose tier-2 vs tier-1 — no throwing stub to catch.
+  const listRecentJobsEndpoint = endpoints.listRecentJobs;
+  const parseJobHandles = format.parseJobHandles;
+  const listRecentJobs =
+    listRecentJobsEndpoint && parseJobHandles
+      ? async () =>
+          parseJobHandles(await requestJson(listRecentJobsEndpoint(baseUrl)))
+      : undefined;
   return {
+    ...(listRecentJobs ? { listRecentJobs } : {}),
     listTasks: async () =>
       format.parseTasks(await requestJson(endpoints.listTasks(baseUrl))),
 

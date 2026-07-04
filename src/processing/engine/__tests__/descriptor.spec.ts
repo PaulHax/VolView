@@ -21,6 +21,17 @@ describe('default descriptor endpoint templates', () => {
       `${FOLDER_BASE}/tasks/t1/run`
     );
     expect(endpoints.stage?.(FOLDER_BASE)).toBe(`${FOLDER_BASE}/stage`);
+    // Tier-2 re-discovery is context-scoped (Chunk 19): it keeps the
+    // folder-scoped baseUrl, unlike the job-addressed routes below.
+    expect(endpoints.listRecentJobs?.(FOLDER_BASE)).toBe(`${FOLDER_BASE}/jobs`);
+  });
+
+  it('advertises the tier-2 re-discovery capability (endpoint + parser)', () => {
+    // The neutral facade DOES support durable enumeration, so both halves of the
+    // capability are present — a provider built on this descriptor exposes
+    // listRecentJobs and the store runs tier-2 (vs degrading to tier-1).
+    expect(defaultDescriptor.endpoints.listRecentJobs).toBeTypeOf('function');
+    expect(defaultDescriptor.format.parseJobHandles).toBeTypeOf('function');
   });
 
   it('re-roots job-addressed endpoints off the folder (D5)', () => {

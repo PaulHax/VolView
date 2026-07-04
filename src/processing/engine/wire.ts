@@ -26,6 +26,10 @@
 // ---------------------------------------------------------------------------
 
 import { z } from 'zod';
+import {
+  neutralJobHandleSchema,
+  type NeutralJobHandle,
+} from '@/processing-contract';
 import type {
   ProcessingJobRef,
   ProcessingJobStatus,
@@ -111,6 +115,12 @@ const stageResponseSchema = z.object({
   uris: z.array(z.string()).min(1),
 });
 
+// Tier-2 cold-reload re-discovery (contract Seam 3; Chunk 19): the facade's
+// `listRecentJobs` returns `NeutralJobHandle[]`, validated with the SAME
+// canonical schema the golden fixture pins. The client never sees the Girder
+// route, the JobStatus enum, or a file id — just the neutral handle.
+const jobHandlesSchema = z.array(neutralJobHandleSchema);
+
 // ---------------------------------------------------------------------------
 // Parse helpers
 // ---------------------------------------------------------------------------
@@ -185,4 +195,18 @@ export const parseStageResponse = (raw: unknown): string[] => {
     );
   }
   return parsed.data.uris;
+};
+
+// Validate a wire `NeutralJobHandle[]` (contract Seam 3 tier-2; Chunk 19). A
+// malformed listing throws so re-discovery fails loud rather than re-attaching
+// against a garbage handle; the store treats any listing failure as "no tier-2"
+// and degrades to tier-1 (a re-discovery failure is never fatal to the session).
+export const parseJobHandles = (raw: unknown): NeutralJobHandle[] => {
+  const parsed = jobHandlesSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `Malformed job handles from provider: ${formatIssues(parsed.error)}`
+    );
+  }
+  return parsed.data;
 };

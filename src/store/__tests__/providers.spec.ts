@@ -20,10 +20,24 @@ import type {
 // message store surfaces an error — only reads `idsAsSelections` from this store,
 // so this mock also keeps that path working.
 const { datasetState } = vi.hoisted(() => ({
-  datasetState: { ids: [] as string[] },
+  datasetState: {
+    ids: [] as string[],
+    // Provenance the tier-2 re-association reads (getDataSource → DataSource).
+    sources: {} as Record<string, unknown>,
+  },
 }));
 vi.mock('@/src/store/datasets', () => ({
-  useDatasetStore: () => ({ idsAsSelections: datasetState.ids }),
+  useDatasetStore: () => ({
+    idsAsSelections: datasetState.ids,
+    getDataSource: (id: string) => datasetState.sources[id],
+  }),
+}));
+
+// The tier-2 re-attach path dynamically imports the applier; mock it so the
+// heavy loader graph never loads here and the call is assertable.
+const { autoLoadMock } = vi.hoisted(() => ({ autoLoadMock: vi.fn() }));
+vi.mock('@/src/actions/processResults', () => ({
+  autoLoadProcessingResults: autoLoadMock,
 }));
 
 // Minimal fake provider — only the methods the lifecycle exercises are real.
@@ -658,5 +672,160 @@ describe('Providers store — tier-1 durability + failure UX (Chunk 12)', () => 
     const completion = listener.mock.calls[0][0];
     expect(completion.baseImageMissing).toBeFalsy();
     expect(completion.results).toEqual(sampleResults);
+  });
+});
+
+describe('Providers store — tier-2 cold-reload re-discovery (Chunk 19)', () => {
+  const config = { id: 'p1', label: 'Fake', baseUrl: 'http://localhost/' };
+
+  const handle = (overrides: Record<string, unknown> = {}) => ({
+    jobId: 'jr',
+    taskId: 't1',
+    inputUris: ['/f/a'],
+    finishedAt: '2026-07-03T20:00:00Z',
+    ...overrides,
+  });
+
+  // Register a provider config + preset its instance so getProvider returns the
+  // fake (no dynamic import), and give the reloaded scene one server dataset
+  // whose provenance is the job's input URI.
+  const arrange = (provider: ProcessingProvider) => {
+    const store = useProvidersStore();
+    store.registerProviderConfig(config);
+    store.instances.set('p1', provider);
+    datasetState.ids = ['ds1'];
+    datasetState.sources = { ds1: { type: 'uri', uri: '/f/a' } };
+    return store;
+  };
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.useFakeTimers();
+    datasetState.ids = [];
+    datasetState.sources = {};
+    autoLoadMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('capability absent → degrades to tier-1 (no re-discovery, no apply)', async () => {
+    // makeProvider omits listRecentJobs → the provider advertises no tier-2.
+    const provider = makeProvider({ getJob: vi.fn(), getResults: vi.fn() });
+    const store = arrange(provider);
+
+    await store.reattachRecentJobs();
+
+    expect(provider.getJob).not.toHaveBeenCalled();
+    expect(autoLoadMock).not.toHaveBeenCalled();
+    expect(store.submittedContexts.size).toBe(0);
+  });
+
+  it('auto-re-attaches a terminal-succeeded re-discovered job (no click)', async () => {
+    const provider = makeProvider({
+      listRecentJobs: vi.fn().mockResolvedValue([handle()]),
+      getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
+      getResults: vi.fn().mockResolvedValue(sampleResults),
+    });
+    const store = arrange(provider);
+
+    await store.reattachRecentJobs();
+
+    // Re-associated to the reloaded dataset by input-URI provenance, context
+    // carries the terminal instant, and the applier ran with the watermark.
+    const ctx = store.submittedContexts.get('jr');
+    expect(ctx?.activeDatasetId).toBe('ds1');
+    expect(ctx?.taskId).toBe('t1');
+    expect(ctx?.finishedAt).toBe('2026-07-03T20:00:00Z');
+    expect(provider.getResults).toHaveBeenCalledWith('jr');
+    expect(autoLoadMock).toHaveBeenCalledTimes(1);
+    expect(autoLoadMock).toHaveBeenCalledWith(sampleResults, ctx, undefined);
+  });
+
+  it('threads the session watermark into the applier', async () => {
+    const provider = makeProvider({
+      listRecentJobs: vi.fn().mockResolvedValue([handle()]),
+      getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
+      getResults: vi.fn().mockResolvedValue(sampleResults),
+    });
+    const store = arrange(provider);
+    store.setSessionWatermark('2026-07-03T12:00:00Z');
+
+    await store.reattachRecentJobs();
+
+    expect(autoLoadMock).toHaveBeenCalledWith(
+      sampleResults,
+      expect.anything(),
+      '2026-07-03T12:00:00Z'
+    );
+  });
+
+  it('records results but does not auto-apply when no base re-associates', async () => {
+    const provider = makeProvider({
+      listRecentJobs: vi
+        .fn()
+        .mockResolvedValue([handle({ inputUris: ['/f/nowhere'] })]),
+      getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
+      getResults: vi.fn().mockResolvedValue(sampleResults),
+    });
+    const store = arrange(provider);
+
+    await store.reattachRecentJobs();
+
+    // The job is tracked + its results fetched (JobList shows them) but there is
+    // no base to attach to, so the applier is not invoked.
+    expect(store.submittedContexts.get('jr')?.activeDatasetId).toBeUndefined();
+    expect(store.jobResults.get('jr')).toEqual(sampleResults);
+    expect(autoLoadMock).not.toHaveBeenCalled();
+  });
+
+  it('a re-discovery listing failure is not fatal (logged, degrades)', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const provider = makeProvider({
+      listRecentJobs: vi.fn().mockRejectedValue(new Error('boom')),
+      getJob: vi.fn(),
+    });
+    const store = arrange(provider);
+
+    await expect(store.reattachRecentJobs()).resolves.toBeUndefined();
+    expect(autoLoadMock).not.toHaveBeenCalled();
+    expect(err).toHaveBeenCalled();
+  });
+
+  it('does not re-adopt a job already tracked this session', async () => {
+    const provider = makeProvider({
+      listRecentJobs: vi.fn().mockResolvedValue([handle()]),
+      getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
+      getResults: vi.fn().mockResolvedValue(sampleResults),
+    });
+    const store = arrange(provider);
+    // Tier-1 already owns this job id.
+    store.recordSubmittedContext({
+      jobId: 'jr',
+      taskId: 't1',
+      providerId: 'p1',
+      submittedAt: '2026-07-03T19:00:00Z',
+    });
+
+    await store.reattachRecentJobs();
+
+    expect(provider.getJob).not.toHaveBeenCalled();
+    expect(autoLoadMock).not.toHaveBeenCalled();
+  });
+
+  it('a still-running re-discovered job is tracked for polling, not applied', async () => {
+    const provider = makeProvider({
+      listRecentJobs: vi.fn().mockResolvedValue([handle({ finishedAt: '' })]),
+      getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'running' }),
+      getResults: vi.fn().mockResolvedValue(sampleResults),
+    });
+    const store = arrange(provider);
+
+    await store.reattachRecentJobs();
+
+    expect(store.jobs.get('jr')?.state).toBe('running');
+    expect(provider.getResults).not.toHaveBeenCalled();
+    expect(autoLoadMock).not.toHaveBeenCalled();
   });
 });

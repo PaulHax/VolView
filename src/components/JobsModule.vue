@@ -457,8 +457,15 @@ onMounted(() => {
         // to attach to) but the results still show in the Jobs panel.
         if (!baseImageMissing) {
           // Auto-load only overlays (segment groups). Everything else waits for
-          // a user click in JobList so we don't clobber the current view.
-          autoLoadProcessingResults(results, context).catch((err) => {
+          // a user click in JobList so we don't clobber the current view. The
+          // watermark is passed for consistency with tier-2 (Chunk 19); a
+          // tier-1 in-session context carries no `finishedAt`, so it always
+          // attaches regardless (MVP parity).
+          autoLoadProcessingResults(
+            results,
+            context,
+            providers.sessionSavedAt
+          ).catch((err) => {
             console.error('Failed to auto-load results', err);
           });
         }

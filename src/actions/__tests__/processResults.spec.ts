@@ -22,6 +22,12 @@ const mocks = vi.hoisted(() => ({
   convertImageToLabelmap: vi.fn(),
   updateSegment: vi.fn(),
   orderByParent: { value: {} as Record<string, string[]> },
+  // Scene segment-group metadata, read by the tier-2 idempotency guard
+  // (Chunk 19). Keyed by group id; only `source` matters here.
+  metadataByID: {} as Record<
+    string,
+    { source?: { jobId: string; outputId: string } }
+  >,
 }));
 
 vi.mock('@/src/io/import/dataSource', () => ({
@@ -45,6 +51,7 @@ vi.mock('@/src/store/segmentGroups', () => ({
     convertImageToLabelmap: mocks.convertImageToLabelmap,
     updateSegment: mocks.updateSegment,
     orderByParent: mocks.orderByParent,
+    metadataByID: mocks.metadataByID,
   }),
 }));
 vi.mock('pinia', async (orig) => {
@@ -78,6 +85,7 @@ const result = (
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.orderByParent.value = {};
+  mocks.metadataByID = {};
   mocks.uriToDataSource.mockReturnValue({ type: 'uri' });
   mocks.importDataSources.mockResolvedValue([
     { type: 'data', dataID: 'child-1' },
@@ -320,5 +328,99 @@ describe('autoLoadProcessingResults', () => {
     );
     expect(mocks.convertImageToLabelmap).toHaveBeenCalledTimes(2);
     expect(err).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tier-2 auto-re-attach gating (Chunk 19, D5): the SAME applier serves tier-1
+// (in-session, no `finishedAt`) and tier-2 (cold-reload) completions. The
+// session watermark is the primary reject-durability + accretion bound; the
+// scene-state `source` tag is the secondary idempotency guard.
+// ---------------------------------------------------------------------------
+
+describe('autoLoadProcessingResults — tier-2 watermark + idempotency', () => {
+  const source = { jobId: 'j1', outputId: 'seg' };
+  const segResult = () =>
+    result({ id: 'seg', intent: 'add-segment-group', source });
+  const tier2Context = (
+    activeDatasetId: string | undefined,
+    finishedAt: string
+  ): SubmittedJobContext => ({ ...context(activeDatasetId), finishedAt });
+
+  it('watermark: a job finished AFTER sessionSavedAt attaches', async () => {
+    await autoLoadProcessingResults(
+      [segResult()],
+      tier2Context('parent', '2026-07-03T20:00:00Z'),
+      '2026-07-03T12:00:00Z'
+    );
+    expect(mocks.convertImageToLabelmap).toHaveBeenCalledTimes(1);
+  });
+
+  it('watermark: a job finished BEFORE sessionSavedAt does not attach (reject-then-save stays rejected)', async () => {
+    await autoLoadProcessingResults(
+      [segResult()],
+      tier2Context('parent', '2026-07-03T10:00:00Z'),
+      '2026-07-03T12:00:00Z'
+    );
+    expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
+  });
+
+  it('watermark: no watermark → attach all (MVP parity), even a pre-dated job', async () => {
+    await autoLoadProcessingResults(
+      [segResult()],
+      tier2Context('parent', '2020-01-01T00:00:00Z'),
+      undefined
+    );
+    expect(mocks.convertImageToLabelmap).toHaveBeenCalledTimes(1);
+  });
+
+  it('watermark: kept-result case — session restored the group AND the job is pre-watermark → exactly one group (no re-apply)', async () => {
+    // The restored scene already holds the group (its source round-tripped the
+    // zip); the job sits behind the watermark. Neither gate re-applies it, so
+    // the single restored group stays exactly one.
+    mocks.metadataByID = { restored: { source } };
+    await autoLoadProcessingResults(
+      [segResult()],
+      tier2Context('parent', '2026-07-03T10:00:00Z'),
+      '2026-07-03T12:00:00Z'
+    );
+    expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
+  });
+
+  it('idempotency: no watermark, the tagged group already in the scene → no duplicate', async () => {
+    mocks.metadataByID = { restored: { source } };
+    await autoLoadProcessingResults(
+      [segResult()],
+      context('parent'),
+      undefined
+    );
+    expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
+  });
+
+  it('idempotency: no watermark, a fresh scene (tag absent) → re-applies exactly once', async () => {
+    mocks.metadataByID = {}; // fresh scene
+    await autoLoadProcessingResults(
+      [segResult()],
+      context('parent'),
+      undefined
+    );
+    expect(mocks.convertImageToLabelmap).toHaveBeenCalledTimes(1);
+    expect(mocks.convertImageToLabelmap).toHaveBeenCalledWith(
+      'child-selection',
+      'parent',
+      source
+    );
+  });
+
+  it('idempotency: a hand-painted group (no source) never blocks a job group', async () => {
+    // A group with no `source` (native/hand-painted) must not shadow the job's
+    // group — the tag, not mere presence, is the key.
+    mocks.metadataByID = { painted: {} };
+    await autoLoadProcessingResults(
+      [segResult()],
+      context('parent'),
+      undefined
+    );
+    expect(mocks.convertImageToLabelmap).toHaveBeenCalledTimes(1);
   });
 });

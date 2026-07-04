@@ -16,6 +16,7 @@
 import { defineStore } from 'pinia';
 import { reactive, ref } from 'vue';
 
+import type { NeutralJobHandle } from '@/processing-contract';
 import type {
   ProcessingJobStatus,
   ProcessingProvider,
@@ -24,6 +25,8 @@ import type {
   ProcessingValue,
   SubmittedJobContext,
 } from '@/src/processing/types';
+import { collectProvenanceUris } from '@/src/processing/engine/mintInput';
+import { reassociateBase } from '@/src/processing/engine/rediscover';
 import { useMessageStore } from '@/src/store/messages';
 import { useDatasetStore } from '@/src/store/datasets';
 
@@ -129,6 +132,13 @@ export const useProvidersStore = defineStore('providers', () => {
   // dead. The Jobs component watches this to prompt a reload (item 7).
   const sessionExpired = ref(false);
 
+  // Tier-2 session watermark (Chunk 19, D5): the restored session zip's own
+  // server-side save instant, surfaced on the launch manifest and set at load.
+  // A re-discovered result auto-attaches iff `finishedAt > sessionSavedAt`; no
+  // restored session → undefined → attach all (exact MVP parity). Server clock
+  // only — nothing new is stored, no state-file change.
+  const sessionSavedAt = ref<string | undefined>(undefined);
+
   // Subscribers fired when a job reaches a terminal state with its results.
   // Used by the Jobs component to load result files + toast (Phase 5).
   const completionListeners = new Set<CompletionListener>();
@@ -162,6 +172,7 @@ export const useProvidersStore = defineStore('providers', () => {
     terminalCompletions.clear();
     firedCompletions.clear();
     sessionExpired.value = false;
+    sessionSavedAt.value = undefined;
   }
 
   function clearProviders() {
@@ -498,6 +509,145 @@ export const useProvidersStore = defineStore('providers', () => {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Tier-2 cold-reload re-discovery (contract "Seam 3 — job lifecycle"; D5)
+  //
+  // A reloaded page re-finds its jobs through the ONE neutral, capability-gated
+  // op (`listRecentJobs`) and auto-re-attaches each terminal result with no
+  // click — surfacing the start-job → close-browser → finishes → reopen flow.
+  // Reuses the existing poll → results → intents machinery; the come-back
+  // (already-terminal) case is applied HEADLESSLY here (no mounted Jobs tab
+  // needed), gated by the session watermark + scene-state idempotency.
+  // -------------------------------------------------------------------------
+
+  function setSessionWatermark(instant: string | undefined) {
+    sessionSavedAt.value = instant;
+  }
+
+  type ReattachCandidate = { id: string; uris: string[] };
+
+  async function reattachOneJob(
+    provider: ProcessingProvider,
+    providerId: string,
+    handle: NeutralJobHandle,
+    candidates: ReattachCandidate[],
+    watermark: string | undefined
+  ) {
+    // Already tracked this session (a tier-1 submit owns it) → do not re-adopt.
+    if (submittedContexts.has(handle.jobId) || jobs.has(handle.jobId)) return;
+
+    // Re-associate the base by matching the job's input opaque URIs against the
+    // reloaded scene's provenance (Seam 1) — uniform for every format.
+    const baseId = reassociateBase(handle.inputUris, candidates);
+    const context: SubmittedJobContext = {
+      jobId: handle.jobId,
+      taskId: handle.taskId,
+      providerId,
+      submittedAt: handle.finishedAt || new Date().toISOString(),
+      ...(baseId ? { activeDatasetId: baseId } : {}),
+      ...(handle.finishedAt ? { finishedAt: handle.finishedAt } : {}),
+    };
+    recordSubmittedContext(context);
+
+    let status: ProcessingJobStatus;
+    try {
+      status = await provider.getJob(handle.jobId);
+    } catch (err) {
+      if (classifyError(err) === 'session-expired') markSessionExpired(err);
+      return; // never fabricate a state for a re-discovered job
+    }
+    recordJob(status);
+
+    if (!TERMINAL_STATES.has(status.state)) {
+      // Still running from a prior page life: hand it to the normal poller to
+      // finish this session (it terminates post-watermark, so it attaches via
+      // tier-1). scheduleNextPoll (not pollOnce) avoids an immediate re-fetch —
+      // we already have a fresh status.
+      scheduleNextPoll(provider, handle.jobId, POLL_INTERVAL_MS);
+      return;
+    }
+    // Result reads gate on terminal SUCCESS (contract Seam 3).
+    if (status.state !== 'success') return;
+
+    let results: ProcessingResult[];
+    try {
+      results = await provider.getResults(handle.jobId);
+    } catch (err) {
+      if (classifyError(err) === 'session-expired') markSessionExpired(err);
+      else
+        useMessageStore().addError(
+          'Failed to fetch re-discovered job results',
+          {
+            error: err instanceof Error ? err : undefined,
+          }
+        );
+      return; // a results-fetch error is an error, never a silent empty attach
+    }
+    jobResults.set(handle.jobId, results);
+
+    // Headless auto-re-attach — additive-only, through the SAME applier tier-1
+    // uses (convertImageToLabelmap via the state-file restore path), gated by
+    // the watermark + scene-state idempotency. Dynamically imported so the
+    // provider store never statically pulls the loader graph into the boot
+    // bundle. With no re-associated base there is nothing to attach to.
+    if (baseId) {
+      const { autoLoadProcessingResults } =
+        await import('@/src/actions/processResults');
+      await autoLoadProcessingResults(results, context, watermark);
+    }
+  }
+
+  async function reattachProviderJobs(
+    providerId: string,
+    candidates: ReattachCandidate[],
+    watermark: string | undefined
+  ) {
+    let provider: ProcessingProvider;
+    try {
+      provider = await getProvider(providerId);
+    } catch {
+      return;
+    }
+    // Capability-gated: a backend with no durable enumeration (MONAI `/infer`)
+    // advertises no `listRecentJobs` → degrade to tier-1 (in-session replay).
+    if (!provider.listRecentJobs) return;
+    let handles: NeutralJobHandle[];
+    try {
+      handles = await provider.listRecentJobs();
+    } catch (err) {
+      // A re-discovery failure is never fatal to the session — log and degrade.
+      console.error('Tier-2 job re-discovery failed', err);
+      return;
+    }
+    await Promise.all(
+      handles.map((handle) =>
+        reattachOneJob(provider, providerId, handle, candidates, watermark)
+      )
+    );
+  }
+
+  // Called once on load (App boot, after the launch data + providers are in).
+  // Idempotent: a job already tracked this session is skipped.
+  async function reattachRecentJobs() {
+    const datasetStore = useDatasetStore();
+    // Re-attach candidates: each reloaded image dataset + its verbatim
+    // provenance URIs. Empty-provenance datasets (local drops / archives) can
+    // never match a job input, so they are dropped up front.
+    const candidates: ReattachCandidate[] = datasetStore.idsAsSelections
+      .map((id: string) => ({
+        id,
+        uris: collectProvenanceUris(datasetStore.getDataSource(id)),
+      }))
+      .filter((candidate: ReattachCandidate) => candidate.uris.length > 0);
+    const watermark = sessionSavedAt.value;
+
+    await Promise.all(
+      Array.from(configs.keys()).map((providerId) =>
+        reattachProviderJobs(providerId, candidates, watermark)
+      )
+    );
+  }
+
   return {
     configs,
     instances,
@@ -506,6 +656,7 @@ export const useProvidersStore = defineStore('providers', () => {
     submittedContexts,
     providerCount,
     sessionExpired,
+    sessionSavedAt,
 
     registerProviderConfig,
     clearProviders,
@@ -517,5 +668,7 @@ export const useProvidersStore = defineStore('providers', () => {
     cancelJob,
     onJobComplete,
     stopPolling,
+    setSessionWatermark,
+    reattachRecentJobs,
   };
 });

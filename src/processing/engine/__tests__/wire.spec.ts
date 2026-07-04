@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  parseJobHandles,
   parseJobRef,
   parseJobStatus,
   parseResults,
@@ -145,5 +146,33 @@ describe('parseResults', () => {
     expect(() => parseResults([{ id: 'r1', name: 'out.nrrd' }])).toThrow(
       /Malformed job results/
     );
+  });
+});
+
+describe('parseJobHandles (tier-2, Chunk 19)', () => {
+  const handle = {
+    jobId: 'job-abc123',
+    taskId: 'OtsuSegmentation',
+    inputUris: ['/api/v1/file/a1/proxiable/1.dcm'],
+    finishedAt: '2026-07-03T18:24:05.123000+00:00',
+  };
+
+  it('passes a valid NeutralJobHandle[] through', () => {
+    expect(parseJobHandles([handle])).toEqual([handle]);
+    // A running job carries an empty finishedAt (still a string) — valid.
+    expect(parseJobHandles([{ ...handle, finishedAt: '' }])).toEqual([
+      { ...handle, finishedAt: '' },
+    ]);
+    expect(parseJobHandles([])).toEqual([]);
+  });
+
+  it('throws on a non-array or a malformed handle (re-discovery fails loud)', () => {
+    expect(() => parseJobHandles({ jobId: 'x' })).toThrow(
+      /Malformed job handles/
+    );
+    // Missing inputUris — the re-association key — is rejected.
+    expect(() =>
+      parseJobHandles([{ jobId: 'j', taskId: 't', finishedAt: 'T' }])
+    ).toThrow(/Malformed job handles/);
   });
 });

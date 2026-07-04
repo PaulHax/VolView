@@ -197,4 +197,45 @@ describe('engine transport reads its descriptor + uses $fetch', () => {
       /does not support cancelling/i
     );
   });
+
+  // Tier-2 re-discovery (Chunk 19): when the descriptor advertises BOTH the
+  // endpoint and the handle parser, the transport exposes listRecentJobs, GETs
+  // the context-scoped route (bearer-carrying $fetch), and returns the parsed
+  // NeutralJobHandle[].
+  it('lists recent jobs through the descriptor when the capability is advertised', async () => {
+    const base = descriptorFor('A');
+    const descriptor: TransportDescriptor = {
+      ...base,
+      endpoints: { ...base.endpoints, listRecentJobs: (b) => `${b}/A/jobs` },
+      format: {
+        ...base.format,
+        parseJobHandles: (raw) =>
+          (raw as { handles: unknown[] }).handles as never,
+      },
+    };
+    const calls = stubFetch({
+      handles: [
+        { jobId: 'j1', taskId: 't', inputUris: ['/f/a'], finishedAt: 'T' },
+      ],
+    });
+    const engine = createEngineTransport('http://host', descriptor);
+
+    expect(engine.listRecentJobs).toBeTypeOf('function');
+    const handles = await engine.listRecentJobs!();
+
+    expect(handles).toEqual([
+      { jobId: 'j1', taskId: 't', inputUris: ['/f/a'], finishedAt: 'T' },
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('http://host/A/jobs');
+    expect(authOf(calls[0])).toBe('Bearer test-token');
+  });
+
+  // Capability absent (the MONAI `/infer` degrade case): a descriptor without a
+  // listRecentJobs endpoint exposes NO method at all — the store reads its
+  // absence to degrade to tier-1, rather than catching a thrown "unsupported".
+  it('exposes no listRecentJobs method when the descriptor omits the capability', () => {
+    const engine = createEngineTransport('http://host', descriptorFor('A'));
+    expect(engine.listRecentJobs).toBeUndefined();
+  });
 });

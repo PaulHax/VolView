@@ -58,6 +58,7 @@ import vtkURLExtract from '@kitware/vtk.js/Common/Core/URLExtract';
 import { useDisplay } from 'vuetify';
 import useLoadDataStore from '@/src/store/load-data';
 import { useViewStore } from '@/src/store/views';
+import { useProvidersStore } from '@/src/store/providers';
 import useRemoteSaveStateStore from '@/src/store/remote-save-state';
 import AppBar from '@/src/components/AppBar.vue';
 import ControlsStrip from '@/src/components/ControlsStrip.vue';
@@ -157,8 +158,18 @@ export default defineComponent({
       urlParams = {};
     }
 
-    onMounted(() => {
-      loadUrls(urlParams);
+    onMounted(async () => {
+      await loadUrls(urlParams);
+      // Tier-2 cold-reload re-discovery (Chunk 19, D5): once the launch data +
+      // providers are in, re-find THIS study's jobs and auto-re-attach each
+      // terminal result (no click) — surfacing the start-job → close-tab →
+      // finishes → reopen flow. Inert with no configured provider (the demo
+      // posture registers none) and never fatal to the load.
+      try {
+        await useProvidersStore().reattachRecentJobs();
+      } catch (err) {
+        console.error('Tier-2 job re-discovery failed', err);
+      }
     });
 
     // --- remote save state URL --- //

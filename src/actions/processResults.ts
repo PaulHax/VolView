@@ -36,6 +36,10 @@ import type {
   SubmittedJobContext,
 } from '@/src/processing/types';
 import { resultToIntent } from '@/src/processing/engine';
+import {
+  passesWatermark,
+  sourceInScene,
+} from '@/src/processing/engine/rediscover';
 import { uriToDataSource } from '@/src/io/import/dataSource';
 import {
   importDataSources,
@@ -181,17 +185,52 @@ export async function applyIntent(
  * an originating dataset to attach to; every other intent waits for an explicit
  * JobList click so we never clobber the current view. The full auto-preview UX
  * (confirm/reject, visibility toggle) is Chunk 22.
+ *
+ * Tier-2 gating (Chunk 19, D5). The SAME applier serves in-session (tier-1) and
+ * cold-reload (tier-2) completions; two gates decide whether a re-discovered
+ * result attaches:
+ *   - SESSION WATERMARK (primary) — a job that settled at/before the restored
+ *     session's save instant is already a review verdict (present=kept via the
+ *     zip, absent=rejected), so it does not re-attach. A tier-1 context (no
+ *     `finishedAt`) or no restored session (no `sessionSavedAt`) always passes =
+ *     exact MVP parity. Both instants are server-clock.
+ *   - SCENE-STATE IDEMPOTENCY (secondary) — a result whose `source:{jobId,
+ *     outputId}` tag is already in the scene (session-restored, or applied
+ *     earlier this load) is skipped, so a reload never duplicates a group. Load
+ *     bearing where no watermark travels (a hand-loaded `.volview.zip`).
  */
 export async function autoLoadProcessingResults(
   results: ProcessingResult[],
-  context: SubmittedJobContext | undefined
+  context: SubmittedJobContext | undefined,
+  sessionSavedAt?: string
 ): Promise<void> {
   const parentSelection = context?.activeDatasetId;
   if (!parentSelection) return;
 
+  // Watermark gate is per-job (all results share the job's terminal instant):
+  // behind the watermark → attach none of them.
+  if (!passesWatermark(context?.finishedAt, sessionSavedAt)) return;
+
+  const segmentGroupStore = useSegmentGroupStore();
   for (const result of results) {
     const intent = resultToIntent(result);
     if (intent.intent !== 'add-segment-group') continue;
+    // Read the provenance tag off the STRICT known-intent parse (the union does
+    // not narrow `source` on its own): `applyIntent` re-parses the same way, so
+    // an intent that fails here would be a no-op there too.
+    const parsed = knownResultIntentSchema.safeParse(intent);
+    const source =
+      parsed.success && parsed.data.intent === 'add-segment-group'
+        ? parsed.data.source
+        : undefined;
+    // Idempotency: re-read the scene each iteration so a group applied earlier
+    // in THIS loop also dedups (and the session-restored group is seen).
+    if (source) {
+      const existing = Object.values(segmentGroupStore.metadataByID).map(
+        (meta) => meta.source
+      );
+      if (sourceInScene(existing, source)) continue;
+    }
     try {
       await applyIntent(intent, context);
     } catch (err) {

@@ -11,7 +11,11 @@
 import type { TaskSpecEnvelope } from '@/src/processing/engine/taskSpec';
 // The neutral Seam-1 input value the client mints from provenance at submit
 // (contract "Seam 1 — inputs"; Chunk 8). `{ type, format?, uris }`.
-import type { InputValue, ResultSource } from '@/processing-contract';
+import type {
+  InputValue,
+  NeutralJobHandle,
+  ResultSource,
+} from '@/processing-contract';
 
 export type ProcessingProviderConfig = {
   id: string;
@@ -51,6 +55,14 @@ export type ProcessingProvider = {
   // `{ type: "labelmap", uris }` value (contract "Seam 1 — inputs"; Chunk 15).
   // Fails closed when the backend advertises no staging endpoint.
   stageInput: (body: Blob, name?: string) => Promise<string[]>;
+  // Tier-2 cold-reload re-discovery (contract "Seam 3 — job lifecycle"; Chunk
+  // 19, D5). OPTIONAL — its presence IS the capability flag: durable job
+  // enumeration is a real backend capability (Girder yes; MONAI `/infer` no).
+  // Present only when the backend advertises it; the store calls it on load and
+  // degrades to tier-1 (in-session replay) when absent. Returns the launch
+  // context's jobs as neutral handles (jobId + taskId + input opaque URIs +
+  // `finishedAt`) — no route, no JobStatus enum, no file id.
+  listRecentJobs?: () => Promise<NeutralJobHandle[]>;
 };
 
 // Advisory display metadata for the task picker (id/title + optional hints).
@@ -160,4 +172,10 @@ export type SubmittedJobContext = {
   providerId: string;
   submittedAt: string;
   activeDatasetId?: string;
+  // Tier-2 only (contract Seam 3; Chunk 19, D5): the job's neutral terminal
+  // instant (server clock), carried on a RE-DISCOVERED context so the auto-apply
+  // path can gate it against the session watermark (`finishedAt > sessionSavedAt`).
+  // Absent on a tier-1 in-session context — a job just submitted this session
+  // has no watermark to clear and always applies (MVP parity).
+  finishedAt?: string;
 };

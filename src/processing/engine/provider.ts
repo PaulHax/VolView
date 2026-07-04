@@ -28,6 +28,13 @@ export const createProvider = (
   const transport = createEngineTransport(config.baseUrl, defaultDescriptor);
   return {
     config,
+    // Tier-2 capability (Chunk 19, D5): forwarded ONLY when the transport
+    // advertises it (the descriptor has a `listRecentJobs` endpoint + parser).
+    // A backend without durable enumeration exposes no method, so the store
+    // degrades to tier-1 without catching a thrown "unsupported".
+    ...(transport.listRecentJobs
+      ? { listRecentJobs: transport.listRecentJobs }
+      : {}),
     listTasks: () => transport.listTasks(),
     getTaskSpec: (taskId) => transport.getTaskSpec(taskId),
     // Output filenames are auto-generated server-side, so v1 supplies no
