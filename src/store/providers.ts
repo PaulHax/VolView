@@ -380,8 +380,11 @@ export const useProvidersStore = defineStore('providers', () => {
     // failure mark the job errored (loud) and deliver the errored status — the
     // old `notify([])` conflated "fetch failed" with "succeeded, no outputs".
     let results: ProcessingResult[];
+    let unresolvedOutputs: number;
     try {
-      results = await provider.getResults(jobId);
+      const bundle = await provider.getResults(jobId);
+      results = bundle.results;
+      unresolvedOutputs = bundle.missing;
     } catch (err) {
       if (classifyError(err) === 'session-expired') {
         markSessionExpired(err);
@@ -392,6 +395,24 @@ export const useProvidersStore = defineStore('providers', () => {
       return;
     }
     jobResults.set(jobId, results);
+
+    // Chunk 28: the facade reports outputs it could not resolve (deleted /
+    // unreadable files) as a `missing` count on the results envelope. A non-zero
+    // count on a success is a PARTIAL loss — surface it as a warning ALONGSIDE the
+    // results that did resolve (they still apply below). Distinct from the
+    // `baseImageMissing` signal (base image closed mid-job) computed just below —
+    // a different concept in this same completion path.
+    if (unresolvedOutputs > 0) {
+      const n = unresolvedOutputs;
+      useMessageStore().addWarning(
+        `${n} output${n === 1 ? '' : 's'} could not be retrieved`,
+        {
+          details: `This job succeeded, but ${n} of its recorded output${
+            n === 1 ? '' : 's'
+          } could not be retrieved (deleted or unreadable). The results that resolved are available in the Jobs panel.`,
+        }
+      );
+    }
 
     // Item 8: base image removed mid-job → detect + message; results are still
     // recorded (JobList shows them) and delivered, never silently dropped.
@@ -604,7 +625,11 @@ export const useProvidersStore = defineStore('providers', () => {
 
     let results: ProcessingResult[];
     try {
-      results = await provider.getResults(handle.jobId);
+      // Tier-2 cold-reload: a re-discovered historical success. Take the resolved
+      // results; the envelope's `missing` count is not surfaced here (a warning
+      // for an old job on every reload would be noise — the partial-loss surface
+      // is the in-session completion path).
+      ({ results } = await provider.getResults(handle.jobId));
     } catch (err) {
       if (classifyError(err) === 'session-expired') markSessionExpired(err);
       else

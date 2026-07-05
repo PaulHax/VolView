@@ -385,18 +385,21 @@ const paths = (): Record<string, unknown> => ({
       operationId: 'getJobResults',
       tags: ['job'],
       summary:
-        "A job's results as neutral result intents, once it reaches the " +
-        '`success` state. A non-success or total-output-loss read is an ' +
-        'explicit error, never a silent empty list (Seam 3 / D5).',
+        "A job's results as the { intents, missing } envelope, once it " +
+        'reaches the `success` state. A non-success or total-output-loss read ' +
+        'is an explicit error, never a silent empty list (Seam 3 / D5).',
       parameters: [jobIdParam],
       responses: {
         '200': {
           description:
-            'The resolved results (a bare array of result intents). Unresolved ' +
-            'outputs are reported as a loss, never silently dropped — the ' +
-            'JobResults schema ({ intents, missing }) is the reserved richer ' +
-            'envelope for a facade that reports the missing count inline.',
-          content: json({ type: 'array', items: ref('ResultListItem') }),
+            'The resolved results as the { intents, missing } envelope ' +
+            '(JobResults). Each entry of `intents` is a ResultIntent, ' +
+            'optionally enriched with advisory id/mimeType/size file metadata ' +
+            '(see ResultListItem). `missing` counts recorded outputs the ' +
+            'facade could not resolve (deleted files, etc.), reported rather ' +
+            'than silently dropped so a `success` with no outputs stays ' +
+            'distinct from output loss (Seam 3 / D5).',
+          content: json(ref('JobResults')),
         },
         '400': resultReadErrorResponse,
       },

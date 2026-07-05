@@ -60,7 +60,7 @@ const makeProvider = (
   getDefaultBindings: vi.fn().mockResolvedValue({}),
   runTask: vi.fn(),
   getJob: vi.fn(),
-  getResults: vi.fn().mockResolvedValue([]),
+  getResults: vi.fn().mockResolvedValue(resultsBundle()),
   cancelJob: vi.fn().mockResolvedValue({ jobId: 'x', state: 'cancelled' }),
   stageInput: vi.fn().mockResolvedValue([]),
   ...overrides,
@@ -69,6 +69,13 @@ const makeProvider = (
 const sampleResults: ProcessingResult[] = [
   { id: 'r1', name: 'out.nrrd', url: 'http://localhost/out.nrrd' },
 ];
+
+// getResults now resolves the {results, missing} envelope bundle (Chunk 28); wrap
+// a plain result list for the mocks. `missing` defaults to 0 (a clean success).
+const resultsBundle = (results: ProcessingResult[] = [], missing = 0) => ({
+  results,
+  missing,
+});
 
 // An error carrying an HTTP status, exactly as the engine transport throws
 // (engine/transport.ts `HttpError`). The store's `classifyError` reads `.status`.
@@ -96,7 +103,7 @@ describe('Providers store — job lifecycle (D5 async-with-sync-fast-path)', () 
 
     const status: ProcessingJobStatus = { jobId: 'job-sync', state: 'success' };
     const getJob = vi.fn();
-    const getResults = vi.fn().mockResolvedValue(sampleResults);
+    const getResults = vi.fn().mockResolvedValue(resultsBundle(sampleResults));
     const runTask = vi
       .fn()
       .mockResolvedValue({ jobId: 'job-sync', status } as ProcessingJobRef);
@@ -138,7 +145,7 @@ describe('Providers store — job lifecycle (D5 async-with-sync-fast-path)', () 
       .fn()
       .mockResolvedValueOnce({ jobId: 'job-async', state: 'running' })
       .mockResolvedValue({ jobId: 'job-async', state: 'success' });
-    const getResults = vi.fn().mockResolvedValue(sampleResults);
+    const getResults = vi.fn().mockResolvedValue(resultsBundle(sampleResults));
     // No `status` on the ref → store treats the job as pending and polls.
     const runTask = vi
       .fn()
@@ -184,7 +191,7 @@ describe('Providers store — job lifecycle (D5 async-with-sync-fast-path)', () 
       .fn()
       .mockResolvedValueOnce({ jobId: 'job-cancel', state: 'running' })
       .mockResolvedValue({ jobId: 'job-cancel', state: 'cancelled' });
-    const getResults = vi.fn().mockResolvedValue(sampleResults);
+    const getResults = vi.fn().mockResolvedValue(resultsBundle(sampleResults));
     const cancelJob = vi
       .fn()
       .mockResolvedValue({ jobId: 'job-cancel', state: 'cancelled' });
@@ -280,7 +287,7 @@ describe('Providers store — job lifecycle (D5 async-with-sync-fast-path)', () 
         state: 'error',
         errorTail: 'boom',
       });
-    const getResults = vi.fn().mockResolvedValue(sampleResults);
+    const getResults = vi.fn().mockResolvedValue(resultsBundle(sampleResults));
     const runTask = vi
       .fn()
       .mockResolvedValue({ jobId: 'job-err' } as ProcessingJobRef);
@@ -325,7 +332,7 @@ describe('Providers store — job lifecycle (D5 async-with-sync-fast-path)', () 
       errorTail: 'malformed',
     };
     const getJob = vi.fn();
-    const getResults = vi.fn().mockResolvedValue(sampleResults);
+    const getResults = vi.fn().mockResolvedValue(resultsBundle(sampleResults));
     const runTask = vi
       .fn()
       .mockResolvedValue({ jobId: 'job-born-err', status } as ProcessingJobRef);
@@ -392,7 +399,7 @@ describe('Providers store — tier-1 durability + failure UX (Chunk 12)', () => 
       state: 'success',
     };
     const getJob = vi.fn();
-    const getResults = vi.fn().mockResolvedValue(sampleResults);
+    const getResults = vi.fn().mockResolvedValue(resultsBundle(sampleResults));
     const runTask = vi
       .fn()
       .mockResolvedValue({ jobId: 'job-replay', status } as ProcessingJobRef);
@@ -612,7 +619,7 @@ describe('Providers store — tier-1 durability + failure UX (Chunk 12)', () => 
       jobId: 'job-orphan',
       state: 'success',
     };
-    const getResults = vi.fn().mockResolvedValue(sampleResults);
+    const getResults = vi.fn().mockResolvedValue(resultsBundle(sampleResults));
     const runTask = vi.fn().mockResolvedValue({
       jobId: 'job-orphan',
       status,
@@ -649,7 +656,7 @@ describe('Providers store — tier-1 durability + failure UX (Chunk 12)', () => 
     const store = useProvidersStore();
 
     const status: ProcessingJobStatus = { jobId: 'job-ok', state: 'success' };
-    const getResults = vi.fn().mockResolvedValue(sampleResults);
+    const getResults = vi.fn().mockResolvedValue(resultsBundle(sampleResults));
     const runTask = vi
       .fn()
       .mockResolvedValue({ jobId: 'job-ok', status } as ProcessingJobRef);
@@ -672,6 +679,76 @@ describe('Providers store — tier-1 durability + failure UX (Chunk 12)', () => 
     const completion = listener.mock.calls[0][0];
     expect(completion.baseImageMissing).toBeFalsy();
     expect(completion.results).toEqual(sampleResults);
+  });
+
+  // Chunk 28 — the facade could not resolve some recorded outputs (deleted /
+  // unreadable): a non-zero `missing` on a SUCCESS is a partial loss. Surface a
+  // warning that names the count WITHOUT dropping the results that resolved.
+  it('surfaces a partial-loss warning on a non-zero missing count, still applying the results', async () => {
+    datasetState.ids = ['ds-present'];
+    const store = useProvidersStore();
+
+    const status: ProcessingJobStatus = { jobId: 'job-miss', state: 'success' };
+    // Two outputs were recorded; the facade could resolve only one.
+    const getResults = vi
+      .fn()
+      .mockResolvedValue(resultsBundle(sampleResults, 2));
+    const runTask = vi
+      .fn()
+      .mockResolvedValue({ jobId: 'job-miss', status } as ProcessingJobRef);
+    const provider = makeProvider({ runTask, getResults, getJob: vi.fn() });
+    store.instances.set('p1', provider);
+
+    const listener = vi.fn();
+    store.onJobComplete(listener);
+
+    await store.submitJob(
+      'p1',
+      'task-1',
+      {},
+      { activeDatasetId: 'ds-present' }
+    );
+
+    // A warning naming the count is surfaced...
+    const warning = warningMessages().find((m) =>
+      /could not be retrieved/i.test(m.title)
+    );
+    expect(warning).toBeTruthy();
+    expect(warning?.title).toContain('2');
+    // ...and the results that DID resolve are still recorded + delivered.
+    expect(store.jobResults.get('job-miss')).toEqual(sampleResults);
+    expect(listener.mock.calls[0][0].results).toEqual(sampleResults);
+  });
+
+  // No false positive: a clean success (missing 0) surfaces NO output-loss warning.
+  it('surfaces no partial-loss warning when nothing is missing', async () => {
+    datasetState.ids = ['ds-present'];
+    const store = useProvidersStore();
+
+    const status: ProcessingJobStatus = {
+      jobId: 'job-clean',
+      state: 'success',
+    };
+    const getResults = vi
+      .fn()
+      .mockResolvedValue(resultsBundle(sampleResults, 0));
+    const runTask = vi
+      .fn()
+      .mockResolvedValue({ jobId: 'job-clean', status } as ProcessingJobRef);
+    const provider = makeProvider({ runTask, getResults, getJob: vi.fn() });
+    store.instances.set('p1', provider);
+    store.onJobComplete(vi.fn());
+
+    await store.submitJob(
+      'p1',
+      'task-1',
+      {},
+      { activeDatasetId: 'ds-present' }
+    );
+
+    expect(
+      warningMessages().some((m) => /could not be retrieved/i.test(m.title))
+    ).toBe(false);
   });
 });
 
@@ -726,7 +803,7 @@ describe('Providers store — tier-2 cold-reload re-discovery (Chunk 19)', () =>
     const provider = makeProvider({
       listRecentJobs: vi.fn().mockResolvedValue([handle()]),
       getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
-      getResults: vi.fn().mockResolvedValue(sampleResults),
+      getResults: vi.fn().mockResolvedValue(resultsBundle(sampleResults)),
     });
     const store = arrange(provider);
 
@@ -747,7 +824,7 @@ describe('Providers store — tier-2 cold-reload re-discovery (Chunk 19)', () =>
     const provider = makeProvider({
       listRecentJobs: vi.fn().mockResolvedValue([handle()]),
       getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
-      getResults: vi.fn().mockResolvedValue(sampleResults),
+      getResults: vi.fn().mockResolvedValue(resultsBundle(sampleResults)),
     });
     const store = arrange(provider);
     store.setSessionWatermark('2026-07-03T12:00:00Z');
@@ -767,7 +844,7 @@ describe('Providers store — tier-2 cold-reload re-discovery (Chunk 19)', () =>
         .fn()
         .mockResolvedValue([handle({ inputUris: ['/f/nowhere'] })]),
       getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
-      getResults: vi.fn().mockResolvedValue(sampleResults),
+      getResults: vi.fn().mockResolvedValue(resultsBundle(sampleResults)),
     });
     const store = arrange(provider);
 
@@ -797,7 +874,7 @@ describe('Providers store — tier-2 cold-reload re-discovery (Chunk 19)', () =>
     const provider = makeProvider({
       listRecentJobs: vi.fn().mockResolvedValue([handle()]),
       getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
-      getResults: vi.fn().mockResolvedValue(sampleResults),
+      getResults: vi.fn().mockResolvedValue(resultsBundle(sampleResults)),
     });
     const store = arrange(provider);
     // Tier-1 already owns this job id.
@@ -818,7 +895,7 @@ describe('Providers store — tier-2 cold-reload re-discovery (Chunk 19)', () =>
     const provider = makeProvider({
       listRecentJobs: vi.fn().mockResolvedValue([handle({ finishedAt: '' })]),
       getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'running' }),
-      getResults: vi.fn().mockResolvedValue(sampleResults),
+      getResults: vi.fn().mockResolvedValue(resultsBundle(sampleResults)),
     });
     const store = arrange(provider);
 
@@ -842,7 +919,7 @@ describe('Providers store — tier-2 cold-reload re-discovery (Chunk 19)', () =>
       // handle() finishedAt is 2026-07-03T20:00:00Z — BEFORE the watermark below.
       listRecentJobs: vi.fn().mockResolvedValue([handle()]),
       getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
-      getResults: vi.fn().mockResolvedValue(sampleResults),
+      getResults: vi.fn().mockResolvedValue(resultsBundle(sampleResults)),
     });
     const store = arrange(provider);
     store.setSessionWatermark('2026-07-03T22:00:00Z');
@@ -887,7 +964,7 @@ describe('Providers store — tier-2 cold-reload re-discovery (Chunk 19)', () =>
     const provider = makeProvider({
       listRecentJobs: vi.fn().mockResolvedValue([handle({ state: 'success' })]),
       getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
-      getResults: vi.fn().mockResolvedValue(sampleResults),
+      getResults: vi.fn().mockResolvedValue(resultsBundle(sampleResults)),
     });
     const store = arrange(provider);
 
@@ -904,7 +981,7 @@ describe('Providers store — tier-2 cold-reload re-discovery (Chunk 19)', () =>
     const provider = makeProvider({
       listRecentJobs: vi.fn().mockResolvedValue([handle()]),
       getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
-      getResults: vi.fn().mockResolvedValue(sampleResults),
+      getResults: vi.fn().mockResolvedValue(resultsBundle(sampleResults)),
     });
     const store = arrange(provider);
 

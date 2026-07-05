@@ -22,7 +22,7 @@ import type { NeutralJobHandle } from '@/processing-contract';
 import type {
   ProcessingJobRef,
   ProcessingJobStatus,
-  ProcessingResult,
+  JobResultsBundle,
   ProcessingValue,
   TaskSummary,
 } from '@/src/processing/types';
@@ -46,7 +46,10 @@ export type TransportFormat = {
   parseSpec: (raw: unknown) => TaskSpecEnvelope;
   parseRunResponse: (raw: unknown) => ProcessingJobRef;
   parseStatus: (jobId: string, raw: unknown) => ProcessingJobStatus;
-  parseResults: (raw: unknown) => ProcessingResult[];
+  // The result-read envelope (contract Seam 3 `{intents, missing}`, Chunk 28):
+  // parses into the neutral `{results, missing}` bundle the store threads through
+  // to surface a partial-loss warning.
+  parseResults: (raw: unknown) => JobResultsBundle;
   // Optional: validate a staging response into the facade-minted URIs. Paired
   // with the optional `stage` endpoint below (see `stageInput`).
   parseStageResponse?: (raw: unknown) => string[];
@@ -127,7 +130,7 @@ export type EngineTransport = {
     values: Record<string, ProcessingValue>
   ) => Promise<ProcessingJobRef>;
   getJob: (jobId: string) => Promise<ProcessingJobStatus>;
-  getResults: (jobId: string) => Promise<ProcessingResult[]>;
+  getResults: (jobId: string) => Promise<JobResultsBundle>;
   // Best-effort cancel (contract Seam 3; D5). POSTs to the descriptor's cancel
   // endpoint and validates the projected status back through the same neutral
   // status parser as polling. Fails closed if the descriptor advertises no

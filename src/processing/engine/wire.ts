@@ -33,7 +33,7 @@ import {
 import type {
   ProcessingJobRef,
   ProcessingJobStatus,
-  ProcessingResult,
+  JobResultsBundle,
 } from '@/src/processing/types';
 import { JOB_STATES } from '@/src/processing/types';
 
@@ -96,7 +96,16 @@ const resultSchema = z
   })
   .passthrough();
 
-const resultsSchema = z.array(resultSchema);
+// The result-read envelope (contract Seam 3 `jobResultsSchema`, Chunk 28):
+// `intents` are the facade's result items (each enriched with the id/name/url the
+// JobList needs), `missing` counts recorded outputs the facade could not resolve.
+// `missing` is optional (an omitting facade is backward-compatible; normalized to
+// 0 below). The prior bare-list acceptance is RETIRED — the facade always ships
+// the envelope and both repos are local, so no compatibility window is required.
+const jobResultsEnvelopeSchema = z.object({
+  intents: z.array(resultSchema),
+  missing: z.number().int().nonnegative().optional(),
+});
 
 // The job ref envelope: a usable job id is mandatory (nothing can be tracked
 // without it); the optional initial status is validated separately so a
@@ -171,17 +180,19 @@ export const parseJobRef = (raw: unknown): ProcessingJobRef => {
     : { jobId, status: parseJobStatus(jobId, status) };
 };
 
-// Validate a wire result list. There is no poll to redirect here, so a
+// Validate a wire result-read envelope into the neutral `{results, missing}`
+// bundle (contract Seam 3, Chunk 28). There is no poll to redirect here, so a
 // malformed payload throws; the store's completion path already catches it,
-// logs, and notifies subscribers with no results.
-export const parseResults = (raw: unknown): ProcessingResult[] => {
-  const parsed = resultsSchema.safeParse(raw);
+// logs, and notifies subscribers with no results. An absent `missing` normalizes
+// to 0 (a facade that omits the count stays backward-compatible).
+export const parseResults = (raw: unknown): JobResultsBundle => {
+  const parsed = jobResultsEnvelopeSchema.safeParse(raw);
   if (!parsed.success) {
     throw new Error(
       `Malformed job results from provider: ${formatIssues(parsed.error)}`
     );
   }
-  return parsed.data;
+  return { results: parsed.data.intents, missing: parsed.data.missing ?? 0 };
 };
 
 // Validate a staging response into the facade-minted URIs. A malformed/empty

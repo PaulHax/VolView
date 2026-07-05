@@ -52,9 +52,12 @@ const descriptorFor = (label: string): TransportDescriptor => ({
     parseSpec: (raw) => raw as never,
     parseRunResponse: () => ({ jobId: `${label}-job` }),
     parseStatus: (jobId) => ({ jobId, state: 'running' }),
-    parseResults: () => [
-      { id: `${label}-result`, name: label, url: `http://x/${label}` },
-    ],
+    parseResults: () => ({
+      results: [
+        { id: `${label}-result`, name: label, url: `http://x/${label}` },
+      ],
+      missing: 0,
+    }),
   },
 });
 
@@ -95,7 +98,7 @@ describe('engine transport reads its descriptor + uses $fetch', () => {
     expect(calls[0].url).toBe('http://host/A/spec/t1');
     expect(calls[1].url).toBe('http://host/A/run/t1');
     expect(calls[1].init?.body).toBe(JSON.stringify({ A: { radius: 3 } }));
-    expect(resultsA[0].id).toBe('A-result');
+    expect(resultsA.results[0].id).toBe('A-result');
 
     // Swap to descriptor B — same engine code, different descriptor.
     vi.unstubAllGlobals();
@@ -108,7 +111,7 @@ describe('engine transport reads its descriptor + uses $fetch', () => {
     expect(calls[0].url).toBe('http://host/B/spec/t1');
     expect(calls[1].url).toBe('http://host/B/run/t1');
     expect(calls[1].init?.body).toBe(JSON.stringify({ B: { radius: 3 } }));
-    expect(resultsB[0].id).toBe('B-result');
+    expect(resultsB.results[0].id).toBe('B-result');
   });
 
   // Lifecycle axis is read from the descriptor. Only `poll` is built in v1; the

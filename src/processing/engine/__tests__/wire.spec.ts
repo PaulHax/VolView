@@ -10,6 +10,7 @@ import type {
   ProcessingJobStatus,
   ProcessingResult,
 } from '@/src/processing/types';
+import { loadFixture } from '@/processing-contract/__tests__/loadFixtures';
 
 describe('parseJobStatus', () => {
   it('passes a valid status through byte-identically', () => {
@@ -98,16 +99,28 @@ describe('parseJobRef', () => {
 });
 
 describe('parseResults', () => {
-  const valid: ProcessingResult[] = [
+  const validItems: ProcessingResult[] = [
     { id: 'r1', name: 'out.nrrd', url: 'https://example/out.nrrd' },
   ];
 
-  it('passes a valid result list through byte-identically', () => {
-    expect(parseResults(valid)).toEqual(valid);
+  it('parses the {intents, missing} envelope into {results, missing}', () => {
+    const { results, missing } = parseResults({
+      intents: validItems,
+      missing: 2,
+    });
+    expect(results).toEqual(validItems);
+    expect(missing).toBe(2);
+  });
+
+  it('normalizes an absent `missing` to 0 (a facade that omits it is compatible)', () => {
+    expect(parseResults({ intents: validItems })).toEqual({
+      results: validItems,
+      missing: 0,
+    });
   });
 
   it('preserves a segment-group result with descriptors and unknown keys', () => {
-    const raw = [
+    const intents = [
       {
         id: 'r1',
         name: 'seg.nrrd',
@@ -117,11 +130,11 @@ describe('parseResults', () => {
         extra: 'keep-me',
       },
     ];
-    expect(parseResults(raw)).toEqual(raw);
+    expect(parseResults({ intents, missing: 0 }).results).toEqual(intents);
   });
 
   it('tolerates null mimeType/size (the facade emits absent file fields as null)', () => {
-    const raw = [
+    const intents = [
       {
         id: 'r1',
         name: 'out.nrrd',
@@ -132,20 +145,47 @@ describe('parseResults', () => {
     ];
     // Null is accepted (not thrown) and normalized to absent so the output
     // still matches `ProcessingResult` (mimeType?: string, size?: number).
-    const parsed = parseResults(raw);
-    expect(parsed[0]).toMatchObject({ id: 'r1', name: 'out.nrrd' });
-    expect(parsed[0].mimeType).toBeUndefined();
-    expect(parsed[0].size).toBeUndefined();
+    const { results } = parseResults({ intents });
+    expect(results[0]).toMatchObject({ id: 'r1', name: 'out.nrrd' });
+    expect(results[0].mimeType).toBeUndefined();
+    expect(results[0].size).toBeUndefined();
   });
 
-  it('throws on a non-array payload', () => {
+  it('exercises the job-results.missing.json wire fixture (GATE-C acceptance)', () => {
+    // The golden fixture pins the {intents, missing} envelope with PURE-intent
+    // items (the contract vocabulary floor). The real facade ENRICHES each intent
+    // with the id/name the JobList reads (exactly `_collectJobResults`' merge), so
+    // simulate that enrichment before feeding the transport parser.
+    const fixture = loadFixture('wire/job-results.missing.json') as {
+      intents: Array<Record<string, unknown>>;
+      missing: number;
+    };
+    expect(fixture.missing).toBe(2);
+    const enriched = {
+      ...fixture,
+      intents: fixture.intents.map((intent, n) => ({
+        id: `out-${n}`,
+        ...intent,
+      })),
+    };
+    const { results, missing } = parseResults(enriched);
+    expect(missing).toBe(2);
+    expect(results).toHaveLength(1);
+    expect(results[0].intent).toBe('add-base-image');
+  });
+
+  it('throws on a bare list — the pre-envelope shape is no longer accepted', () => {
+    expect(() => parseResults(validItems)).toThrow(/Malformed job results/);
+  });
+
+  it('throws on a non-object payload', () => {
     expect(() => parseResults({ id: 'r1' })).toThrow(/Malformed job results/);
   });
 
-  it('throws when a result is missing a required field', () => {
-    expect(() => parseResults([{ id: 'r1', name: 'out.nrrd' }])).toThrow(
-      /Malformed job results/
-    );
+  it('throws when a result item is missing a required field', () => {
+    expect(() =>
+      parseResults({ intents: [{ id: 'r1', name: 'out.nrrd' }] })
+    ).toThrow(/Malformed job results/);
   });
 });
 

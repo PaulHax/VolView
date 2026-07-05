@@ -41,7 +41,11 @@ export type ProcessingProvider = {
     context: ProcessingContext
   ) => Promise<ProcessingJobRef>;
   getJob: (jobId: string) => Promise<ProcessingJobStatus>;
-  getResults: (jobId: string) => Promise<ProcessingResult[]>;
+  // The result-read envelope (contract Seam 3 `{intents, missing}`, Chunk 28):
+  // the resolved results PLUS a count of recorded outputs the facade could not
+  // resolve. The store surfaces a partial-loss warning on a non-zero count while
+  // still applying the results that resolved.
+  getResults: (jobId: string) => Promise<JobResultsBundle>;
   // Best-effort cancel of a tracked job (contract "Seam 3 — job lifecycle"; D5).
   // One neutral engine call: the caller holds no Girder route/id/JobStatus
   // knowledge. Returns the job's projected status after the attempt, but the
@@ -162,6 +166,18 @@ export type ProcessingResult = {
    * Chunk 19). Structurally the `source?` field on `SegmentGroupMetadata`.
    */
   source?: ResultSource;
+};
+
+// The result-read envelope the engine hands the store (contract Seam 3
+// `jobResultsSchema`, Chunk 28): the parsed results plus a count of recorded
+// outputs the facade could NOT resolve (deleted / unreadable files). `missing`
+// is reported rather than silently dropped so a "success with no outputs" stays
+// distinct from "outputs deleted", and the store can surface a partial-loss
+// warning alongside the results that did resolve. Distinct from the
+// re-association `baseImageMissing` signal — a different concept.
+export type JobResultsBundle = {
+  results: ProcessingResult[];
+  missing: number;
 };
 
 // VolView remembers which dataset / source was active at submission time so
