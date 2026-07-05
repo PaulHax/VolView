@@ -129,4 +129,52 @@ describe('processing config provider origins', () => {
     // the config could name.
     expect(vi.mocked(fetch).mock.calls[0][0]).toBe(PROCESSING_ORIGINS_PATH);
   });
+
+  // Chunk 32 (ARCHITECTURE-REVIEW §4.6): the facade dropped the vestigial
+  // `protocol`/`auth` provider-config fields. The client schema
+  // (`processingProviderConfig`) reads only id/label/baseUrl/context, so a
+  // provider registers from a config block that OMITS those fields.
+  it('registers a provider from a config block without protocol/auth (§4.6)', async () => {
+    const providers = useProvidersStore();
+
+    await applyProcessingConfig(processingConfig('/volview_processing'));
+
+    const registered = providers.configs.get('analysis-provider');
+    expect(providers.providerCount).toBe(1);
+    expect(registered?.baseUrl).toBe('/volview_processing');
+    // The dropped fields were never part of the client shape.
+    expect(registered && 'protocol' in registered).toBe(false);
+    expect(registered && 'auth' in registered).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  // ...and a PRE-upgrade facade that still emits the legacy `protocol`/`auth`
+  // keys stays compatible: the non-strict zod object strips the unknown keys,
+  // so registration is unaffected (old/new facade shapes both work).
+  it('stays compatible with a legacy block that still carries protocol/auth', async () => {
+    const providers = useProvidersStore();
+
+    const manifest = withProcessingConfig(baseConfig).parse({
+      processing: {
+        providers: [
+          {
+            id: 'analysis-provider',
+            label: 'Analysis',
+            baseUrl: '/volview_processing',
+            protocol: 'slicer-cli',
+            auth: 'same-origin',
+          },
+        ],
+      },
+    }) as Config;
+
+    await applyProcessingConfig(manifest);
+
+    const registered = providers.configs.get('analysis-provider');
+    expect(providers.providerCount).toBe(1);
+    expect(registered?.baseUrl).toBe('/volview_processing');
+    expect(registered && 'protocol' in registered).toBe(false);
+    expect(registered && 'auth' in registered).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+  });
 });
