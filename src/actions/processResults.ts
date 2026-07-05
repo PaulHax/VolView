@@ -59,6 +59,7 @@ import { isVolumeResult } from '@/src/io/import/common';
 import { getImage } from '@/src/utils/dataSelection';
 import { useLayersStore } from '@/src/store/datasets-layers';
 import { useSegmentGroupStore } from '@/src/store/segmentGroups';
+import { useMessageStore } from '@/src/store/messages';
 import { useJobResultReviewStore } from '@/src/store/jobResultReview';
 import { loadUrls } from './loadUserFiles';
 
@@ -138,7 +139,20 @@ async function applySegmentGroup(
   parentSelection: string
 ) {
   const childSelection = await loadAsImport(intent);
-  if (!childSelection) return;
+  if (!childSelection) {
+    // Explicit JobList action only (`applyIntent` has a single caller). The
+    // auto-show path fails closed silently elsewhere; a user CLICK that
+    // no-ops must say why. `loadAsImport` returns null (never throws) on a
+    // 404 / corrupt / non-volume file, so JobList's catch never fires.
+    useMessageStore().addError(
+      `Could not add "${intent.name}" as a segment group`,
+      {
+        details:
+          'The result file could not be loaded — it may be missing, corrupt, or not a volume image.',
+      }
+    );
+    return;
+  }
   await convertAndDescribe(childSelection, parentSelection, intent);
 }
 
@@ -181,7 +195,16 @@ export async function applyIntent(
         return;
       }
       const childSelection = await loadAsImport(resolved);
-      if (!childSelection) return;
+      if (!childSelection) {
+        useMessageStore().addError(
+          `Could not add "${resolved.name}" as a layer`,
+          {
+            details:
+              'The result file could not be loaded — it may be missing, corrupt, or not a volume image.',
+          }
+        );
+        return;
+      }
       await useLayersStore().addLayer(parentSelection, childSelection);
       return;
     }

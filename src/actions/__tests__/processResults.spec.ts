@@ -31,6 +31,9 @@ const mocks = vi.hoisted(() => ({
     string,
     { source?: { jobId: string; outputId: string } }
   >,
+  // Message center: the explicit JobList path surfaces an error when a result
+  // fails to load (#7); the auto-show path must stay silent.
+  addError: vi.fn(),
 }));
 
 vi.mock('@/src/io/import/dataSource', () => ({
@@ -61,6 +64,9 @@ vi.mock('@/src/store/segmentGroups', () => ({
 }));
 vi.mock('@/src/store/jobResultReview', () => ({
   useJobResultReviewStore: () => ({ markNew: mocks.markNew }),
+}));
+vi.mock('@/src/store/messages', () => ({
+  useMessageStore: () => ({ addError: mocks.addError }),
 }));
 
 const file = { url: 'https://example/out.nrrd', name: 'out.nrrd' };
@@ -223,6 +229,26 @@ describe('applyIntent', () => {
       urls: [file.url],
       names: [file.name],
     });
+  });
+
+  it('add-segment-group surfaces an error when the result fails to load (#7)', async () => {
+    // loadAsImport returns null (404/corrupt/non-volume) — the explicit JobList
+    // action must say why instead of silently no-oping (JobList's catch only
+    // fires on THROWN errors, and loadAsImport never throws).
+    mocks.importDataSources.mockResolvedValue([]);
+    await applyIntent(
+      { intent: 'add-segment-group', ...file },
+      context('parent')
+    );
+    expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
+    expect(mocks.addError).toHaveBeenCalledTimes(1);
+  });
+
+  it('add-layer surfaces an error when the result fails to load (#7)', async () => {
+    mocks.importDataSources.mockResolvedValue([]);
+    await applyIntent({ intent: 'add-layer', ...file }, context('parent'));
+    expect(mocks.addLayer).not.toHaveBeenCalled();
+    expect(mocks.addError).toHaveBeenCalledTimes(1);
   });
 
   it('is additive-only: writes into the NEW group, never a pre-existing one', async () => {
@@ -391,6 +417,9 @@ describe('autoLoadProcessingResults — corroboration guard', () => {
     await autoLoadProcessingResults([segResult()], context('parent'));
     expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
     expect(mocks.markNew).not.toHaveBeenCalled();
+    // The AUTO-SHOW path stays fail-closed SILENT (#7 messages only on the
+    // explicit JobList action) — the result is still reachable as a JobList file.
+    expect(mocks.addError).not.toHaveBeenCalled();
   });
 
   it('a failing guard is a pure no-op (still a JobList/download file)', async () => {

@@ -36,7 +36,39 @@ cp -R "$pkg_dir/generated" "$dest/generated"
 # copied subtrees). Sorted for a deterministic, diff-friendly manifest.
 (
   cd "$dest"
-  find fixtures generated -type f -print0 | sort -z | xargs -0 sha256sum > MANIFEST.sha256
+  LC_ALL=C find fixtures generated -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > MANIFEST.sha256
 )
 
-echo "synced fixtures + generated schemas (+ MANIFEST.sha256) -> $dest"
+# --- Provenance stamp (fix #8): make the vendored copy self-describing so a
+# reader (and the facade's own test_contract_source) can see WHICH client commit
+# / version it was synced from, and self-certify the tree against a single digest.
+# This does NOT by itself prove the copy is CURRENT -- that is the client's
+# verify-facade.sh step, the only checker that can see both trees. Written OUTSIDE
+# fixtures/ + generated/, so it is not covered by MANIFEST.sha256 (which hashes
+# only those subtrees); its own integrity rides tree_sha256 below.
+contract_version="$(node -p "require('$dest/generated/openapi.json').info.version")"
+spec_version="$(grep -oE 'SPEC_VERSION = [0-9]+' "$pkg_dir/task-spec.ts" | grep -oE '[0-9]+')"
+intent_version="$(grep -oE 'INTENT_VOCABULARY_VERSION = [0-9]+' "$pkg_dir/wire.ts" | grep -oE '[0-9]+')"
+client_sha="$(git -C "$pkg_dir" rev-parse --short HEAD)"
+if [ -n "$(git -C "$pkg_dir" status --porcelain -- "$pkg_dir")" ]; then
+  client_dirty=true
+else
+  client_dirty=false
+fi
+# tree_sha256 = sha256 of MANIFEST.sha256, which already provably equals the
+# copied tree, so hashing it transitively certifies fixtures/ + generated/.
+tree_sha256="$(sha256sum "$dest/MANIFEST.sha256" | cut -d' ' -f1)"
+
+cat > "$dest/SOURCE.txt" <<EOF
+# Provenance of the vendored processing-contract copy.
+# Written by processing-contract/scripts/sync-facade.sh -- DO NOT hand-edit.
+# tree_sha256 = sha256 of MANIFEST.sha256; the facade test re-derives it.
+contract_version=$contract_version
+spec_version=$spec_version
+intent_vocabulary_version=$intent_version
+client_git_sha=$client_sha
+client_git_dirty=$client_dirty
+tree_sha256=$tree_sha256
+EOF
+
+echo "synced fixtures + generated schemas (+ MANIFEST.sha256 + SOURCE.txt) -> $dest"

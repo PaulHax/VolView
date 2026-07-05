@@ -70,11 +70,16 @@ export type ParsedSegment = {
 };
 
 // "0.905882 0.298039 0.235294" (RGB floats 0–1, the writer's format) → [231, 76, 60].
+// Each channel is clamped to [0, 255]: a foreign / hand-edited header carrying an
+// out-of-range float (e.g. "1.5 -0.2 0.5") must not leak a negative or >255 channel
+// downstream into `SegmentMask.color`.
 const fromColorString = (raw: string): [number, number, number] | undefined => {
   const parts = raw.trim().split(/\s+/).map(Number);
   if (parts.length < 3 || parts.slice(0, 3).some((n) => !Number.isFinite(n)))
     return undefined;
-  return [0, 1, 2].map((i) => Math.round(parts[i] * 255)) as [
+  const clamp255 = (n: number) =>
+    Math.min(255, Math.max(0, Math.round(n * 255)));
+  return [clamp255(parts[0]), clamp255(parts[1]), clamp255(parts[2])] as [
     number,
     number,
     number,
@@ -108,6 +113,68 @@ export const parseSegNrrdMetadata = (
     });
   }
   return segments.length ? segments : undefined;
+};
+
+// A decoded segment as `decodeSegments` hands it to the store (the looser
+// `number[]` color the default-numbering path already produces, so overlaying
+// the parser's stricter 4-tuple introduces no friction).
+export type DecodedSegment = {
+  value: number;
+  name: string;
+  color: number[];
+  visible: boolean;
+};
+
+/**
+ * Overlay embedded `.seg.nrrd` segment metadata onto the full voxel-value
+ * enumeration (issue #6). The enumeration (`values`) is the SPINE: every
+ * labelled voxel gets a segment, so a value with no `Segment{N}_*` block still
+ * yields a default (via `makeDefault`) instead of being silently dropped —
+ * dropping it would leave those voxels rendered but unnameable, unrecolorable,
+ * and undeletable. A described value overrides its default's name / color /
+ * visibility; a described value NOT in the enumeration (e.g. a segment the CLI
+ * declared but wrote no voxels for) is appended so nothing described is lost.
+ * Background (0) is never a segment. `makeDefault` is consumed only for
+ * undescribed values, so a fully-described labelmap never churns the caller's
+ * colour cursor.
+ *
+ * Caller note: `decodeSegments` passes the dense `min..max` scalar range as the
+ * spine (matching VolView's default, non-embedded decode path). That can create
+ * phantom empty segments for a *sparse*-valued labelmap — a pre-existing
+ * limitation of range-based enumeration, not specific to this merge; the CLIs
+ * here emit dense contiguous labels, so no phantoms arise in practice.
+ */
+export const overlaySegmentMetadata = (
+  values: number[],
+  described: ParsedSegment[] | undefined,
+  makeDefault: (value: number) => DecodedSegment
+): DecodedSegment[] => {
+  const describedByValue = new Map(
+    (described ?? []).map((seg) => [seg.value, seg] as const)
+  );
+  const merged: DecodedSegment[] = values.map((value) => {
+    const match = describedByValue.get(value);
+    return match
+      ? { value, name: match.name, color: match.color, visible: match.visible }
+      : makeDefault(value);
+  });
+  // Append described values not in the enumeration. Iterate the DEDUPED map, NOT
+  // the raw `described` array: a foreign header with a duplicated LabelValue
+  // outside the range would otherwise push two segments sharing one value (a
+  // colliding `order` entry / Vue `:key`). 0 is the background label, never a
+  // segment.
+  const enumerated = new Set(values);
+  describedByValue.forEach((seg, value) => {
+    if (value !== 0 && !enumerated.has(value)) {
+      merged.push({
+        value,
+        name: seg.name,
+        color: seg.color,
+        visible: seg.visible,
+      });
+    }
+  });
+  return merged;
 };
 
 // Load-time carrier (Chunk 34). `itkReader` produces a bare `vtkImageData` and

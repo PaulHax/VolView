@@ -11,7 +11,10 @@ import { normalizeForStore, removeFromArray } from '@/src/utils';
 import { SegmentMask } from '@/src/types/segment';
 import { DEFAULT_SEGMENT_MASKS, CATEGORICAL_COLORS } from '@/src/config';
 import { readImage, writeSegmentation } from '@/src/io/readWriteImage';
-import { parseSegNrrdMetadata } from '@/src/io/segNrrdMetadata';
+import {
+  parseSegNrrdMetadata,
+  overlaySegmentMetadata,
+} from '@/src/io/segNrrdMetadata';
 import {
   type DataSelection,
   getImage,
@@ -297,13 +300,15 @@ export const useSegmentGroupStore = defineStore('segmentGroup', () => {
 
     // Slicer-convention `.seg.nrrd` embedded metadata (Chunk 34): a labelmap
     // produced by a backend CLI carries its real segment names/colors in the
-    // NRRD header, captured onto the loaded image at import. Recover them here
-    // rather than falling back to the default numbering below.
+    // NRRD header, captured onto the loaded image at import.
+    //
+    // MERGE, not replace (issue #6): the full min..max voxel enumeration is the
+    // spine, so a labelled voxel with NO `Segment{N}_*` block still gets a
+    // default, visible, manageable segment instead of being dropped. Embedded
+    // name/color/visibility are overlaid onto the matching `LabelValue == voxel
+    // value`; undescribed values keep their default.
     const embedded = imageCacheStore.imageById[imageId]?.segmentMetadata;
-    if (embedded) {
-      const parsed = parseSegNrrdMetadata(embedded);
-      if (parsed?.length) return parsed;
-    }
+    const described = embedded ? parseSegNrrdMetadata(embedded) : undefined;
 
     const [min, max] = image.getPointData().getScalars().getRange();
     const noZeroBackground = Math.max(min, 1);
@@ -311,7 +316,8 @@ export const useSegmentGroupStore = defineStore('segmentGroup', () => {
       { length: max - noZeroBackground + 1 },
       (_, i) => i + noZeroBackground
     );
-    return values.map((value) => ({
+
+    return overlaySegmentMetadata(values, described, (value) => ({
       value,
       name: makeDefaultSegmentName(value),
       color: [...getNextColor()],

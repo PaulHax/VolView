@@ -4,6 +4,9 @@ import {
   buildSegNrrdMetadata,
   maybeBuildSegNrrdMetadata,
   parseSegNrrdMetadata,
+  overlaySegmentMetadata,
+  type ParsedSegment,
+  type DecodedSegment,
 } from '@/src/io/segNrrdMetadata';
 import type { SegmentGroupMetadata } from '@/src/store/segmentGroups';
 
@@ -131,5 +134,83 @@ describe('parseSegNrrdMetadata recovers segment descriptors from header metadata
     m.set('Segment5_LabelValue', '9');
     const parsed = parseSegNrrdMetadata(m)!;
     expect(parsed.map((s) => s.value)).toEqual([1, 2]);
+  });
+
+  it('clamps out-of-range color channels to [0,255] (defensive vs foreign files)', () => {
+    // 1.5*255→383→clamp 255; -0.2*255→-51→clamp 0; 0.5*255→128.
+    const m = new Map<string, string>([
+      ['Segment0_Name', 'weird'],
+      ['Segment0_Color', '1.5 -0.2 0.5'],
+      ['Segment0_LabelValue', '1'],
+    ]);
+    expect(parseSegNrrdMetadata(m)).toEqual([
+      { value: 1, name: 'weird', color: [255, 0, 128, 255], visible: true },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// overlaySegmentMetadata (issue #6): the full voxel enumeration is the spine so
+// a labelled voxel the header does NOT describe still gets a manageable segment,
+// with embedded names/colors overlaid on top.
+// ---------------------------------------------------------------------------
+
+describe('overlaySegmentMetadata merges embedded metadata over the enumeration', () => {
+  const mkDefault = (value: number): DecodedSegment => ({
+    value,
+    name: `default ${value}`,
+    color: [10, 20, 30, 255],
+    visible: true,
+  });
+
+  it('keeps a default for every labelled voxel the header does NOT describe (#6)', () => {
+    const described: ParsedSegment[] = [
+      { value: 1, name: 'Region 1', color: [231, 76, 60, 255], visible: true },
+    ];
+    expect(overlaySegmentMetadata([1, 2, 3], described, mkDefault)).toEqual([
+      { value: 1, name: 'Region 1', color: [231, 76, 60, 255], visible: true },
+      { value: 2, name: 'default 2', color: [10, 20, 30, 255], visible: true },
+      { value: 3, name: 'default 3', color: [10, 20, 30, 255], visible: true },
+    ]);
+  });
+
+  it('overrides the default name/color/visibility for a described value', () => {
+    const described: ParsedSegment[] = [
+      { value: 1, name: 'Named', color: [1, 2, 3, 255], visible: false },
+    ];
+    expect(overlaySegmentMetadata([1], described, mkDefault)).toEqual([
+      { value: 1, name: 'Named', color: [1, 2, 3, 255], visible: false },
+    ]);
+  });
+
+  it('falls back to pure defaults when there is no embedded metadata', () => {
+    expect(overlaySegmentMetadata([1, 2], undefined, mkDefault)).toEqual([
+      { value: 1, name: 'default 1', color: [10, 20, 30, 255], visible: true },
+      { value: 2, name: 'default 2', color: [10, 20, 30, 255], visible: true },
+    ]);
+  });
+
+  it('appends a described value outside the enumeration and skips background 0', () => {
+    const described: ParsedSegment[] = [
+      { value: 1, name: 'in', color: [1, 1, 1, 255], visible: true },
+      { value: 7, name: 'outside', color: [2, 2, 2, 255], visible: true },
+      { value: 0, name: 'bg', color: [0, 0, 0, 255], visible: true },
+    ];
+    const merged = overlaySegmentMetadata([1], described, mkDefault);
+    expect(merged.map((s) => s.value)).toEqual([1, 7]); // 0 skipped, 7 appended
+    expect(merged.find((s) => s.value === 7)?.name).toBe('outside');
+  });
+
+  it('does NOT duplicate an out-of-enumeration value described twice (dedup)', () => {
+    // A foreign / hand-edited header with two Segment blocks sharing a LabelValue
+    // outside the voxel range must yield ONE segment (last-wins), not two rows
+    // with a colliding `order`/Vue `:key`.
+    const described: ParsedSegment[] = [
+      { value: 200, name: 'first', color: [1, 1, 1, 255], visible: true },
+      { value: 200, name: 'second', color: [2, 2, 2, 255], visible: true },
+    ];
+    const merged = overlaySegmentMetadata([1, 2, 3], described, mkDefault);
+    expect(merged.map((s) => s.value)).toEqual([1, 2, 3, 200]); // 200 once
+    expect(merged.find((s) => s.value === 200)?.name).toBe('second'); // last wins
   });
 });
