@@ -79,6 +79,17 @@ async function loadAsImport(file: ResultFile) {
   return loaded[0] ? toDataSelection(loaded[0]) : null;
 }
 
+// Surface a failed result load on the explicit JobList path (a user CLICK that
+// no-ops must say why). `loadAsImport` returns null — never throws — on a 404 /
+// corrupt / non-volume file, so JobList's catch never fires; the auto-show path
+// stays silent by design.
+function reportResultLoadFailed(name: string, kind: string) {
+  useMessageStore().addError(`Could not add "${name}" as a ${kind}`, {
+    details:
+      'The result file could not be loaded — it may be missing, corrupt, or not a volume image.',
+  });
+}
+
 /**
  * Apply provider-supplied segment descriptors to a specific created group. Run
  * synchronously after `convertImageToLabelmap` resolves (which now awaits its
@@ -140,17 +151,7 @@ async function applySegmentGroup(
 ) {
   const childSelection = await loadAsImport(intent);
   if (!childSelection) {
-    // Explicit JobList action only (`applyIntent` has a single caller). The
-    // auto-show path fails closed silently elsewhere; a user CLICK that
-    // no-ops must say why. `loadAsImport` returns null (never throws) on a
-    // 404 / corrupt / non-volume file, so JobList's catch never fires.
-    useMessageStore().addError(
-      `Could not add "${intent.name}" as a segment group`,
-      {
-        details:
-          'The result file could not be loaded — it may be missing, corrupt, or not a volume image.',
-      }
-    );
+    reportResultLoadFailed(intent.name, 'segment group');
     return;
   }
   await convertAndDescribe(childSelection, parentSelection, intent);
@@ -196,13 +197,7 @@ export async function applyIntent(
       }
       const childSelection = await loadAsImport(resolved);
       if (!childSelection) {
-        useMessageStore().addError(
-          `Could not add "${resolved.name}" as a layer`,
-          {
-            details:
-              'The result file could not be loaded — it may be missing, corrupt, or not a volume image.',
-          }
-        );
+        reportResultLoadFailed(resolved.name, 'layer');
         return;
       }
       await useLayersStore().addLayer(parentSelection, childSelection);

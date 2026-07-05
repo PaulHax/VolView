@@ -1,3 +1,4 @@
+import { clampValue } from '@/src/utils';
 import type { SegmentGroupMetadata } from '@/src/store/segmentGroups';
 
 const toColorString = (r: number, g: number, b: number) =>
@@ -77,8 +78,7 @@ const fromColorString = (raw: string): [number, number, number] | undefined => {
   const parts = raw.trim().split(/\s+/).map(Number);
   if (parts.length < 3 || parts.slice(0, 3).some((n) => !Number.isFinite(n)))
     return undefined;
-  const clamp255 = (n: number) =>
-    Math.min(255, Math.max(0, Math.round(n * 255)));
+  const clamp255 = (n: number) => clampValue(Math.round(n * 255), 0, 255);
   return [clamp255(parts[0]), clamp255(parts[1]), clamp255(parts[2])] as [
     number,
     number,
@@ -115,15 +115,10 @@ export const parseSegNrrdMetadata = (
   return segments.length ? segments : undefined;
 };
 
-// A decoded segment as `decodeSegments` hands it to the store (the looser
-// `number[]` color the default-numbering path already produces, so overlaying
-// the parser's stricter 4-tuple introduces no friction).
-export type DecodedSegment = {
-  value: number;
-  name: string;
-  color: number[];
-  visible: boolean;
-};
+// A decoded segment as `decodeSegments` hands it to the store: a `ParsedSegment`
+// with the looser `number[]` color the default-numbering path already produces,
+// so overlaying the parser's stricter 4-tuple introduces no friction.
+export type DecodedSegment = Omit<ParsedSegment, 'color'> & { color: number[] };
 
 /**
  * Overlay embedded `.seg.nrrd` segment metadata onto the full voxel-value
@@ -152,12 +147,13 @@ export const overlaySegmentMetadata = (
   const describedByValue = new Map(
     (described ?? []).map((seg) => [seg.value, seg] as const)
   );
-  const merged: DecodedSegment[] = values.map((value) => {
-    const match = describedByValue.get(value);
-    return match
-      ? { value, name: match.name, color: match.color, visible: match.visible }
-      : makeDefault(value);
-  });
+  // A described segment is keyed by its own `value`, so it stands in for the
+  // enumeration entry directly (ParsedSegment widens to DecodedSegment). `described`
+  // is freshly parsed per decode and discarded, so passing it through by reference
+  // aliases nothing the caller keeps.
+  const merged: DecodedSegment[] = values.map(
+    (value) => describedByValue.get(value) ?? makeDefault(value)
+  );
   // Append described values not in the enumeration. Iterate the DEDUPED map, NOT
   // the raw `described` array: a foreign header with a duplicated LabelValue
   // outside the range would otherwise push two segments sharing one value (a
@@ -165,14 +161,7 @@ export const overlaySegmentMetadata = (
   // segment.
   const enumerated = new Set(values);
   describedByValue.forEach((seg, value) => {
-    if (value !== 0 && !enumerated.has(value)) {
-      merged.push({
-        value,
-        name: seg.name,
-        color: seg.color,
-        visible: seg.visible,
-      });
-    }
+    if (value !== 0 && !enumerated.has(value)) merged.push(seg);
   });
   return merged;
 };
