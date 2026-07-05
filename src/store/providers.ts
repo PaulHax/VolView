@@ -26,7 +26,10 @@ import type {
   SubmittedJobContext,
 } from '@/src/processing/types';
 import { collectProvenanceUris } from '@/src/processing/engine/mintInput';
-import { reassociateBase } from '@/src/processing/engine/rediscover';
+import {
+  passesWatermark,
+  reassociateBase,
+} from '@/src/processing/engine/rediscover';
 import { useMessageStore } from '@/src/store/messages';
 import { useDatasetStore } from '@/src/store/datasets';
 
@@ -536,6 +539,19 @@ export const useProvidersStore = defineStore('providers', () => {
     // Already tracked this session (a tier-1 submit owns it) → do not re-adopt.
     if (submittedContexts.has(handle.jobId) || jobs.has(handle.jobId)) return;
 
+    // Tier-2 reload economy — watermark short-circuit (Chunk 27; review §4.4;
+    // NO wire change). A non-empty `finishedAt` means the job is TERMINAL (facade
+    // `_projectFinishedAt` returns "" for a still-running job — non-empty ⇔
+    // terminal). A terminal handle whose terminal instant fails the session
+    // watermark can never auto-attach (its result predates the restored scene),
+    // so skip it WHOLE: no `recordSubmittedContext`, no `getJob`, no `getResults`.
+    // Reload cost then scales with post-watermark jobs, not all job history. A
+    // still-running handle (`finishedAt === ''`) fails this guard — `passesWatermark`
+    // fails open for an empty instant — and falls through to the poller path below.
+    if (handle.finishedAt && !passesWatermark(handle.finishedAt, watermark)) {
+      return;
+    }
+
     // Re-associate the base by matching the job's input opaque URIs against the
     // reloaded scene's provenance (Seam 1) — uniform for every format.
     const baseId = reassociateBase(handle.inputUris, candidates);
@@ -548,6 +564,23 @@ export const useProvidersStore = defineStore('providers', () => {
       ...(handle.finishedAt ? { finishedAt: handle.finishedAt } : {}),
     };
     recordSubmittedContext(context);
+
+    // Tier-2 reload economy — `state` on the handle (Chunk 27; the additive wire
+    // half). When the facade stamps the neutral projected `state`, a TERMINAL-
+    // NON-SUCCESS handle (`error`/`cancelled`) has no results to apply (result
+    // reads gate on terminal success), so record its terminal status straight off
+    // the handle and skip the `getJob` round-trip entirely. A terminal-SUCCESS
+    // handle still fetches (proceeds exactly as today — it needs `getResults`),
+    // and an ABSENT `state` (a pre-upgrade facade) falls through to the unchanged
+    // `getJob` path — so a stateless producer behaves precisely as before.
+    if (
+      handle.state &&
+      TERMINAL_STATES.has(handle.state) &&
+      handle.state !== 'success'
+    ) {
+      recordJob({ jobId: handle.jobId, state: handle.state });
+      return;
+    }
 
     let status: ProcessingJobStatus;
     try {

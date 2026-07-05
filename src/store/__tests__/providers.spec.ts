@@ -828,4 +828,91 @@ describe('Providers store — tier-2 cold-reload re-discovery (Chunk 19)', () =>
     expect(provider.getResults).not.toHaveBeenCalled();
     expect(autoLoadMock).not.toHaveBeenCalled();
   });
+
+  // ---------------------------------------------------------------------------
+  // Chunk 27 — tier-2 reload economy (watermark short-circuit + `state` on the
+  // handle). Reload cost stops scaling with total job history (review §4.4).
+  // ---------------------------------------------------------------------------
+
+  // The watermark short-circuit (NO wire change): a TERMINAL handle (non-empty
+  // finishedAt) that falls at/before the session watermark can never auto-attach,
+  // so it is skipped WHOLE — zero transport, nothing tracked.
+  it('pre-watermark terminal handle → ZERO transport calls, nothing tracked', async () => {
+    const provider = makeProvider({
+      // handle() finishedAt is 2026-07-03T20:00:00Z — BEFORE the watermark below.
+      listRecentJobs: vi.fn().mockResolvedValue([handle()]),
+      getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
+      getResults: vi.fn().mockResolvedValue(sampleResults),
+    });
+    const store = arrange(provider);
+    store.setSessionWatermark('2026-07-03T22:00:00Z');
+
+    await store.reattachRecentJobs();
+
+    expect(provider.getJob).not.toHaveBeenCalled();
+    expect(provider.getResults).not.toHaveBeenCalled();
+    expect(autoLoadMock).not.toHaveBeenCalled();
+    // Skipped before recordSubmittedContext — the job is not adopted at all.
+    expect(store.submittedContexts.has('jr')).toBe(false);
+    expect(store.jobs.has('jr')).toBe(false);
+  });
+
+  // `state` on the handle: a terminal-NON-SUCCESS handle records its terminal
+  // status straight off the handle — no getJob, no getResults (a non-success
+  // terminal has no results to apply). Still tracked so JobList renders it.
+  it.each(['error', 'cancelled'] as const)(
+    'records a terminal-%s handle from its `state` without a getJob (Chunk 27)',
+    async (state) => {
+      const provider = makeProvider({
+        listRecentJobs: vi.fn().mockResolvedValue([handle({ state })]),
+        getJob: vi.fn(),
+        getResults: vi.fn(),
+      });
+      const store = arrange(provider);
+
+      await store.reattachRecentJobs();
+
+      expect(provider.getJob).not.toHaveBeenCalled();
+      expect(provider.getResults).not.toHaveBeenCalled();
+      expect(autoLoadMock).not.toHaveBeenCalled();
+      expect(store.jobs.get('jr')?.state).toBe(state);
+      expect(store.submittedContexts.get('jr')?.taskId).toBe('t1');
+    }
+  );
+
+  // The terminal-branch split must NOT collapse: a terminal-SUCCESS handle still
+  // fetches (it needs getResults) even when it carries `state` — proceeds exactly
+  // as today.
+  it('a terminal-SUCCESS handle with `state` still fetches (getJob + getResults)', async () => {
+    const provider = makeProvider({
+      listRecentJobs: vi.fn().mockResolvedValue([handle({ state: 'success' })]),
+      getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
+      getResults: vi.fn().mockResolvedValue(sampleResults),
+    });
+    const store = arrange(provider);
+
+    await store.reattachRecentJobs();
+
+    expect(provider.getJob).toHaveBeenCalledWith('jr');
+    expect(provider.getResults).toHaveBeenCalledWith('jr');
+    expect(autoLoadMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression pin: an ABSENT `state` handle (a pre-upgrade facade) behaves
+  // EXACTLY as before — the unchanged getJob → getResults → auto-apply path.
+  it('an absent-`state` handle behaves exactly as before (getJob path; regression pin)', async () => {
+    const provider = makeProvider({
+      listRecentJobs: vi.fn().mockResolvedValue([handle()]),
+      getJob: vi.fn().mockResolvedValue({ jobId: 'jr', state: 'success' }),
+      getResults: vi.fn().mockResolvedValue(sampleResults),
+    });
+    const store = arrange(provider);
+
+    await store.reattachRecentJobs();
+
+    expect('state' in handle()).toBe(false);
+    expect(provider.getJob).toHaveBeenCalledWith('jr');
+    expect(provider.getResults).toHaveBeenCalledWith('jr');
+    expect(autoLoadMock).toHaveBeenCalledTimes(1);
+  });
 });

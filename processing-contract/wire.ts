@@ -190,6 +190,15 @@ export const neutralJobHandleSchema = z.object({
   taskId: z.string(),
   inputUris: z.array(z.string()),
   finishedAt: z.string(),
+  // OPTIONAL neutral projected state (Chunk 27, tier-2 reload economy). When the
+  // facade stamps it, the client re-discovering a TERMINAL-NON-SUCCESS handle
+  // (`error`/`cancelled`) records the terminal status straight off the handle,
+  // skipping the `getJob` round-trip (a non-success terminal has no results to
+  // apply anyway — result reads gate on terminal success). Genuinely additive:
+  // ABSENT `state` is a pre-upgrade facade, and the client falls back to its
+  // unchanged `getJob`-based path — so both sides stay compatible. Neutral
+  // (`jobStateSchema`), never a backend `JobStatus` enum.
+  state: jobStateSchema.optional(),
 });
 
 export type NeutralJobHandle = z.infer<typeof neutralJobHandleSchema>;

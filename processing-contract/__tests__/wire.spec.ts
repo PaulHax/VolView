@@ -180,6 +180,40 @@ describe('tier-2 handle + result-read payloads', () => {
     expect(handle.inputUris.length).toBeGreaterThan(0);
     expect(handle.taskId).toBeTruthy();
     expect(handle.finishedAt).toBeTruthy();
+    // Chunk 27: the optional neutral `state` rides along (a terminal-success
+    // handle here) but is drawn from jobStateSchema — never a backend enum.
+    expect(handle.state).toBe('success');
+  });
+
+  it('validates a terminal-non-success handle carrying a `state` (Chunk 27)', () => {
+    const handle = neutralJobHandleSchema.parse(
+      wire['job-handle.terminal-error']
+    );
+    expect(handle.state).toBe('error');
+    expect(handle.finishedAt).toBeTruthy();
+  });
+
+  it('accepts a handle with NO `state` (pre-upgrade facade, backward compat)', () => {
+    // The field is genuinely additive/optional: a facade that omits `state`
+    // still validates, so a pre-upgrade producer keeps working unchanged (the
+    // client falls back to its getJob-based path).
+    const { state, ...stateless } = neutralJobHandleSchema.parse(
+      wire['job-handle']
+    );
+    void state;
+    expect(neutralJobHandleSchema.safeParse(stateless).success).toBe(true);
+  });
+
+  it('rejects a handle `state` outside the five job states', () => {
+    expect(
+      neutralJobHandleSchema.safeParse({
+        jobId: 'j',
+        taskId: 't',
+        inputUris: [],
+        finishedAt: '',
+        state: 'queued',
+      }).success
+    ).toBe(false);
   });
 
   it('validates a getJobResults success payload with a missing count', () => {
