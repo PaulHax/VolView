@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import { defaultDescriptor } from '../descriptor';
+import type { TaskSummary } from '@/src/processing/types';
 
 // The neutral-facade default descriptor is the ONE place that knows the facade's
 // URL layout. These pin the job-addressed / folder-free split (D5, Chunk 18):
@@ -63,5 +64,55 @@ describe('default descriptor endpoint templates', () => {
     expect(endpoints.cancel?.(base, 'job1')).toBe(
       '/volview_processing/jobs/job1/cancel'
     );
+  });
+});
+
+// The task summary is advisory display metadata, validated by a LIGHT lenient
+// guard that must FAIL SOFT: a malformed entry is dropped with a warning, never
+// thrown on, so one bad summary never kills the picker (Seam 2 fail-closed
+// discipline; review §5.3). This replaces the former unvalidated
+// `raw as TaskSummary[]` cast.
+describe('default descriptor task-summary parsing (fail soft)', () => {
+  const { parseTasks } = defaultDescriptor.format;
+
+  it('drops a malformed summary and keeps the valid ones (listTasks survives)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const parsed = parseTasks([
+      { id: 't1', title: 'One', dockerImage: 'org/img:1', category: ['seg'] },
+      { id: 42, title: 'bad id type' }, // malformed: id is not a string
+      { title: 'no id' }, // malformed: id missing
+      null, // malformed: not an object
+      { id: 't2', title: 'Two' },
+    ]);
+
+    // The picker survives with exactly the well-formed summaries, in order.
+    expect(parsed.map((t) => t.id)).toEqual(['t1', 't2']);
+    // Advisory hints ride through the lenient guard verbatim (pass-through).
+    expect(parsed[0].dockerImage).toBe('org/img:1');
+    expect(parsed[0].category).toEqual(['seg']);
+    // The drop was reported, not silent.
+    expect(warn).toHaveBeenCalled();
+
+    warn.mockRestore();
+  });
+
+  it('degrades a non-array payload to an empty list without throwing', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(parseTasks({} as unknown)).toEqual([]);
+    expect(parseTasks(null as unknown)).toEqual([]);
+    expect(parseTasks('nope' as unknown)).toEqual([]);
+    expect(warn).toHaveBeenCalled();
+
+    warn.mockRestore();
+  });
+
+  it('passes a fully valid task list through unchanged', () => {
+    const summaries: TaskSummary[] = [
+      { id: 'a', title: 'A' },
+      { id: 'b', title: 'B', description: 'second' },
+    ];
+    expect(parseTasks(summaries)).toEqual(summaries);
   });
 });

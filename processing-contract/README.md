@@ -1,5 +1,14 @@
 # processing-contract
 
+> **Status: draft `0.x` (currently `0.1.0`).** The shapes may change until a
+> **second backend's shim passes the [conformance kit](#the-facade-conformance-kit)**
+> — that is the pinned **1.0** criterion (decision D12). This is a private,
+> versioned draft with exactly one known consumer (girder_volview, vendored via
+> `sync-facade.sh`); it carries no stability promise and no distribution channel
+> yet. Semver/changelog, a publish channel, and a versioned external acceptance
+> surface are chosen at the 1.0 graduation, deliberately **not** now. See
+> [Versioning and stability](#versioning-and-stability).
+
 The neutral client↔facade processing contract, published as a self-contained,
 backend-decoupled artifact. The VolView client and any server-side **facade**
 (girder_volview today, a MONAI shim tomorrow) build against the shapes defined
@@ -122,6 +131,45 @@ schema is named _to_ the runtime (driver decision, 2026-07-04; DECISIONS-LOG
 (girder_volview `tests/test_status_conformance.py`) validates its projected
 status against the generated `neutral-job-status` schema so this can't silently
 drift again.
+
+## Versioning and stability
+
+Two versions live here and they turn on **separate clocks**:
+
+- The **artifact version** — `processing-contract/package.json` `version` (today
+  `0.1.0`, `private: true`) and the OpenAPI `info.version`. It versions _this
+  package as a published thing_ and states its maturity: a draft `0.x` carrying
+  no stability promise.
+- The **shape versions** — `INTENT_VOCABULARY_VERSION` (`wire.ts`) and the
+  task-spec `specVersion`. These version the _wire vocabulary_ so a producer and
+  the applier can negotiate additive compatibility; they are NOT the artifact
+  version, and the OpenAPI `info.version` is a deliberate literal rather than a
+  value derived from them.
+
+**The `1.0` criterion is pinned (D12):** stamp `1.0` only when a **second**
+backend's shim (the north-star MONAI backend) passes the conformance kit
+unchanged — the first moment the shapes are proven reusable rather than
+retrofitted. Only at that graduation are the `1.0` obligations taken on: a
+stability promise (semver + changelog), a distribution channel (npm publish /
+standalone repo / rendered docs), and a support surface (the conformance kit as
+an external-facade acceptance test, with versioned fixtures). Until then this
+stays a private draft that may change any day, in lock-step with its one
+consumer.
+
+## Reserved shapes
+
+The published wire is the _real_ wire — no shape appears here without stated
+semantics. There is exactly one **reserved** shape:
+
+- **Inline results on the run response** (reserved _for sync backends_). A
+  synchronous backend (the north-star MONAI `/infer`, D5) could return a
+  born-terminal job whose results are already present in the `runTask` response,
+  letting the client skip the poll-then-read round-trip. The neutral surface
+  already carries the born-terminal `status` fast-path (`JobRef.status`); an
+  inline **results** member is its natural companion. It is **reserved in prose
+  only** — there is no schema and no member for it, and none is built until
+  backend #2 exists to design it against. A `0.x` facade need not implement it;
+  the poll-then-`getJobResults` path is the whole v1 contract.
 
 ## Regenerating
 

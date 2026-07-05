@@ -20,6 +20,7 @@
 // House rules: functional style; `type`, not `interface`.
 // ---------------------------------------------------------------------------
 
+import { z } from 'zod';
 import type { TaskSummary } from '@/src/processing/types';
 import {
   parseJobHandles,
@@ -33,6 +34,39 @@ import type { TransportDescriptor } from './transport';
 
 const join = (base: string, path: string) =>
   `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+
+// ---------------------------------------------------------------------------
+// Task-summary parsing — advisory pass-through, fail SOFT (Seam 2)
+//
+// Task summaries are advisory display metadata for the picker, not contract
+// vocabulary, so this is a LIGHT, lenient guard — not the wire validators. It
+// requires only the two fields the picker cannot render without (id/title) and
+// keeps every other advisory hint (description/dockerImage/category) verbatim
+// (extra keys ride through untouched). A malformed entry is DROPPED WITH A
+// WARNING, never thrown on: one bad summary must never kill the whole picker —
+// the same fail-closed-per-item split the parameter form uses (one bad param
+// never kills a form). A non-array payload degrades to an empty list. This is
+// deliberately VolView's own light zod schema, NOT one derived from the contract
+// wire schemas (that wire-layer dedupe is a later chunk).
+// ---------------------------------------------------------------------------
+const taskSummarySchema = z.object({
+  id: z.string(),
+  title: z.string(),
+});
+
+const parseTaskSummaries = (raw: unknown): TaskSummary[] => {
+  if (!Array.isArray(raw)) {
+    console.warn('processing: task list was not an array; ignoring it');
+    return [];
+  }
+  return raw.filter((entry): entry is TaskSummary => {
+    const parsed = taskSummarySchema.safeParse(entry);
+    if (!parsed.success) {
+      console.warn('processing: dropping malformed task summary', entry);
+    }
+    return parsed.success;
+  });
+};
 
 const id = (taskOrJobId: string) => encodeURIComponent(taskOrJobId);
 
@@ -78,9 +112,10 @@ export const defaultDescriptor: TransportDescriptor = {
   lifecycle: 'poll',
 
   format: {
-    // Task summaries are advisory display metadata, kept as a pass-through (no
-    // schema) — transport, not vocabulary.
-    parseTasks: (raw) => raw as TaskSummary[],
+    // Task summaries are advisory display metadata. A LIGHT, lenient guard drops
+    // a malformed entry with a warning (only id/title required) and passes every
+    // advisory hint through verbatim — one bad summary never kills the picker.
+    parseTasks: parseTaskSummaries,
     parseSpec: parseTaskSpecEnvelope,
     parseRunResponse: parseJobRef,
     parseStatus: parseJobStatus,

@@ -88,11 +88,21 @@ const envelopeComponentSchemas = (): Record<string, unknown> => ({
     type: 'object',
     description:
       'Advisory display metadata for one task in the picker. Pass-through: the ' +
-      'client renders it but validates only id/title; extra hints are ignored.',
+      'client renders it but validates only id/title; every other field is ' +
+      'OPTIONAL advisory display metadata a backend MAY omit, and the client ' +
+      'never dispatches on it — including `dockerImage`, a display-only ' +
+      'implementation label with no neutral semantics.',
     properties: {
       id: { type: 'string' },
       title: { type: 'string' },
       description: { type: 'string' },
+      dockerImage: {
+        type: 'string',
+        description:
+          'Optional advisory implementation label shown in the picker. ' +
+          'Display-only: a backend MAY omit it and the client never dispatches ' +
+          'on it.',
+      },
       category: { type: 'array', items: { type: 'string' } },
     },
     required: ['id', 'title'],
@@ -435,16 +445,27 @@ export const buildOpenApiDocument = (): Record<string, unknown> => ({
   jsonSchemaDialect: 'https://json-schema.org/draft/2020-12/schema',
   info: {
     title: 'VolView neutral processing contract',
-    version: `1.${SPEC_VERSION}.${INTENT_VOCABULARY_VERSION}`,
+    // The ARTIFACT's own draft version (D12): a private draft 0.x carrying no
+    // stability promise, DISTINCT from the shape versions (INTENT_VOCABULARY_
+    // VERSION / specVersion) below. It is deliberately literal, not derived from
+    // the shape-version constants — the artifact and the shapes version on
+    // separate clocks. 1.0 is stamped only when a second backend's shim passes
+    // the conformance kit.
+    version: '0.1.0',
     description:
+      'DRAFT 0.x — shapes may change until a second backend passes the ' +
+      'conformance kit (the pinned 1.0 criterion). ' +
       'The neutral REST surface the VolView client calls to run processing ' +
       'tasks against a backend. A conforming server-side FACADE implements ' +
       'these endpoints and the referenced wire schemas — no VolView client ' +
       'change is needed to bring a new backend online. Everything here is ' +
       'neutral: no backend routes, ids, status enums, or URL shapes leak. The ' +
-      'result-intent vocabulary is versioned by INTENT_VOCABULARY_VERSION; the ' +
-      'task-spec shape by specVersion. This states the SEAM, not the ' +
-      'north-star executable binding descriptor (deferred to backend #2).',
+      'artifact version (0.1.0) is the draft artifact version, distinct from ' +
+      'the shape versions: the result-intent vocabulary is at version ' +
+      `${INTENT_VOCABULARY_VERSION} (INTENT_VOCABULARY_VERSION); the task-spec ` +
+      `shape at version ${SPEC_VERSION} (specVersion). This states the SEAM, ` +
+      'not the north-star executable binding descriptor (deferred to backend ' +
+      '#2).',
   },
   servers: [
     {
