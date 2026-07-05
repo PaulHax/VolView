@@ -112,8 +112,11 @@ describe('task-spec field kinds', () => {
   });
 
   it('declares outputs with a semantic type tag', () => {
+    // Chunk 34: the segmentation CLIs emit a single `.seg.nrrd` labelmap whose
+    // per-label names/colors ride *inside* the file as embedded metadata — the
+    // old `.json` sidecar (`type: 'file'`) is gone, so a lone `labelmap` output.
     const outputs = specByName['otsu-segmentation'].outputs;
-    expect(outputs.map((o) => o.type)).toEqual(['labelmap', 'file']);
+    expect(outputs.map((o) => o.type)).toEqual(['labelmap']);
   });
 
   it('accepts the optional `widget` renderer-override hint', () => {

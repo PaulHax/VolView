@@ -11,6 +11,7 @@ import { normalizeForStore, removeFromArray } from '@/src/utils';
 import { SegmentMask } from '@/src/types/segment';
 import { DEFAULT_SEGMENT_MASKS, CATEGORICAL_COLORS } from '@/src/config';
 import { readImage, writeSegmentation } from '@/src/io/readWriteImage';
+import { parseSegNrrdMetadata } from '@/src/io/segNrrdMetadata';
 import {
   type DataSelection,
   getImage,
@@ -292,6 +293,16 @@ export const useSegmentGroupStore = defineStore('segmentGroup', () => {
           visible: true,
         }));
       }
+    }
+
+    // Slicer-convention `.seg.nrrd` embedded metadata (Chunk 34): a labelmap
+    // produced by a backend CLI carries its real segment names/colors in the
+    // NRRD header, captured onto the loaded image at import. Recover them here
+    // rather than falling back to the default numbering below.
+    const embedded = imageCacheStore.imageById[imageId]?.segmentMetadata;
+    if (embedded) {
+      const parsed = parseSegNrrdMetadata(embedded);
+      if (parsed?.length) return parsed;
     }
 
     const [min, max] = image.getPointData().getScalars().getRange();

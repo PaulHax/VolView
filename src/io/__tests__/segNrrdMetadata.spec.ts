@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildSegNrrdMetadata,
   maybeBuildSegNrrdMetadata,
+  parseSegNrrdMetadata,
 } from '@/src/io/segNrrdMetadata';
 import type { SegmentGroupMetadata } from '@/src/store/segmentGroups';
 
@@ -82,5 +83,53 @@ describe('maybeBuildSegNrrdMetadata gates on the exact seg.nrrd token', () => {
     expect(maybeBuildSegNrrdMetadata('nrrd', metadata, dims)).toBeUndefined();
     expect(maybeBuildSegNrrdMetadata('nii.gz', metadata, dims)).toBeUndefined();
     expect(maybeBuildSegNrrdMetadata('vti', metadata, dims)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Read side (Chunk 34): parseSegNrrdMetadata is the faithful inverse of the
+// writer — a labelmap produced by a backend CLI arrives with its real
+// names/colors, not the default numbering.
+// ---------------------------------------------------------------------------
+
+describe('parseSegNrrdMetadata recovers segment descriptors from header metadata', () => {
+  it('round-trips buildSegNrrdMetadata: names, label values, colors back to 0–255', () => {
+    const parsed = parseSegNrrdMetadata(buildSegNrrdMetadata(metadata, dims));
+    expect(parsed).toEqual([
+      { value: 1, name: 'Tumor', color: [255, 0, 0, 255], visible: true },
+      // 0.501961 → round(0.501961*255) = 128; 1.000000 → 255.
+      { value: 2, name: 'Edema', color: [0, 128, 255, 255], visible: true },
+    ]);
+  });
+
+  it('parses the exact key spelling the client writer emits (hand-written map)', () => {
+    const m = new Map<string, string>([
+      ['Segment0_Name', 'Region 1 (lowest)'],
+      ['Segment0_Color', '0.905882 0.298039 0.235294'],
+      ['Segment0_LabelValue', '1'],
+    ]);
+    expect(parseSegNrrdMetadata(m)).toEqual([
+      {
+        value: 1,
+        name: 'Region 1 (lowest)',
+        color: [231, 76, 60, 255],
+        visible: true,
+      },
+    ]);
+  });
+
+  it('returns undefined when no Segment* metadata is present (default fallback)', () => {
+    expect(parseSegNrrdMetadata(new Map())).toBeUndefined();
+    expect(
+      parseSegNrrdMetadata(new Map([['ITK_InputFilterName', 'NrrdImageIO']]))
+    ).toBeUndefined();
+  });
+
+  it('stops at the first fully-absent index (contiguous segments only)', () => {
+    const m = buildSegNrrdMetadata(metadata, dims);
+    m.set('Segment5_Name', 'orphan'); // a gap at 2..4 → 5 must not be reached
+    m.set('Segment5_LabelValue', '9');
+    const parsed = parseSegNrrdMetadata(m)!;
+    expect(parsed.map((s) => s.value)).toEqual([1, 2]);
   });
 });
