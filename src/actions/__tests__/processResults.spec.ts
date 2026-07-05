@@ -31,8 +31,9 @@ const mocks = vi.hoisted(() => ({
     string,
     { source?: { jobId: string; outputId: string } }
   >,
-  // Message center: the explicit JobList path surfaces an error when a result
-  // fails to load (#7); the auto-show path must stay silent.
+  // Message center. applyIntent no longer messages directly (#7): it reports
+  // failure via its return value and JobList.dispatch owns the user-facing toast,
+  // so these tests assert the applier NEVER calls addError.
   addError: vi.fn(),
 }));
 
@@ -121,7 +122,11 @@ afterEach(() => {
 
 describe('applyIntent', () => {
   it('add-base-image opens the file as a new dataset', async () => {
-    await applyIntent({ intent: 'add-base-image', ...file }, context('parent'));
+    const applied = await applyIntent(
+      { intent: 'add-base-image', ...file },
+      context('parent')
+    );
+    expect(applied).toBe(true);
     expect(mocks.loadUrls).toHaveBeenCalledWith({
       urls: [file.url],
       names: [file.name],
@@ -146,7 +151,11 @@ describe('applyIntent', () => {
   });
 
   it('add-layer attaches a layer onto the originating dataset', async () => {
-    await applyIntent({ intent: 'add-layer', ...file }, context('parent'));
+    const applied = await applyIntent(
+      { intent: 'add-layer', ...file },
+      context('parent')
+    );
+    expect(applied).toBe(true);
     expect(mocks.addLayer).toHaveBeenCalledWith('parent', 'child-selection');
     expect(mocks.loadUrls).not.toHaveBeenCalled();
   });
@@ -231,24 +240,29 @@ describe('applyIntent', () => {
     });
   });
 
-  it('add-segment-group surfaces an error when the result fails to load (#7)', async () => {
-    // loadAsImport returns null (404/corrupt/non-volume) — the explicit JobList
-    // action must say why instead of silently no-oping (JobList's catch only
-    // fires on THROWN errors, and loadAsImport never throws).
+  it('add-segment-group reports failure (false) when the result fails to load (#7)', async () => {
+    // loadAsImport returns null (404/corrupt/non-volume). applyIntent reports the
+    // failure via its return value rather than messaging; JobList.dispatch owns
+    // the toast so the same site also covers a THROWN apply failure.
     mocks.importDataSources.mockResolvedValue([]);
-    await applyIntent(
+    const applied = await applyIntent(
       { intent: 'add-segment-group', ...file },
       context('parent')
     );
     expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
-    expect(mocks.addError).toHaveBeenCalledTimes(1);
+    expect(applied).toBe(false);
+    expect(mocks.addError).not.toHaveBeenCalled();
   });
 
-  it('add-layer surfaces an error when the result fails to load (#7)', async () => {
+  it('add-layer reports failure (false) when the result fails to load (#7)', async () => {
     mocks.importDataSources.mockResolvedValue([]);
-    await applyIntent({ intent: 'add-layer', ...file }, context('parent'));
+    const applied = await applyIntent(
+      { intent: 'add-layer', ...file },
+      context('parent')
+    );
     expect(mocks.addLayer).not.toHaveBeenCalled();
-    expect(mocks.addError).toHaveBeenCalledTimes(1);
+    expect(applied).toBe(false);
+    expect(mocks.addError).not.toHaveBeenCalled();
   });
 
   it('is additive-only: writes into the NEW group, never a pre-existing one', async () => {

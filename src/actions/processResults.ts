@@ -59,7 +59,6 @@ import { isVolumeResult } from '@/src/io/import/common';
 import { getImage } from '@/src/utils/dataSelection';
 import { useLayersStore } from '@/src/store/datasets-layers';
 import { useSegmentGroupStore } from '@/src/store/segmentGroups';
-import { useMessageStore } from '@/src/store/messages';
 import { useJobResultReviewStore } from '@/src/store/jobResultReview';
 import { loadUrls } from './loadUserFiles';
 
@@ -77,17 +76,6 @@ async function loadAsImport(file: ResultFile) {
     .filter((r) => r.type === 'data')
     .filter(isVolumeResult);
   return loaded[0] ? toDataSelection(loaded[0]) : null;
-}
-
-// Surface a failed result load on the explicit JobList path (a user CLICK that
-// no-ops must say why). `loadAsImport` returns null — never throws — on a 404 /
-// corrupt / non-volume file, so JobList's catch never fires; the auto-show path
-// stays silent by design.
-function reportResultLoadFailed(name: string, kind: string) {
-  useMessageStore().addError(`Could not add "${name}" as a ${kind}`, {
-    details:
-      'The result file could not be loaded — it may be missing, corrupt, or not a volume image.',
-  });
 }
 
 /**
@@ -145,16 +133,18 @@ async function convertAndDescribe(
   return ids;
 }
 
+// Returns false when the result file could not be loaded (a null load — 404 /
+// corrupt / non-volume), so `applyIntent`'s caller can surface one message for
+// this and for a thrown apply failure alike. The auto-show path does not route
+// through here, so it stays silent.
 async function applySegmentGroup(
   intent: SegmentGroupIntent,
   parentSelection: string
-) {
+): Promise<boolean> {
   const childSelection = await loadAsImport(intent);
-  if (!childSelection) {
-    reportResultLoadFailed(intent.name, 'segment group');
-    return;
-  }
+  if (!childSelection) return false;
   await convertAndDescribe(childSelection, parentSelection, intent);
+  return true;
 }
 
 /**
@@ -164,11 +154,17 @@ async function applySegmentGroup(
  *
  * Fail closed: an unknown intent name, or a known name whose payload fails the
  * strict schema, applies nothing (the safe `download` floor).
+ *
+ * Returns `true` when the intent was handled — applied, or an intentional no-op
+ * (`download`, the fail-closed floor) — and `false` only when the result file
+ * could not be loaded. The single explicit caller (`JobList.dispatch`) turns a
+ * `false` return, and any thrown apply error, into ONE user-facing message; the
+ * separate auto-show pipeline never calls this, so it stays silent.
  */
 export async function applyIntent(
   intent: ResultIntent,
   context: SubmittedJobContext | undefined
-): Promise<void> {
+): Promise<boolean> {
   const parentSelection = context?.activeDatasetId;
   // Open the result as a new top-level dataset. Also the fallback when a
   // parent-requiring intent has no originating dataset to attach to.
@@ -179,42 +175,39 @@ export async function applyIntent(
   // result (e.g. broken `segments`) must not be applied as a segment group —
   // it degrades to download exactly like an unknown name.
   const known = knownResultIntentSchema.safeParse(intent);
-  if (!known.success) return; // unknown / invalid -> download floor (no-op)
+  if (!known.success) return true; // unknown / invalid -> download floor (no-op, not a failure)
   const resolved = known.data;
 
   switch (resolved.intent) {
     case 'add-base-image':
     case 'restore-state':
       await openAsDataset(resolved);
-      return;
+      return true;
     case 'download':
       // No store mutation — the file is surfaced as a link in JobList.
-      return;
+      return true;
     case 'add-layer': {
       if (!parentSelection) {
         await openAsDataset(resolved);
-        return;
+        return true;
       }
       const childSelection = await loadAsImport(resolved);
-      if (!childSelection) {
-        reportResultLoadFailed(resolved.name, 'layer');
-        return;
-      }
+      if (!childSelection) return false;
       await useLayersStore().addLayer(parentSelection, childSelection);
-      return;
+      return true;
     }
     case 'add-segment-group': {
       if (!parentSelection) {
         await openAsDataset(resolved);
-        return;
+        return true;
       }
-      await applySegmentGroup(resolved, parentSelection);
-      return;
+      return applySegmentGroup(resolved, parentSelection);
     }
     default: {
       // Exhaustive over the five known intents.
       const exhaustive: never = resolved;
       void exhaustive;
+      return true;
     }
   }
 }

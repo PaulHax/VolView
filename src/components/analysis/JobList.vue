@@ -131,6 +131,7 @@
 import { computed, reactive } from 'vue';
 
 import { useProvidersStore } from '@/src/store/providers';
+import { useMessageStore } from '@/src/store/messages';
 import { applyIntent } from '@/src/actions/processResults';
 import type { ResultIntent } from '@/processing-contract';
 import {
@@ -141,6 +142,7 @@ import {
 import type { ProcessingResult } from '@/src/processing/types';
 
 const providers = useProvidersStore();
+const messageStore = useMessageStore();
 
 const jobs = computed(() => Array.from(providers.jobs.values()));
 const failedJobs = computed(() =>
@@ -203,6 +205,30 @@ function actionToIntent(
   }
 }
 
+// Wording for the failure toast, mirroring the noun on the clicked button.
+const ACTION_NOUN: Record<'open' | 'layer' | 'segmentGroup', string> = {
+  open: 'a dataset',
+  layer: 'a layer',
+  segmentGroup: 'a segment group',
+};
+const LOAD_FAILED_DETAIL =
+  'The result file could not be loaded — it may be missing, corrupt, or not a volume image.';
+
+function reportActionFailed(
+  result: ProcessingResult,
+  action: 'open' | 'layer' | 'segmentGroup',
+  details: string
+) {
+  messageStore.addError(
+    `Could not add "${result.name}" as ${ACTION_NOUN[action]}`,
+    { details }
+  );
+}
+
+// The single explicit-action boundary. Both ways applying a result can fail
+// surface here as one message: a null load (`applyIntent` returns false) and a
+// thrown store call (e.g. `convertImageToLabelmap` on non-intersecting bounds).
+// The auto-show pipeline is separate and stays silent on a declined result.
 async function dispatch(
   jobId: string,
   result: ProcessingResult,
@@ -212,9 +238,11 @@ async function dispatch(
   loadingResultIds.add(key);
   try {
     const ctx = providers.submittedContexts.get(jobId);
-    await applyIntent(actionToIntent(action, result), ctx);
+    const applied = await applyIntent(actionToIntent(action, result), ctx);
+    if (!applied) reportActionFailed(result, action, LOAD_FAILED_DETAIL);
   } catch (err) {
     console.error('Failed to load result', result, err);
+    reportActionFailed(result, action, String(err));
   } finally {
     loadingResultIds.delete(key);
   }
