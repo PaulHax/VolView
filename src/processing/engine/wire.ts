@@ -28,6 +28,8 @@
 import { z } from 'zod';
 import {
   neutralJobHandleSchema,
+  neutralJobStatusSchema,
+  segmentDescriptorSchema as contractSegmentDescriptorSchema,
   type NeutralJobHandle,
 } from '@/processing-contract';
 import type {
@@ -35,40 +37,40 @@ import type {
   ProcessingJobStatus,
   JobResultsBundle,
 } from '@/src/processing/types';
-import { JOB_STATES } from '@/src/processing/types';
 
 // ---------------------------------------------------------------------------
 // Schemas
 //
-// `passthrough()` keeps unknown keys so a valid payload round-trips
-// byte-identically — the happy path must not change shape.
+// These are DERIVED from the contract's canonical objects (the ONE normative
+// definition, `processing-contract/wire.ts`) — extended/loosened rather than
+// re-declared — so the client's wire layer cannot drift from the contract
+// (dedupe, review §5.4). `passthrough()` keeps unknown keys so a valid payload
+// round-trips byte-identically — the happy path must not change shape.
 // ---------------------------------------------------------------------------
 
-const jobState = z.enum(JOB_STATES);
-
-// `satisfies` pins the schema to the core type (same idiom as `config.ts`) so
-// the two cannot drift. `resultSchema` below cannot adopt it — its
-// `.catch()`/`.nullish()` widen the inferred type past `ProcessingResult` —
-// which is why only the status schema carries the guard.
-const jobStatusSchema = z
-  .object({
-    // A usable job id is mandatory, same as the ref envelope below — nothing
-    // can be tracked or completion-keyed without it.
+// Derived from the contract's `neutralJobStatusSchema`: the engine tightens only
+// `jobId` (a usable id is mandatory at the trust boundary — nothing can be tracked
+// or completion-keyed without it; the contract leaves it a plain producer-side
+// string), inheriting `state`/`progress`/`errorTail` unchanged. `satisfies` pins
+// the schema to the core type (same idiom as `config.ts`) so the two cannot drift.
+// `resultSchema` below cannot adopt it — its `.nullish()`/`.transform()` widen the
+// inferred type past `ProcessingResult` — which is why only the status schema
+// carries the guard.
+const jobStatusSchema = neutralJobStatusSchema
+  .extend({
     jobId: z.string().min(1),
-    state: jobState,
-    progress: z.number().optional(),
-    errorTail: z.string().optional(),
   })
   .passthrough() satisfies z.ZodType<ProcessingJobStatus>;
 
-// Structural-only segment descriptor (bounds enforced downstream in
-// `resultToIntent`): channels and label index are plain numbers here.
-const segmentDescriptorSchema = z
-  .object({
+// Derived from the contract's `segmentDescriptorSchema`, keeping `name`/`visible`
+// but LOOSENING the semantic bounds: the contract enforces `value >= 1` and RGBA
+// `0-255`, whereas the engine wire layer validates STRUCTURE only (plain numbers),
+// deferring those bounds downstream to `resultToIntent` so a single out-of-range
+// descriptor cannot reject a whole result list and drop an otherwise-valid image.
+const segmentDescriptorSchema = contractSegmentDescriptorSchema
+  .extend({
     value: z.number(),
-    name: z.string(),
     color: z.tuple([z.number(), z.number(), z.number(), z.number()]),
-    visible: z.boolean().optional(),
   })
   .passthrough();
 

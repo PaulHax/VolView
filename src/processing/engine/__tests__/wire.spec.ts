@@ -133,6 +133,25 @@ describe('parseResults', () => {
     expect(parseResults({ intents, missing: 0 }).results).toEqual(intents);
   });
 
+  it('structurally accepts an out-of-range segment descriptor (bounds deferred downstream)', () => {
+    // The engine wire schema is DERIVED from the contract's segmentDescriptorSchema
+    // but LOOSENS its bounds back to plain numbers: `value` and RGBA channels the
+    // contract rejects (0-background value, a >255 channel) must pass here so a
+    // single out-of-range descriptor cannot throw away a whole result list — the
+    // semantic bounds live downstream in `resultToIntent`. This pins the "loosen,
+    // don't inherit" derivation (a naive `.extend()` would re-impose the bounds).
+    const intents = [
+      {
+        id: 'r1',
+        name: 'seg.nrrd',
+        url: 'https://example/seg.nrrd',
+        intent: 'add-segment-group',
+        segments: [{ value: 0, name: 'bg', color: [300, -5, 0, 255] }],
+      },
+    ];
+    expect(parseResults({ intents, missing: 0 }).results).toEqual(intents);
+  });
+
   it('tolerates null mimeType/size (the facade emits absent file fields as null)', () => {
     const intents = [
       {

@@ -114,6 +114,43 @@ describe('engine transport reads its descriptor + uses $fetch', () => {
     expect(resultsB.results[0].id).toBe('B-result');
   });
 
+  // Chunk 33: the three job-addressed endpoints (status/results/cancel) are keyed
+  // by job id alone and folder-free (D5), so the transport routes them through the
+  // explicit `jobsBaseUrl` — while the launch-context endpoints keep `baseUrl`.
+  it('routes job-addressed endpoints through jobsBaseUrl, others through baseUrl', async () => {
+    const calls = stubFetch({ state: 'running' });
+    const engine = createEngineTransport(
+      'http://host',
+      descriptorFor('A'),
+      'http://jobs'
+    );
+
+    await engine.listTasks();
+    await engine.getJob('j1');
+    await engine.getResults('j1');
+    await engine.cancelJob('j1');
+
+    // Launch-context endpoint → baseUrl.
+    expect(calls[0].url).toBe('http://host/A/tasks');
+    // Job-addressed endpoints → jobsBaseUrl.
+    expect(calls[1].url).toBe('http://jobs/A/status/j1');
+    expect(calls[2].url).toBe('http://jobs/A/results/j1');
+    expect(calls[3].url).toBe('http://jobs/A/cancel/j1');
+  });
+
+  // Fallback (additive): an absent jobsBaseUrl leaves the job-addressed endpoints
+  // on baseUrl, so a pre-upgrade facade/descriptor keeps working unchanged.
+  it('falls back to baseUrl for job-addressed endpoints when jobsBaseUrl is omitted', async () => {
+    const calls = stubFetch({ state: 'running' });
+    const engine = createEngineTransport('http://host', descriptorFor('A'));
+
+    await engine.getJob('j1');
+    await engine.cancelJob('j1');
+
+    expect(calls[0].url).toBe('http://host/A/status/j1');
+    expect(calls[1].url).toBe('http://host/A/cancel/j1');
+  });
+
   // Lifecycle axis is read from the descriptor. Only `poll` is built in v1; the
   // engine fails closed on any other lifecycle rather than mis-driving a job.
   it('reads the lifecycle axis and fails closed on the unbuilt inline driver', async () => {

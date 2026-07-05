@@ -25,7 +25,14 @@ import { defaultDescriptor } from './descriptor';
 export const createProvider = (
   config: ProcessingProviderConfig
 ): ProcessingProvider => {
-  const transport = createEngineTransport(config.baseUrl, defaultDescriptor);
+  // The job-addressed routes (status/results/cancel) are folder-free (D5): the
+  // facade advertises their explicit root as `config.jobsBaseUrl`. Absent, the
+  // transport falls back to `config.baseUrl` (additive — a pre-upgrade facade).
+  const transport = createEngineTransport(
+    config.baseUrl,
+    defaultDescriptor,
+    config.jobsBaseUrl
+  );
   return {
     config,
     // Tier-2 capability (Chunk 19, D5): forwarded ONLY when the transport

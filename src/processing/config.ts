@@ -13,6 +13,11 @@ const processingProviderConfig = z.object({
   id: z.string(),
   label: z.string(),
   baseUrl: z.string(),
+  // Explicit folder-free base for the job-addressed routes (status/results/cancel;
+  // D5). MUST be listed here because zod strips unknown keys — omitting it would
+  // silently drop a facade-sent jobsBaseUrl before it reaches the provider. Absent
+  // ⇒ the transport falls back to baseUrl (additive).
+  jobsBaseUrl: z.string().optional(),
   context: processingContext.optional(),
 });
 
@@ -44,18 +49,33 @@ export const withProcessingConfig = <Shape extends z.ZodRawShape>(
 const isProviderOriginAllowed = async (
   config: ProcessingProviderConfig
 ): Promise<boolean> => {
-  const origin = resolveOrigin(config.baseUrl);
-  if (!origin) {
+  // Gate EVERY egress target the provider would reach: the folder-scoped baseUrl
+  // and (when present) the folder-free jobsBaseUrl the job-addressed routes use.
+  // Both carry the bearer via `$fetch`, so an ungated jobsBaseUrl would be a
+  // token-exfiltration hole — fail closed on either (D9, the single egress gate).
+  const targets = [config.baseUrl, config.jobsBaseUrl].filter(
+    (url): url is string => url !== undefined
+  );
+
+  const invalid = targets.find((url) => resolveOrigin(url) === null);
+  if (invalid !== undefined) {
     console.warn(
-      `Skipping processing provider "${config.id}" because baseUrl is invalid: ${config.baseUrl}`
+      `Skipping processing provider "${config.id}" because baseUrl is invalid: ${invalid}`
     );
     return false;
   }
 
-  if (await isOriginAllowed(config.baseUrl)) return true;
+  const rejected = (
+    await Promise.all(
+      targets.map(async (url) => ({ url, allowed: await isOriginAllowed(url) }))
+    )
+  ).find((r) => !r.allowed);
+  if (!rejected) return true;
 
   console.warn(
-    `Skipping processing provider "${config.id}" because origin "${origin}" is not allowed`
+    `Skipping processing provider "${config.id}" because origin "${resolveOrigin(
+      rejected.url
+    )}" is not allowed`
   );
   return false;
 };

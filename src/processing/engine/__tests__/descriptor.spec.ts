@@ -5,10 +5,13 @@ import type { TaskSummary } from '@/src/processing/types';
 
 // The neutral-facade default descriptor is the ONE place that knows the facade's
 // URL layout. These pin the job-addressed / folder-free split (D5, Chunk 18):
-// the launch-context endpoints stay folder-scoped, the job endpoints re-root to
-// the folder-free `volview_processing` surface.
+// the launch-context endpoints are handed the folder-scoped baseUrl, the three
+// job endpoints are handed the explicit folder-free jobsBaseUrl (the transport
+// supplies it — Chunk 33 replaced the former `jobsRoot` route-root regex with a
+// second base URL; review §4.6/§6.4). Every template now simply joins.
 
 const FOLDER_BASE = '/api/v1/folder/abc123/volview_processing';
+const JOBS_BASE = '/api/v1/volview_processing';
 const { endpoints } = defaultDescriptor;
 
 describe('default descriptor endpoint templates', () => {
@@ -35,28 +38,30 @@ describe('default descriptor endpoint templates', () => {
     expect(defaultDescriptor.format.parseJobHandles).toBeTypeOf('function');
   });
 
-  it('re-roots job-addressed endpoints off the folder (D5)', () => {
-    // The `folder/<id>/` segment is dropped: a job is addressed by id alone.
-    expect(endpoints.jobStatus(FOLDER_BASE, 'job1')).toBe(
+  it('joins job-addressed endpoints off the explicit jobs base URL (D5)', () => {
+    // No folder to strip: a job is addressed by id alone, and the folder-free
+    // jobs base is handed in by the transport (config.jobsBaseUrl) — the template
+    // just joins, no route-root string surgery.
+    expect(endpoints.jobStatus(JOBS_BASE, 'job1')).toBe(
       '/api/v1/volview_processing/jobs/job1'
     );
-    expect(endpoints.jobResults(FOLDER_BASE, 'job1')).toBe(
+    expect(endpoints.jobResults(JOBS_BASE, 'job1')).toBe(
       '/api/v1/volview_processing/jobs/job1/results'
     );
-    expect(endpoints.cancel?.(FOLDER_BASE, 'job1')).toBe(
+    expect(endpoints.cancel?.(JOBS_BASE, 'job1')).toBe(
       '/api/v1/volview_processing/jobs/job1/cancel'
     );
   });
 
   it('percent-encodes the job id in job-addressed endpoints', () => {
-    expect(endpoints.cancel?.(FOLDER_BASE, 'a/b')).toBe(
+    expect(endpoints.cancel?.(JOBS_BASE, 'a/b')).toBe(
       '/api/v1/volview_processing/jobs/a%2Fb/cancel'
     );
   });
 
-  it('leaves an already folder-free baseUrl unchanged', () => {
-    // A deployment whose baseUrl is already the processing root has no folder to
-    // strip — job endpoints hang directly off it.
+  it('joins job-addressed endpoints off whatever base it is handed (pure join, no regex)', () => {
+    // The former `jobsRoot` regex is gone: the descriptor performs no route-root
+    // surgery, so a bare base hangs the job routes directly off it.
     const base = '/volview_processing';
     expect(endpoints.jobStatus(base, 'job1')).toBe(
       '/volview_processing/jobs/job1'

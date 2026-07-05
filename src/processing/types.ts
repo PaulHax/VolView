@@ -13,14 +13,30 @@ import type { TaskSpecEnvelope } from '@/src/processing/engine/taskSpec';
 // (contract "Seam 1 — inputs"; Chunk 8). `{ type, format?, uris }`.
 import type {
   InputValue,
+  JobState,
   NeutralJobHandle,
   ResultSource,
+  SegmentDescriptor,
 } from '@/processing-contract';
+import { JOB_STATES } from '@/processing-contract';
+
+// The contract (`processing-contract/wire.ts`) is the ONE normative definition of
+// the shared wire vocabulary. Re-export its job-lifecycle tuple + type here so the
+// client binds to that single source of truth instead of redeclaring it — the
+// dedupe review §5.4 calls for. `JOB_STATES` is the runtime tuple; `JobState` the
+// neutral union.
+export { JOB_STATES };
+export type { JobState };
 
 export type ProcessingProviderConfig = {
   id: string;
   label: string;
   baseUrl: string;
+  // OPTIONAL explicit base for the job-addressed routes (status/results/cancel),
+  // which are keyed by job id alone and served off a folder-free surface (D5). The
+  // facade sends `/api/v1/volview_processing`; when absent the transport falls back
+  // to `baseUrl`, so a pre-upgrade facade or client keeps working (additive, D2).
+  jobsBaseUrl?: string;
   context?: ProcessingContext;
 };
 
@@ -101,18 +117,9 @@ export type ProcessingValue =
   | InputValue
   | null;
 
-/** Job lifecycle states (closed vocabulary; shared with the wire schema). */
-export const JOB_STATES = [
-  'pending',
-  'running',
-  'success',
-  'error',
-  'cancelled',
-] as const;
-
 export type ProcessingJobStatus = {
   jobId: string;
-  state: (typeof JOB_STATES)[number];
+  state: JobState;
   progress?: number;
   errorTail?: string;
 };
@@ -131,13 +138,10 @@ export type ProcessingJobRef = {
   status?: ProcessingJobStatus;
 };
 
-export type ProcessingSegmentDescriptor = {
-  value: number;
-  name: string;
-  /** RGBA, 0-255. */
-  color: [number, number, number, number];
-  visible?: boolean;
-};
+// The segment descriptor shape is the contract's canonical `SegmentDescriptor`
+// (`processing-contract/wire.ts`) — aliased here rather than redeclared so the two
+// cannot drift (dedupe, review §5.4). RGBA 0-255; `value` a label index >= 1.
+export type ProcessingSegmentDescriptor = SegmentDescriptor;
 
 export type ProcessingResult = {
   id: string;

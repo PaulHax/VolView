@@ -73,24 +73,22 @@ const id = (taskOrJobId: string) => encodeURIComponent(taskOrJobId);
 // Job routes are addressed by job id alone (D5) — the launch folder is not part
 // of a job's identity, so the facade serves them off a folder-free
 // `volview_processing` surface. The launch-context endpoints (tasks/spec/run/
-// stage) genuinely operate per-folder and keep the folder-scoped baseUrl; the
-// job endpoints re-root by dropping the `folder/<id>/` segment. A baseUrl that
-// carries no folder (already the processing root) is left unchanged.
-const jobsRoot = (baseUrl: string) =>
-  baseUrl.replace(/\/folder\/[^/]+(?=\/[^/]+\/?$)/, '');
-
+// stage) genuinely operate per-folder and are handed the folder-scoped baseUrl;
+// the three job endpoints below are handed the explicit `jobsBaseUrl` (the facade
+// advertises `/api/v1/volview_processing`) by the transport, which falls back to
+// baseUrl when none is configured. No route-root string surgery here (the former
+// `jobsRoot` regex is gone — review §4.6/§6.4): every template just joins.
 export const defaultDescriptor: TransportDescriptor = {
   endpoints: {
     listTasks: (baseUrl) => join(baseUrl, 'tasks'),
     taskSpec: (baseUrl, taskId) => join(baseUrl, `tasks/${id(taskId)}/spec`),
     runTask: (baseUrl, taskId) => join(baseUrl, `tasks/${id(taskId)}/run`),
-    // Job-addressed + folder-free (D5): matches the facade routes
+    // Job-addressed + folder-free (D5): the `base` here is the transport-supplied
+    // jobsBaseUrl. Matches the facade routes
     // `GET|POST volview_processing/jobs/:jobId[/results|/cancel]`.
-    jobStatus: (baseUrl, jobId) => join(jobsRoot(baseUrl), `jobs/${id(jobId)}`),
-    jobResults: (baseUrl, jobId) =>
-      join(jobsRoot(baseUrl), `jobs/${id(jobId)}/results`),
-    cancel: (baseUrl, jobId) =>
-      join(jobsRoot(baseUrl), `jobs/${id(jobId)}/cancel`),
+    jobStatus: (base, jobId) => join(base, `jobs/${id(jobId)}`),
+    jobResults: (base, jobId) => join(base, `jobs/${id(jobId)}/results`),
+    cancel: (base, jobId) => join(base, `jobs/${id(jobId)}/cancel`),
     // Client-created labelmap inputs POST here for facade-minted URIs (Chunk 14
     // facade half; Chunk 15 client half). Matches the facade route
     // `POST folder/:folderId/volview_processing/stage`.

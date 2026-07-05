@@ -152,7 +152,14 @@ export type EngineTransport = {
 
 export const createEngineTransport = (
   baseUrl: string,
-  descriptor: TransportDescriptor
+  descriptor: TransportDescriptor,
+  // Explicit base for the three job-addressed endpoints (status/results/cancel),
+  // which are keyed by job id alone and folder-free (D5). The provider config
+  // supplies it (`/api/v1/volview_processing`); when absent it falls back to
+  // `baseUrl`, so a pre-upgrade facade or a descriptor built without an explicit
+  // jobs root keeps working (additive). The launch-context endpoints keep
+  // `baseUrl`.
+  jobsBaseUrl: string = baseUrl
 ): EngineTransport => {
   const { endpoints, format } = descriptor;
   // Tier-2 is capability-gated: the method exists ONLY when the descriptor
@@ -191,12 +198,12 @@ export const createEngineTransport = (
     getJob: async (jobId) =>
       format.parseStatus(
         jobId,
-        await requestJson(endpoints.jobStatus(baseUrl, jobId))
+        await requestJson(endpoints.jobStatus(jobsBaseUrl, jobId))
       ),
 
     getResults: async (jobId) =>
       format.parseResults(
-        await requestJson(endpoints.jobResults(baseUrl, jobId))
+        await requestJson(endpoints.jobResults(jobsBaseUrl, jobId))
       ),
 
     cancelJob: async (jobId) => {
@@ -212,7 +219,7 @@ export const createEngineTransport = (
       }
       return format.parseStatus(
         jobId,
-        await requestJson(cancel(baseUrl, jobId), { method: 'POST' })
+        await requestJson(cancel(jobsBaseUrl, jobId), { method: 'POST' })
       );
     },
 

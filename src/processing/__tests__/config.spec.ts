@@ -148,6 +148,63 @@ describe('processing config provider origins', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  // Chunk 33: the explicit folder-free `jobsBaseUrl` (job-addressed routes, D5)
+  // must SURVIVE the config zod schema — zod strips unknown keys, so a field the
+  // schema omits would be silently dropped before it reaches the provider.
+  it('preserves an explicit jobsBaseUrl through the config schema (not stripped)', async () => {
+    const providers = useProvidersStore();
+
+    const manifest = withProcessingConfig(baseConfig).parse({
+      processing: {
+        providers: [
+          {
+            id: 'analysis-provider',
+            label: 'Analysis',
+            baseUrl: '/api/v1/folder/abc/volview_processing',
+            jobsBaseUrl: '/api/v1/volview_processing',
+          },
+        ],
+      },
+    }) as Config;
+
+    await applyProcessingConfig(manifest);
+
+    const registered = providers.configs.get('analysis-provider');
+    expect(providers.providerCount).toBe(1);
+    expect(registered?.jobsBaseUrl).toBe('/api/v1/volview_processing');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  // ...and the egress gate covers jobsBaseUrl too (D9, fail closed): a provider
+  // whose baseUrl is same-origin but whose jobsBaseUrl points cross-origin is
+  // REFUSED — the job-addressed routes carry the bearer via $fetch, so an ungated
+  // jobsBaseUrl would be a token-exfiltration hole.
+  it('rejects a provider whose jobsBaseUrl is cross-origin (gate covers both bases)', async () => {
+    const providers = useProvidersStore();
+
+    const manifest = withProcessingConfig(baseConfig).parse({
+      processing: {
+        providers: [
+          {
+            id: 'analysis-provider',
+            label: 'Analysis',
+            baseUrl: '/api/v1/folder/abc/volview_processing',
+            jobsBaseUrl: 'https://analysis.example/jobs',
+          },
+        ],
+      },
+    }) as Config;
+
+    await applyProcessingConfig(manifest);
+
+    expect(providers.providerCount).toBe(0);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'origin "https://analysis.example" is not allowed'
+      )
+    );
+  });
+
   // ...and a PRE-upgrade facade that still emits the legacy `protocol`/`auth`
   // keys stays compatible: the non-strict zod object strips the unknown keys,
   // so registration is unaffected (old/new facade shapes both work).
