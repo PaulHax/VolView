@@ -896,7 +896,7 @@ describe('Providers store — tier-2 cold-reload re-discovery (Chunk 19)', () =>
     );
   });
 
-  it('records results but does not auto-apply when no base re-associates', async () => {
+  it('records results and still invokes auto-load when no base re-associates', async () => {
     const provider = makeProvider({
       listRecentJobs: vi
         .fn()
@@ -908,11 +908,12 @@ describe('Providers store — tier-2 cold-reload re-discovery (Chunk 19)', () =>
 
     await store.reattachRecentJobs();
 
-    // The job is tracked + its results fetched (JobList shows them) but there is
-    // no base to attach to, so the applier is not invoked.
-    expect(store.submittedContexts.get('jr')?.activeDatasetId).toBeUndefined();
+    // The job is tracked + its results fetched. With no base to attach to,
+    // labelmaps skip inside the applier, but plain images can still open.
+    const ctx = store.submittedContexts.get('jr');
+    expect(ctx?.activeDatasetId).toBeUndefined();
     expect(store.jobResults.get('jr')).toEqual(sampleResults);
-    expect(autoLoadMock).not.toHaveBeenCalled();
+    expect(autoLoadMock).toHaveBeenCalledWith(sampleResults, ctx, undefined);
   });
 
   it('a re-discovery listing failure is not fatal (logged, degrades)', async () => {

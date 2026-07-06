@@ -672,16 +672,14 @@ export const useProvidersStore = defineStore('providers', () => {
     }
     jobResults.set(handle.jobId, results);
 
-    // Headless auto-re-attach — additive-only, through the SAME applier tier-1
-    // uses (convertImageToLabelmap via the state-file restore path), gated by
-    // the watermark + scene-state idempotency. Dynamically imported so the
-    // provider store never statically pulls the loader graph into the boot
-    // bundle. With no re-associated base there is nothing to attach to.
-    if (baseId) {
-      const { autoLoadProcessingResults } =
-        await import('@/src/actions/processResults');
-      await autoLoadProcessingResults(results, context, watermark);
-    }
+    // Headless auto-load — additive-only, through the SAME applier tier-1 uses,
+    // gated by the watermark + scene-state idempotency. Dynamically imported so
+    // the provider store never statically pulls the loader graph into the boot
+    // bundle. With no re-associated base, labelmaps skip but plain images can
+    // still open as Data entries.
+    const { autoLoadProcessingResults } =
+      await import('@/src/actions/processResults');
+    await autoLoadProcessingResults(results, context, watermark);
   }
 
   async function reattachProviderJobs(

@@ -21,8 +21,6 @@ const mocks = vi.hoisted(() => ({
   addLayer: vi.fn(),
   convertImageToLabelmap: vi.fn(),
   updateSegment: vi.fn(),
-  // The corroboration guard (Chunk 22) reads the loaded child + parent images.
-  getImage: vi.fn(),
   // The live-only "new job result" badge (Chunk 22).
   markNew: vi.fn(),
   // Scene segment-group metadata, read by the tier-2 idempotency guard
@@ -31,9 +29,9 @@ const mocks = vi.hoisted(() => ({
     string,
     { source?: { jobId: string; outputId: string } }
   >,
-  // Message center. applyIntent no longer messages directly (#7): it reports
-  // failure via its return value and JobList.dispatch owns the user-facing toast,
-  // so these tests assert the applier NEVER calls addError.
+  // Message center. applyIntent reports failure via its return value; callers own
+  // any user-facing message, so these tests assert the applier never calls
+  // addError.
   addError: vi.fn(),
 }));
 
@@ -49,9 +47,6 @@ vi.mock('@/src/io/import/common', () => ({
 }));
 vi.mock('@/src/actions/loadUserFiles', () => ({
   loadUrls: mocks.loadUrls,
-}));
-vi.mock('@/src/utils/dataSelection', () => ({
-  getImage: mocks.getImage,
 }));
 vi.mock('@/src/store/datasets-layers', () => ({
   useLayersStore: () => ({ addLayer: mocks.addLayer }),
@@ -91,15 +86,6 @@ const result = (
   ...overrides,
 });
 
-// A fake vtkImageData for the corroboration guard: `max` is the top of the
-// scalar range (>= 1 = non-empty), `bounds` is the physical AABB.
-const OVERLAP = [0, 10, 0, 10, 0, 10];
-const DISJOINT = [100, 110, 100, 110, 100, 110];
-const makeImage = (max: number, bounds: number[] = OVERLAP) => ({
-  getPointData: () => ({ getScalars: () => ({ getRange: () => [0, max] }) }),
-  getBounds: () => bounds,
-});
-
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.metadataByID = {};
@@ -109,8 +95,6 @@ beforeEach(() => {
   ]);
   mocks.isVolumeResult.mockReturnValue(true);
   mocks.toDataSelection.mockReturnValue('child-selection');
-  // Default: the loaded labelmap corroborates (non-empty + overlaps the parent).
-  mocks.getImage.mockImplementation(() => makeImage(3, OVERLAP));
   // convertImageToLabelmap now returns the created group id(s); descriptors +
   // the badge key off the returned ids.
   mocks.convertImageToLabelmap.mockResolvedValue(['seg-group']);
@@ -321,7 +305,7 @@ describe('applyIntent', () => {
 });
 
 describe('autoLoadProcessingResults', () => {
-  it('auto-applies only add-segment-group results, ignoring the rest', async () => {
+  it('auto-loads base images and segment groups, ignoring the rest', async () => {
     mocks.convertImageToLabelmap.mockResolvedValue(['seg-group']);
     await autoLoadProcessingResults(
       [
@@ -343,11 +327,15 @@ describe('autoLoadProcessingResults', () => {
       { jobId: 'j1', outputId: 'seg' }
     );
     expect(mocks.updateSegment).toHaveBeenCalledTimes(1);
-    // The corroborated group is badged as a new job result (born-persistent).
+    // The created group is badged as a new job result (born-persistent).
     expect(mocks.markNew).toHaveBeenCalledTimes(1);
     expect(mocks.markNew).toHaveBeenCalledWith('seg-group');
-    // The base / layer results must not auto-load.
-    expect(mocks.loadUrls).not.toHaveBeenCalled();
+    expect(mocks.loadUrls).toHaveBeenCalledTimes(1);
+    expect(mocks.loadUrls).toHaveBeenCalledWith({
+      urls: [file.url],
+      names: [file.name],
+    });
+    // Layer results still wait for an explicit action.
     expect(mocks.addLayer).not.toHaveBeenCalled();
   });
 
@@ -361,7 +349,20 @@ describe('autoLoadProcessingResults', () => {
     expect(mocks.loadUrls).not.toHaveBeenCalled();
   });
 
-  it('applies nothing when there is no originating dataset', async () => {
+  it('opens base images even when there is no originating dataset', async () => {
+    await autoLoadProcessingResults(
+      [result({ intent: 'add-base-image' })],
+      context(undefined)
+    );
+    expect(mocks.loadUrls).toHaveBeenCalledWith({
+      urls: [file.url],
+      names: [file.name],
+    });
+    expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
+    expect(mocks.markNew).not.toHaveBeenCalled();
+  });
+
+  it('does not apply segment groups when there is no originating dataset', async () => {
     await autoLoadProcessingResults(
       [result({ intent: 'add-segment-group' })],
       context(undefined)
@@ -388,64 +389,32 @@ describe('autoLoadProcessingResults', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Corroboration guard (Chunk 22, work item 1): auto-show ONLY a validated
-// labelmap (decodes / non-empty / segments resolve / overlaps the parent). A
-// failing result is NOT auto-shown — it falls back to the explicit JobList path
-// as a downloadable file. The explicit `applyIntent` path is NOT gated (a user
-// click is the fallback itself).
-// ---------------------------------------------------------------------------
-
-describe('autoLoadProcessingResults — corroboration guard', () => {
+describe('autoLoadProcessingResults — labelmap auto-apply', () => {
   const segResult = () => result({ id: 'seg', intent: 'add-segment-group' });
 
-  it('auto-shows a corroborated result and badges it new', async () => {
+  it('auto-applies an importable labelmap and badges it new', async () => {
     mocks.convertImageToLabelmap.mockResolvedValue(['seg-group']);
     await autoLoadProcessingResults([segResult()], context('parent'));
     expect(mocks.convertImageToLabelmap).toHaveBeenCalledTimes(1);
     expect(mocks.markNew).toHaveBeenCalledWith('seg-group');
   });
 
-  it('does NOT auto-show an empty labelmap (no segment resolves)', async () => {
-    // Child scalar range tops out at background (0): nothing to show.
-    mocks.getImage.mockImplementation((id: string) =>
-      makeImage(id === 'parent' ? 3 : 0, OVERLAP)
-    );
+  it('lets the conversion path decide whether an imported labelmap can attach', async () => {
     await autoLoadProcessingResults([segResult()], context('parent'));
-    expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
-    expect(mocks.markNew).not.toHaveBeenCalled();
+    expect(mocks.convertImageToLabelmap).toHaveBeenCalledWith(
+      'child-selection',
+      'parent',
+      undefined
+    );
   });
 
-  it('does NOT auto-show a labelmap that does not overlap the parent', async () => {
-    mocks.getImage.mockImplementation((id: string) =>
-      makeImage(3, id === 'parent' ? OVERLAP : DISJOINT)
-    );
-    await autoLoadProcessingResults([segResult()], context('parent'));
-    expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
-    expect(mocks.markNew).not.toHaveBeenCalled();
-  });
-
-  it('does NOT auto-show a result that fails to decode', async () => {
+  it('does not auto-apply a result that fails to decode', async () => {
     // No importable volume -> loadAsImport returns null.
     mocks.importDataSources.mockResolvedValue([]);
     await autoLoadProcessingResults([segResult()], context('parent'));
     expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
     expect(mocks.markNew).not.toHaveBeenCalled();
-    // The AUTO-SHOW path stays fail-closed SILENT (#7 messages only on the
-    // explicit JobList action) — the result is still reachable as a JobList file.
     expect(mocks.addError).not.toHaveBeenCalled();
-  });
-
-  it('a failing guard is a pure no-op (still a JobList/download file)', async () => {
-    mocks.getImage.mockImplementation((id: string) =>
-      makeImage(id === 'parent' ? 3 : 0, OVERLAP)
-    );
-    await autoLoadProcessingResults([segResult()], context('parent'));
-    // No dataset opened, no layer, no segment group — the applier made no scene
-    // change, so the result remains only in JobList (downloadable).
-    expect(mocks.loadUrls).not.toHaveBeenCalled();
-    expect(mocks.addLayer).not.toHaveBeenCalled();
-    expect(mocks.convertImageToLabelmap).not.toHaveBeenCalled();
   });
 });
 

@@ -24,17 +24,10 @@
 //   `download`           -> no store mutation; surfaced as a link in JobList
 //   <unknown/invalid>    -> download floor
 //
-// Result REVIEW (Chunk 22; contract Seam 2 results half + D6). A validated
-// segment-group result AUTO-SHOWS: it applies as a NORMAL, born-persistent group
-// (no confirm/reject state machine) governed by the existing visibility/delete
-// UI, and is flagged with a cosmetic live-only "new job result" badge. Auto-show
-// is gated by a corroboration guard (decode / non-empty / segments resolve /
-// overlaps the parent); a result that fails the guard is NOT auto-shown and stays
-// available via the explicit JobList path as a downloadable/loadable file. The
-// auto-show pipeline is intent-kind-agnostic (a per-kind reviewer table), so the
-// deferred vector intents inherit the identical review behavior when they land.
+// Result auto-load (contract Seam 2 results half + D6). Plain image results open
+// as new top-level datasets. Segment-group results apply as NORMAL,
+// born-persistent groups when the originating parent image still exists.
 
-import vtkBoundingBox from '@kitware/vtk.js/Common/DataModel/BoundingBox';
 import {
   knownResultIntentSchema,
   type ResultIntent,
@@ -56,7 +49,6 @@ import {
   toDataSelection,
 } from '@/src/io/import/importDataSources';
 import { isVolumeResult } from '@/src/io/import/common';
-import { getImage } from '@/src/utils/dataSelection';
 import { useLayersStore } from '@/src/store/datasets-layers';
 import { useSegmentGroupStore } from '@/src/store/segmentGroups';
 import { useJobResultReviewStore } from '@/src/store/jobResultReview';
@@ -68,6 +60,7 @@ type SegmentGroupIntent = Extract<
   KnownResultIntent,
   { intent: 'add-segment-group' }
 >;
+type BaseImageIntent = Extract<KnownResultIntent, { intent: 'add-base-image' }>;
 
 async function loadAsImport(file: ResultFile) {
   const ds = uriToDataSource(file.url, file.name);
@@ -112,7 +105,7 @@ function applySegmentDescriptors(
  * Additive-only: `convertImageToLabelmap` never writes into an existing group,
  * and it threads the `source: {jobId, outputId}` tag through `addLabelmap` so the
  * group round-trips the `.volview.zip` (Chunk 11 stamps it; Chunk 19 reads it for
- * cold-reload idempotency). Shared by the explicit JobList action and auto-show.
+ * cold-reload idempotency). Shared by explicit actions and auto-apply.
  */
 async function convertAndDescribe(
   childSelection: string,
@@ -135,7 +128,7 @@ async function convertAndDescribe(
 
 // Returns false when the result file could not be loaded (a null load — 404 /
 // corrupt / non-volume), so `applyIntent`'s caller can surface one message for
-// this and for a thrown apply failure alike. The auto-show path does not route
+// this and for a thrown apply failure alike. The auto-load path does not route
 // through here, so it stays silent.
 async function applySegmentGroup(
   intent: SegmentGroupIntent,
@@ -157,9 +150,9 @@ async function applySegmentGroup(
  *
  * Returns `true` when the intent was handled — applied, or an intentional no-op
  * (`download`, the fail-closed floor) — and `false` only when the result file
- * could not be loaded. The single explicit caller (`JobList.dispatch`) turns a
- * `false` return, and any thrown apply error, into ONE user-facing message; the
- * separate auto-show pipeline never calls this, so it stays silent.
+ * could not be loaded. Explicit callers can turn a `false` return, and any
+ * thrown apply error, into a user-facing message; the separate auto-load
+ * pipeline does not call this, so it stays silent.
  */
 export async function applyIntent(
   intent: ResultIntent,
@@ -212,118 +205,55 @@ export async function applyIntent(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Auto-show review pipeline (Chunk 22; contract Seam 2 results half + D6)
-//
-// A shared, intent-kind-agnostic pipeline: for each result the loop resolves the
-// intent, dispatches to a per-kind REVIEWER that CORROBORATES then APPLIES the
-// result additively (returning the created object id(s), or null when it is not
-// auto-shown), and then PRESENTS the created objects (born-persistent: a normal
-// deletable object made visible + a cosmetic live-only badge). Only
-// `add-segment-group` has a reviewer in v1; the deferred vector intents
-// (add-polygon / add-ruler / add-rectangle) register a reviewer of the SAME shape
-// and inherit the identical behavior — no labelmap-specific branching leaks into
-// the loop.
-// ---------------------------------------------------------------------------
-
-/**
- * Corroboration guard for a loaded result labelmap before AUTO-SHOW (fail closed;
- * contract Seam 2 "a validated result auto-applies"; decisions.md D6). A result
- * that fails here is NOT auto-shown — it stays available via the explicit JobList
- * path as a downloadable/loadable file. Checks:
- *   - decodes — the file imported to a volume whose scalars we can read;
- *   - non-empty / segments resolve — at least one labelled voxel (max scalar
- *     >= 1); an all-background labelmap yields no segment and is not shown;
- *   - overlaps — the labelmap intersects the parent in physical space,
- *     pre-empting `convertImageToLabelmap`'s own non-intersecting-bounds throw.
- */
-function corroborateLabelmap(
-  childSelection: string,
+// Auto-applies a labelmap result additively, returning the created group ids.
+// It only fails closed when the result cannot be imported or when the existing
+// conversion path rejects it.
+const autoApplySegmentGroup = async (
+  intent: SegmentGroupIntent,
   parentSelection: string
-): boolean {
-  const childImage = getImage(childSelection);
-  const parentImage = getImage(parentSelection);
-  if (!childImage || !parentImage) return false; // did not decode
-  const scalars = childImage.getPointData().getScalars();
-  if (!scalars) return false;
-  const [, max] = scalars.getRange();
-  if (!(max >= 1)) return false; // empty labelmap: no segment resolves
-  return vtkBoundingBox.intersects(
-    parentImage.getBounds(),
-    childImage.getBounds()
-  );
-}
-
-// A per-intent-kind auto-show reviewer: corroborate the result, then apply it
-// additively, returning the created object id(s) — or null when it is not
-// auto-shown (deduped, undecodable, or failed corroboration). Vector intents add
-// a reviewer of this shape to inherit the shared present/watermark handling.
-type AutoShowReviewer = (
-  intent: KnownResultIntent,
-  parentSelection: string
-) => Promise<string[] | null>;
-
-const reviewSegmentGroup: AutoShowReviewer = async (
-  intent,
-  parentSelection
-) => {
-  // Reviewer only runs for the add-segment-group member (see `reviewerFor`).
-  const segIntent = intent as SegmentGroupIntent;
+): Promise<string[] | null> => {
   const segmentGroupStore = useSegmentGroupStore();
 
   // Scene-state idempotency (D5): a result whose `source:{jobId,outputId}` tag is
   // already in the scene (session-restored, or applied earlier this load) is
   // skipped so a reload never duplicates the group.
-  if (segIntent.source) {
+  if (intent.source) {
     const existing = Object.values(segmentGroupStore.metadataByID).map(
       (meta) => meta.source
     );
-    if (sourceInScene(existing, segIntent.source)) return null;
+    if (sourceInScene(existing, intent.source)) return null;
   }
 
-  const childSelection = await loadAsImport(segIntent);
-  if (!childSelection) return null; // did not decode -> not auto-shown
-  if (!corroborateLabelmap(childSelection, parentSelection)) return null;
+  const childSelection = await loadAsImport(intent);
+  if (!childSelection) return null; // did not decode -> not auto-applied
 
-  return convertAndDescribe(childSelection, parentSelection, segIntent);
+  return convertAndDescribe(childSelection, parentSelection, intent);
 };
 
-// The reviewer table. Adding a kind here is the whole cost of making a new intent
-// auto-show with the identical corroborate -> apply -> present behavior.
-function reviewerFor(intent: KnownResultIntent): AutoShowReviewer | null {
-  switch (intent.intent) {
-    case 'add-segment-group':
-      return reviewSegmentGroup;
-    // Deferred (WORKORDER #5): add-polygon / add-ruler / add-rectangle register
-    // their reviewers here and inherit the shared pipeline unchanged.
-    default:
-      // Not auto-shown in v1 — base image / layer / restore-state / download wait
-      // for an explicit JobList action so we never clobber the current view.
-      return null;
-  }
+async function autoOpenBaseImage(intent: BaseImageIntent): Promise<void> {
+  await loadUrls({ urls: [intent.url], names: [intent.name] });
 }
 
 /**
- * Auto-actions on job completion. Conservative for v1 (decisions.md D6): only a
- * corroborated segment group auto-shows — as a NEW, born-persistent group, and
- * only when there is an originating dataset to attach to; every other intent
- * waits for an explicit JobList click.
+ * Auto-actions on job completion. Plain image outputs are opened as new datasets
+ * in the Data panel. Labelmap outputs are applied as new segment groups when the
+ * originating parent image still exists. Other intents stay in the Jobs list.
  *
- * Born-persistent (D6 in-flight call, 2026-07-04): an auto-shown result is a
+ * Born-persistent (D6 in-flight call, 2026-07-04): an auto-applied result is a
  * normal deletable object — NO confirm/reject gate, NO promotion state machine.
  * Preview is the existing visibility toggle; reject is the existing delete UI;
  * the only provisional cue is a live-only "new job result" badge (`markNew`).
  *
- * Tier-2 gating (Chunk 19, D5). The SAME pipeline serves in-session (tier-1) and
+ * Tier-2 gating (Chunk 19, D5). The same pipeline serves in-session (tier-1) and
  * cold-reload (tier-2) completions:
  *   - SESSION WATERMARK (primary, per-job) — a job that settled at/before the
  *     restored session's save instant is already a review verdict (present=kept
  *     via the zip, absent=rejected), so it does not re-attach. A tier-1 context
  *     (no `finishedAt`) or no restored session (no `sessionSavedAt`) always
  *     passes = exact MVP parity. Both instants are server-clock.
- *   - SCENE-STATE IDEMPOTENCY (secondary, in the reviewer) — a result whose
- *     `source` tag is already in the scene is skipped. A re-discovered result is
- *     therefore born-persistent with NO confirm gate: fresh -> apply once;
+ *   - SCENE-STATE IDEMPOTENCY (secondary, for segment groups) — a result whose
+ *     `source` tag is already in the scene is skipped. A re-discovered labelmap
+ *     is therefore born-persistent with NO confirm gate: fresh -> apply once;
  *     already present -> skip.
  */
 export async function autoLoadProcessingResults(
@@ -331,30 +261,40 @@ export async function autoLoadProcessingResults(
   context: SubmittedJobContext | undefined,
   sessionSavedAt?: string
 ): Promise<void> {
-  const parentSelection = context?.activeDatasetId;
-  if (!parentSelection) return;
-
   // Watermark gate is per-job (all results share the job's terminal instant):
   // behind the watermark → attach none of them.
   if (!passesWatermark(context?.finishedAt, sessionSavedAt)) return;
 
+  const parentSelection = context?.activeDatasetId;
   const review = useJobResultReviewStore();
   for (const result of results) {
     const intent = resultToIntent(result);
     // Fail closed: an unknown/invalid intent degrades to the download floor and
-    // never auto-shows (it stays a JobList file).
+    // never auto-loads (it stays a JobList file).
     const parsed = knownResultIntentSchema.safeParse(intent);
     if (!parsed.success) continue;
-    const reviewer = reviewerFor(parsed.data);
-    if (!reviewer) continue;
     try {
-      const created = await reviewer(parsed.data, parentSelection);
-      // Present each created object born-persistent: a normal group (visible by
-      // default like any segment group) flagged with the live-only badge. No
-      // confirm/reject step — deletability is the whole safety story.
-      created?.forEach((id) => review.markNew(id));
+      switch (parsed.data.intent) {
+        case 'add-base-image':
+          await autoOpenBaseImage(parsed.data);
+          break;
+        case 'add-segment-group': {
+          if (!parentSelection) break;
+          const created = await autoApplySegmentGroup(
+            parsed.data,
+            parentSelection
+          );
+          // Present each created object born-persistent: a normal group (visible by
+          // default like any segment group) flagged with the live-only badge. No
+          // confirm/reject step — deletability is the whole safety story.
+          created?.forEach((id) => review.markNew(id));
+          break;
+        }
+        default:
+          break;
+      }
     } catch (err) {
-      console.error('Failed to auto-load segment group result', result, err);
+      console.error('Failed to auto-load processing result', result, err);
     }
   }
 }
