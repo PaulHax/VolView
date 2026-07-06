@@ -1,18 +1,17 @@
 // ---------------------------------------------------------------------------
 // The default transport descriptor (decision C3; WORKORDER WI4).
 //
-// This is the ONE descriptor v1 ships: the neutral-facade default. It gathers
+// This is the descriptor v1 ships: the neutral-facade default. It gathers
 // every settled transport axis in a single object the generic engine reads —
 //   * endpoint templates (list / spec / run / status / results),
 //   * input placement (bound values ride as a JSON `{ values }` body),
 //   * the poll lifecycle,
 //   * the wire result format (delegated to the existing validators).
-// Nothing here is hardcoded inside the engine; swapping this object for another
-// redirects every engine call (asserted by the descriptor-swap test). That is
-// the seam a facade-less backend (#2, MONAI) slots a SECOND descriptor into —
-// NOT an engine refactor. Building further variation points (data access,
-// `/info` discovery, sync drivers, the interactive loop) is out of v1 scope:
-// this is the seam, not the full binding descriptor.
+// Nothing here is hardcoded inside the engine; swapping this object redirects
+// every engine call (asserted by the descriptor-swap test). That is a useful
+// seam for services with the same client shape but different route templates or
+// optional capabilities. It is not a promise that a backend with a different
+// interaction model can be added without client work.
 //
 // The wire validators are the neutral result-format (`engine/wire.ts`), not
 // backend-specific parsing; the default descriptor delegates to them here.

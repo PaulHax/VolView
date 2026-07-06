@@ -691,8 +691,8 @@ export const useProvidersStore = defineStore('providers', () => {
     } catch {
       return;
     }
-    // Capability-gated: a backend with no durable enumeration (MONAI `/infer`)
-    // advertises no `listRecentJobs` → degrade to tier-1 (in-session replay).
+    // Capability-gated: a service with no durable enumeration advertises no
+    // `listRecentJobs` → degrade to tier-1 (in-session replay).
     if (!provider.listRecentJobs) return;
     let handles: NeutralJobHandle[];
     try {

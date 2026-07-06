@@ -1,13 +1,10 @@
 // ---------------------------------------------------------------------------
-// Provider factory — lazy-loaded chunk (contract "one generic engine, zero
-// per-backend client code").
+// Provider factory — lazy-loaded chunk.
 //
 // Composes the `ProcessingProvider` the core consumes from the generic engine
-// transport reading the neutral-facade default descriptor. There is no
-// per-backend code here and no XML: every live HTTP path (tasks / spec / run /
-// status / results) is the engine's, over the bearer-aware `$fetch`. A second
-// backend (MONAI, facade-less) slots a different descriptor into the engine, not
-// a new provider file.
+// transport reading the neutral-facade default descriptor. Every live HTTP path
+// (tasks / spec / run / status / results) is routed by the engine over the
+// bearer-aware `$fetch`.
 //
 // The providers store dynamic-import()s this module so the engine stays out of
 // the boot bundle until a provider is actually instantiated.

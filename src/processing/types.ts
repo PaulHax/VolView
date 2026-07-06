@@ -1,10 +1,9 @@
 // ---------------------------------------------------------------------------
 // Provider contract — VolView core consumes these types only.
 //
-// One generic engine speaks to every backend: there is no per-backend adapter
-// and no XML parser in the client (contract "one generic client engine, zero
-// per-backend client code"). The provider is composed by `engine/provider.ts`
-// from the generic transport + the default descriptor.
+// One generic engine speaks to configured processing services that implement
+// this client contract. The provider is composed by `engine/provider.ts` from
+// the generic transport + the default descriptor.
 // ---------------------------------------------------------------------------
 
 // Type-only import (erased at runtime — no import cycle with the engine).
@@ -77,7 +76,7 @@ export type ProcessingProvider = {
   stageInput: (body: Blob, name?: string) => Promise<string[]>;
   // Tier-2 cold-reload re-discovery (contract "Seam 3 — job lifecycle"; Chunk
   // 19, D5). OPTIONAL — its presence IS the capability flag: durable job
-  // enumeration is a real backend capability (Girder yes; MONAI `/infer` no).
+  // enumeration is a real backend capability.
   // Present only when the backend advertises it; the store calls it on load and
   // degrades to tier-1 (in-session replay) when absent. Returns the launch
   // context's jobs as neutral handles (jobId + taskId + input opaque URIs +

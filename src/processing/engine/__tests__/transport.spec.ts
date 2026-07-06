@@ -271,8 +271,8 @@ describe('engine transport reads its descriptor + uses $fetch', () => {
     expect(authOf(calls[0])).toBe('Bearer test-token');
   });
 
-  // Capability absent (the MONAI `/infer` degrade case): a descriptor without a
-  // listRecentJobs endpoint exposes NO method at all — the store reads its
+  // Capability absent: a descriptor without a listRecentJobs endpoint exposes
+  // NO method at all — the store reads its
   // absence to degrade to tier-1, rather than catching a thrown "unsupported".
   it('exposes no listRecentJobs method when the descriptor omits the capability', () => {
     const engine = createEngineTransport('http://host', descriptorFor('A'));

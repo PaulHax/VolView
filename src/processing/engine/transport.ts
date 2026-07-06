@@ -1,14 +1,12 @@
 // ---------------------------------------------------------------------------
 // Generic processing engine — HTTP transport (contract Seam 2/3; decision C3).
 //
-// ONE generic engine speaks to every backend. It knows no backend format and no
-// endpoint layout: every transport specific — endpoint templates, where input
-// values ride in the request, the poll-vs-inline lifecycle, and the wire result
-// format — is read from a single `TransportDescriptor` the engine is handed
-// (see `descriptor.ts`). v1 ships exactly ONE descriptor (the neutral-facade
-// default); backend #2 (MONAI, facade-less) adds a SECOND descriptor, never an
-// engine rewrite. That is the whole point of the C3 seam: the engine is the
-// invariant, the descriptor is the variable.
+// The generic engine knows no endpoint layout: endpoint templates, where input
+// values ride in the request, the poll lifecycle, and the wire result format are
+// read from the `TransportDescriptor` the engine is handed (see `descriptor.ts`).
+// v1 ships the neutral-facade descriptor. The descriptor seam keeps route and
+// payload details out of the engine; backends with different interaction models
+// can still require client work above this layer.
 //
 // All engine HTTP goes through `$fetch` (src/utils/fetch.ts), the bearer-auth
 // aware wrapper that merges the global `Authorization` header. Raw `fetch`
@@ -33,14 +31,13 @@ import type { TaskSpecEnvelope } from './taskSpec';
 // ---------------------------------------------------------------------------
 
 // Poll-vs-inline lifecycle axis. v1 implements only `poll` (the neutral facade
-// hands back a job id the store polls); `inline` (a synchronous /infer backend
-// that returns a born-terminal job in the run response) is a reserved seam, not
-// a built driver — the engine fails closed on it until backend #2 exists.
+// hands back a job id the store polls); `inline` is a reserved seam, not a built
+// driver.
 export type TransportLifecycle = 'poll' | 'inline';
 
 // Result-format axis: how each untrusted wire payload is validated into the
 // engine's neutral shapes. The default instance delegates to the existing wire
-// validators; a second backend supplies its own without touching the engine.
+// validators.
 export type TransportFormat = {
   parseTasks: (raw: unknown) => TaskSummary[];
   parseSpec: (raw: unknown) => TaskSpecEnvelope;
@@ -55,8 +52,8 @@ export type TransportFormat = {
   parseStageResponse?: (raw: unknown) => string[];
   // Optional: validate a tier-2 `listRecentJobs` response into NeutralJobHandle[]
   // (contract Seam 3; Chunk 19). Paired with the optional `listRecentJobs`
-  // endpoint below — a backend with no durable job enumeration (MONAI `/infer`)
-  // supplies neither, and the engine degrades to tier-1.
+  // endpoint below; a service with no durable job enumeration supplies neither,
+  // and the engine degrades to tier-1.
   parseJobHandles?: (raw: unknown) => NeutralJobHandle[];
 };
 
@@ -69,21 +66,19 @@ export type TransportDescriptor = {
     jobStatus: (baseUrl: string, jobId: string) => string;
     jobResults: (baseUrl: string, jobId: string) => string;
     // Optional cancel endpoint (contract Seam 3, best-effort job cancel; D5).
-    // Present on the neutral facade; a facade-less backend (#2) with no
-    // cancellation surface may omit it, and `cancelJob` then fails closed rather
-    // than inventing a route. Kept a transport specific so the engine never
-    // hardcodes the cancel path.
+    // A service with no cancellation surface may omit it, and `cancelJob` then
+    // fails closed rather than inventing a route. Kept a transport specific so
+    // the engine never hardcodes the cancel path.
     cancel?: (baseUrl: string, jobId: string) => string;
     // Optional staging endpoint (contract Seam 1, client-created labelmap
-    // inputs): POST client-held bytes, receive facade-minted URIs. Present on
-    // the neutral facade; a facade-less backend (MONAI, #2) may omit it, and
-    // `stageInput` then fails closed rather than inventing a route.
+    // inputs): POST client-held bytes, receive facade-minted URIs. A service
+    // with no staging surface may omit it, and `stageInput` then fails closed
+    // rather than inventing a route.
     stage?: (baseUrl: string) => string;
     // Optional tier-2 re-discovery endpoint (contract Seam 3; Chunk 19, D5):
     // GET the launch-context's recent jobs as NeutralJobHandle[]. This IS the
-    // capability flag — durable job enumeration is a real backend capability
-    // (Girder yes; MONAI `/infer` ephemeral, no). Present on the neutral facade;
-    // absent elsewhere, and the store degrades to tier-1 (in-session replay).
+    // capability flag — durable job enumeration is a real backend capability.
+    // When absent, the store degrades to tier-1 (in-session replay).
     // Context-scoped (folder-scoped baseUrl), unlike the folder-free job routes.
     listRecentJobs?: (baseUrl: string) => string;
   };
