@@ -64,10 +64,5 @@ export function canBeLayer(result: ProcessingResult): boolean {
 }
 
 export function canBeSegmentGroup(result: ProcessingResult): boolean {
-  const intent = naturalIntent(result);
-  if (intent === 'add-segment-group') return true;
-  if (intent === 'add-layer') return false;
-  if (intent === 'restore-state' || intent === 'download') return false;
-  // add-base-image: an image result can seed a segment group.
-  return looksLikeImage(result);
+  return naturalIntent(result) === 'add-segment-group';
 }

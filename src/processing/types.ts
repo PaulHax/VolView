@@ -183,6 +183,19 @@ export type JobResultsBundle = {
   missing: number;
 };
 
+export type SubmittedJobParameterDisplay = {
+  id: string;
+  label: string;
+  value: string;
+  summary?: boolean;
+};
+
+export type SubmittedJobDisplay = {
+  taskTitle: string;
+  inputName?: string;
+  parameters: SubmittedJobParameterDisplay[];
+};
+
 // VolView remembers which dataset / source was active at submission time so
 // result outputs auto-attach to the originating dataset.
 export type SubmittedJobContext = {
@@ -191,6 +204,7 @@ export type SubmittedJobContext = {
   providerId: string;
   submittedAt: string;
   activeDatasetId?: string;
+  display?: SubmittedJobDisplay;
   // Tier-2 only (contract Seam 3; Chunk 19, D5): the job's neutral terminal
   // instant (server clock), carried on a RE-DISCOVERED context so the auto-apply
   // path can gate it against the session watermark (`finishedAt > sessionSavedAt`).

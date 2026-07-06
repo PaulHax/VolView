@@ -95,10 +95,10 @@ describe('canBeSegmentGroup', () => {
     expect(canBeSegmentGroup(result({ intent: 'restore-state' }))).toBe(false);
   });
 
-  it('lets an image base output seed a segment group, not a non-image one', () => {
+  it('does not offer segment-group action for base-image outputs', () => {
     expect(
       canBeSegmentGroup(result({ intent: 'add-base-image', name: 'vol.nrrd' }))
-    ).toBe(true);
+    ).toBe(false);
     expect(
       canBeSegmentGroup(result({ intent: 'add-base-image', name: 'notes.txt' }))
     ).toBe(false);

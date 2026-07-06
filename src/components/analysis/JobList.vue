@@ -1,58 +1,69 @@
 <template>
   <div v-if="jobs.length > 0">
-    <div class="text-subtitle-2 mb-1">Jobs</div>
     <v-list density="compact" class="job-list">
-      <v-list-item
-        v-for="job in jobs"
-        :key="job.jobId"
-        :subtitle="subtitleFor(job)"
-      >
+      <v-list-item v-for="job in jobs" :key="job.jobId">
         <template #title>
-          <span class="job-id">{{ job.jobId }}</span>
+          <span class="job-title">
+            {{ jobTitleFor(job.jobId) }}
+            <v-tooltip activator="parent" location="top">
+              {{ jobTooltipFor(job) }}
+            </v-tooltip>
+          </span>
+        </template>
+
+        <template #subtitle>
+          <div class="job-labels">
+            <span class="job-label job-id">
+              Job {{ job.jobId }}
+              <v-tooltip activator="parent" location="top">
+                Job {{ job.jobId }}
+              </v-tooltip>
+            </span>
+          </div>
         </template>
 
         <template #append>
-          <div class="d-flex align-center" style="gap: 4px">
-            <v-chip
-              v-if="job.state === 'success'"
-              color="success"
-              size="x-small"
-              variant="tonal"
-            >
-              ✓
-            </v-chip>
-            <v-chip
-              v-else-if="job.state === 'error'"
-              color="error"
-              size="x-small"
-              variant="tonal"
-            >
-              !
-            </v-chip>
-            <v-chip
-              v-else-if="job.state === 'cancelled'"
-              color="grey"
-              size="x-small"
-              variant="tonal"
-            >
-              ✕
-            </v-chip>
-            <template
-              v-else-if="job.state === 'running' || job.state === 'pending'"
-            >
-              <v-progress-circular indeterminate size="16" width="2" />
+          <div class="job-actions">
+            <div class="cancel-slot">
               <!-- Best-effort cancel (contract Seam 3; D5): one neutral store
                    call. The poller converges the job to its terminal state, so
                    this button disappears once it settles. -->
               <v-btn
+                v-if="job.state === 'running' || job.state === 'pending'"
+                icon="mdi-close"
                 size="x-small"
                 variant="text"
+                density="compact"
                 :loading="cancellingJobIds.has(job.jobId)"
+                :disabled="cancellingJobIds.has(job.jobId)"
+                :aria-label="
+                  cancellingJobIds.has(job.jobId)
+                    ? 'Canceling job'
+                    : 'Cancel job'
+                "
                 @click="cancel(job.jobId)"
               >
-                Cancel
+                <v-tooltip activator="parent" location="top">
+                  {{
+                    cancellingJobIds.has(job.jobId)
+                      ? 'Canceling job'
+                      : 'Cancel job'
+                  }}
+                </v-tooltip>
               </v-btn>
-            </template>
+            </div>
+            <div class="status-slot">
+              <v-progress-circular
+                v-if="job.state === 'running' || job.state === 'pending'"
+                indeterminate
+                size="16"
+                width="2"
+              />
+              <v-icon v-else :icon="statusIconFor(job.state)" size="16" />
+              <v-tooltip activator="parent" location="top">
+                {{ statusTooltipFor(job) }}
+              </v-tooltip>
+            </div>
           </div>
         </template>
 
@@ -67,56 +78,48 @@
               class="result-row mb-1"
             >
               <div class="text-caption font-weight-medium">
-                {{ result.name }}
-              </div>
-              <div class="d-flex flex-wrap" style="gap: 4px">
-                <v-btn
-                  v-if="canOpen(result)"
-                  size="x-small"
-                  variant="tonal"
-                  :loading="loadingResultIds.has(result.id + ':open')"
-                  @click="dispatch(job.jobId, result, 'open')"
-                >
-                  Open
-                </v-btn>
-                <v-btn
-                  v-if="canBeLayer(result)"
-                  size="x-small"
-                  variant="tonal"
-                  :loading="loadingResultIds.has(result.id + ':layer')"
-                  @click="dispatch(job.jobId, result, 'layer')"
-                >
-                  Add as layer
-                </v-btn>
-                <v-btn
-                  v-if="canBeSegmentGroup(result)"
-                  size="x-small"
-                  variant="tonal"
-                  :loading="loadingResultIds.has(result.id + ':segmentGroup')"
-                  @click="dispatch(job.jobId, result, 'segmentGroup')"
-                >
-                  Add as segment group
-                </v-btn>
-                <!-- Download floor (contract Seam 2): every result stays a
-                     downloadable file. This is the fallback when a result is not
-                     auto-shown (failed corroboration) or has only the `download`
-                     intent (no in-app representation). -->
-                <v-btn
-                  size="x-small"
-                  variant="text"
-                  :href="result.url"
-                  :download="result.name"
-                  target="_blank"
-                  rel="noopener"
-                >
-                  Download
-                </v-btn>
+                <span class="result-name">
+                  {{ result.name }}
+                  <v-tooltip activator="parent" location="top">
+                    {{ result.name }}
+                  </v-tooltip>
+                </span>
               </div>
             </div>
           </div>
         </template>
         <div v-else-if="job.state === 'error'" class="job-error-summary mt-1">
           <pre class="error-log">{{ errorSummaryFor(job) }}</pre>
+        </div>
+        <div v-if="parametersFor(job.jobId).length > 0" class="job-parameters">
+          <v-btn
+            size="x-small"
+            variant="text"
+            class="px-0"
+            :prepend-icon="
+              expandedJobIds.has(job.jobId)
+                ? 'mdi-chevron-down'
+                : 'mdi-chevron-right'
+            "
+            @click="toggleParameters(job.jobId)"
+          >
+            Parameters
+          </v-btn>
+          <v-expand-transition>
+            <dl v-if="expandedJobIds.has(job.jobId)" class="parameter-list">
+              <div
+                v-for="parameter in parametersFor(job.jobId)"
+                :key="parameter.id"
+                class="parameter-row"
+              >
+                <dt>{{ parameter.label }}</dt>
+                <dd>{{ parameter.value }}</dd>
+                <v-tooltip activator="parent" location="top">
+                  {{ parameter.label }}: {{ parameter.value }}
+                </v-tooltip>
+              </div>
+            </dl>
+          </v-expand-transition>
         </div>
       </v-list-item>
     </v-list>
@@ -127,18 +130,13 @@
 import { computed, reactive } from 'vue';
 
 import { useProvidersStore } from '@/src/store/providers';
-import { useMessageStore } from '@/src/store/messages';
-import { applyIntent } from '@/src/actions/processResults';
-import type { ResultIntent } from '@/processing-contract';
-import {
-  canOpen,
-  canBeLayer,
-  canBeSegmentGroup,
-} from '@/src/processing/resultActions';
-import type { ProcessingResult } from '@/src/processing/types';
+import type {
+  ProcessingResult,
+  SubmittedJobContext,
+  SubmittedJobParameterDisplay,
+} from '@/src/processing/types';
 
 const providers = useProvidersStore();
-const messageStore = useMessageStore();
 
 const jobs = computed(() =>
   Array.from(providers.jobs.values()).sort((a, b) => {
@@ -148,7 +146,7 @@ const jobs = computed(() =>
   })
 );
 
-const loadingResultIds = reactive(new Set<string>());
+const expandedJobIds = reactive(new Set<string>());
 // Jobs with an in-flight cancel request (drives the Cancel button spinner).
 const cancellingJobIds = reactive(new Set<string>());
 
@@ -168,8 +166,31 @@ function resultsFor(jobId: string): ProcessingResult[] {
   return providers.jobResults.get(jobId) ?? [];
 }
 
+function contextFor(jobId: string): SubmittedJobContext | undefined {
+  return providers.submittedContexts.get(jobId);
+}
+
 function taskTitleFor(jobId: string): string {
-  return providers.submittedContexts.get(jobId)?.taskId ?? jobId;
+  const context = contextFor(jobId);
+  return context?.display?.taskTitle ?? context?.taskId ?? jobId;
+}
+
+function summaryParametersFor(jobId: string): SubmittedJobParameterDisplay[] {
+  return contextFor(jobId)?.display?.parameters.filter((p) => p.summary) ?? [];
+}
+
+function parametersFor(jobId: string): SubmittedJobParameterDisplay[] {
+  return contextFor(jobId)?.display?.parameters ?? [];
+}
+
+function jobTitleFor(jobId: string): string {
+  const context = contextFor(jobId);
+  const pieces = [
+    taskTitleFor(jobId),
+    context?.display?.inputName,
+    ...summaryParametersFor(jobId).map((p) => `${p.label}: ${p.value}`),
+  ].filter((piece): piece is string => !!piece);
+  return pieces.join(' - ');
 }
 
 function timestampFor(instant: string | undefined): number {
@@ -178,14 +199,44 @@ function timestampFor(instant: string | undefined): number {
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
-function subtitleFor(job: {
+function statusTooltipFor(job: {
   jobId: string;
   state: string;
   progress?: number;
 }): string {
+  if (cancellingJobIds.has(job.jobId)) return 'canceling';
   const pct =
     job.progress != null ? ` (${Math.round(job.progress * 100)}%)` : '';
-  return `${taskTitleFor(job.jobId)} - ${job.state}${pct}`;
+  return `${job.state}${pct}`;
+}
+
+function jobTooltipFor(job: {
+  jobId: string;
+  state: string;
+  progress?: number;
+}): string {
+  return `${jobTitleFor(job.jobId)} - ${statusTooltipFor(job)}`;
+}
+
+function statusIconFor(state: string): string {
+  switch (state) {
+    case 'success':
+      return 'mdi-check';
+    case 'error':
+      return 'mdi-alert-circle-outline';
+    case 'cancelled':
+      return 'mdi-close';
+    default:
+      return 'mdi-circle-outline';
+  }
+}
+
+function toggleParameters(jobId: string) {
+  if (expandedJobIds.has(jobId)) {
+    expandedJobIds.delete(jobId);
+    return;
+  }
+  expandedJobIds.add(jobId);
 }
 
 function errorSummaryFor(job: { jobId: string; errorTail?: string }): string {
@@ -195,75 +246,6 @@ function errorSummaryFor(job: { jobId: string; errorTail?: string }): string {
   return normalized.length > 240
     ? `${normalized.slice(0, 237).trimEnd()}...`
     : normalized;
-}
-
-// Map an explicit action button to the intent it requests. The user's choice —
-// not the result's role — determines the intent here.
-function actionToIntent(
-  action: 'open' | 'layer' | 'segmentGroup',
-  result: ProcessingResult
-): ResultIntent {
-  const file = { url: result.url, name: result.name };
-  switch (action) {
-    case 'open':
-      return { intent: 'add-base-image', ...file };
-    case 'layer':
-      return { intent: 'add-layer', ...file };
-    case 'segmentGroup':
-      return {
-        intent: 'add-segment-group',
-        ...file,
-        ...(result.segments ? { segments: result.segments } : {}),
-        ...(result.source ? { source: result.source } : {}),
-      };
-    default: {
-      const exhaustive: never = action;
-      throw new Error(`Unknown result action: ${exhaustive}`);
-    }
-  }
-}
-
-// Wording for the failure toast, mirroring the noun on the clicked button.
-const ACTION_NOUN: Record<'open' | 'layer' | 'segmentGroup', string> = {
-  open: 'a dataset',
-  layer: 'a layer',
-  segmentGroup: 'a segment group',
-};
-const LOAD_FAILED_DETAIL =
-  'The result file could not be loaded — it may be missing, corrupt, or not a volume image.';
-
-function reportActionFailed(
-  result: ProcessingResult,
-  action: 'open' | 'layer' | 'segmentGroup',
-  details: string
-) {
-  messageStore.addError(
-    `Could not add "${result.name}" as ${ACTION_NOUN[action]}`,
-    { details }
-  );
-}
-
-// The single explicit-action boundary. Both ways applying a result can fail
-// surface here as one message: a null load (`applyIntent` returns false) and a
-// thrown store call (e.g. `convertImageToLabelmap` on non-intersecting bounds).
-// The auto-show pipeline is separate and stays silent on a declined result.
-async function dispatch(
-  jobId: string,
-  result: ProcessingResult,
-  action: 'open' | 'layer' | 'segmentGroup'
-) {
-  const key = `${result.id}:${action}`;
-  loadingResultIds.add(key);
-  try {
-    const ctx = providers.submittedContexts.get(jobId);
-    const applied = await applyIntent(actionToIntent(action, result), ctx);
-    if (!applied) reportActionFailed(result, action, LOAD_FAILED_DETAIL);
-  } catch (err) {
-    console.error('Failed to load result', result, err);
-    reportActionFailed(result, action, String(err));
-  } finally {
-    loadingResultIds.delete(key);
-  }
 }
 </script>
 
@@ -276,6 +258,79 @@ async function dispatch(
   user-select: text;
   cursor: text;
 }
+.job-list :deep(.v-list-item__content) {
+  min-width: 0;
+}
+.job-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.job-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.job-label {
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+.job-id {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.job-actions {
+  display: grid;
+  grid-template-columns: 24px 20px;
+  align-items: center;
+  justify-content: end;
+  column-gap: 2px;
+  width: 46px;
+}
+.cancel-slot,
+.status-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cancel-slot {
+  width: 24px;
+}
+.status-slot {
+  width: 20px;
+  color: rgba(var(--v-theme-on-surface), 0.85);
+}
+.job-parameters {
+  margin-top: 2px;
+}
+.parameter-list {
+  margin: 2px 0 0 8px;
+  font-size: 0.72rem;
+}
+.parameter-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 40%) minmax(0, 1fr);
+  column-gap: 8px;
+  min-width: 0;
+}
+.parameter-row dt {
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+.parameter-row dt,
+.parameter-row dd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.parameter-row dd {
+  min-width: 0;
+  margin: 0;
+}
 .error-log {
   white-space: pre-wrap;
   font-size: 0.7rem;
@@ -286,5 +341,12 @@ async function dispatch(
 }
 .result-row {
   padding: 2px 0;
+}
+.result-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

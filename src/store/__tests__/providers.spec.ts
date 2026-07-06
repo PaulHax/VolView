@@ -323,6 +323,14 @@ describe('Providers store — job lifecycle (D5 async-with-sync-fast-path)', () 
         context: expect.objectContaining({ jobId: 'job-err' }),
       })
     );
+    expect(
+      useMessageStore().messages.filter((m) => m.type === MessageType.Error)
+    ).toEqual([
+      expect.objectContaining({
+        title: 'Job failed: task-1',
+        options: expect.objectContaining({ details: 'boom' }),
+      }),
+    ]);
     expect(getResults).not.toHaveBeenCalled();
 
     // Poller stopped — no further polls no matter how much time elapses.
@@ -389,12 +397,10 @@ describe('Providers store — job lifecycle (D5 async-with-sync-fast-path)', () 
       jobId: 'job-no-detail',
       state: 'error',
     };
-    const runTask = vi
-      .fn()
-      .mockResolvedValue({
-        jobId: 'job-no-detail',
-        status,
-      } as ProcessingJobRef);
+    const runTask = vi.fn().mockResolvedValue({
+      jobId: 'job-no-detail',
+      status,
+    } as ProcessingJobRef);
     const provider = makeProvider({
       runTask,
       getJob: vi.fn(),

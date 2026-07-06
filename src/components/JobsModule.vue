@@ -72,6 +72,8 @@ import { autoLoadProcessingResults } from '@/src/actions/processResults';
 import type {
   ProcessingProvider,
   ProcessingValue,
+  SubmittedJobDisplay,
+  SubmittedJobParameterDisplay,
   TaskSummary,
 } from '@/src/processing/types';
 import {
@@ -96,6 +98,9 @@ import { usePaintToolStore } from '@/src/store/tools/paint';
 import { useSegmentGroupStore } from '@/src/store/segmentGroups';
 import { useMessageStore } from '@/src/store/messages';
 import { writeSegmentation } from '@/src/io/readWriteImage';
+import { getDataSourceName } from '@/src/io/import/dataSource';
+import type { InputValue, VolViewTaskParameter } from '@/processing-contract';
+import { TYPE_TAG_LABELMAP } from '@/processing-contract';
 
 import TaskPicker from './analysis/TaskPicker.vue';
 import TaskForm from './analysis/TaskForm.vue';
@@ -264,7 +269,10 @@ async function onSubmit(values: Record<string, ProcessingValue>) {
       selectedProviderId.value,
       selectedTaskId.value,
       stagedValues,
-      { activeDatasetId: currentImageID.value ?? undefined }
+      {
+        activeDatasetId: currentImageID.value ?? undefined,
+        display: buildJobDisplay(model, finalValues),
+      }
     );
   } catch {
     // Item 4: the failure is already surfaced by the store (message center);
@@ -322,6 +330,15 @@ function applyBoundsBindings(
 
 function activeDataSource() {
   return datasetStore.getDataSource(currentImageID.value);
+}
+
+function activeImageName(): string | undefined {
+  const id = currentImageID.value;
+  return (
+    imageCache.getImageMetadata(id)?.name ??
+    getDataSourceName(activeDataSource()) ??
+    undefined
+  );
 }
 
 // A pure read-only view of the segment-group store for the labelmap binder
@@ -412,6 +429,74 @@ async function stageLabelmapInputs(
     })
   );
   return { ...values, ...Object.fromEntries(staged) };
+}
+
+function fieldLabel(field: VolViewTaskParameter): string {
+  return field.title || field.id;
+}
+
+function formatProcessingValue(
+  field: VolViewTaskParameter,
+  value: ProcessingValue
+): string {
+  if (field.kind === 'sourceRef') {
+    if (field.accepts.includes(TYPE_TAG_LABELMAP)) {
+      const groupId = paintStore.activeSegmentGroupID;
+      return groupId
+        ? (segmentGroupStore.metadataByID[groupId]?.name ?? groupId)
+        : 'bound segment group';
+    }
+    return activeImageName() ?? 'active dataset';
+  }
+  if (field.kind === 'bounds') {
+    return Array.isArray(value) && value.length > 0
+      ? value.map((n) => (typeof n === 'number' ? n.toFixed(1) : n)).join(', ')
+      : 'not set';
+  }
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (Array.isArray(value)) return value.join(', ');
+  if (value && typeof value === 'object') {
+    const input = value as InputValue;
+    return input.type;
+  }
+  if (value === null || value === undefined || value === '') return 'not set';
+  return String(value);
+}
+
+function isSummaryParameter(
+  field: VolViewTaskParameter,
+  value: ProcessingValue
+): boolean {
+  if (field.kind === 'sourceRef' || field.kind === 'bounds') return false;
+  if (value === null || value === undefined || value === '') return false;
+  if (Array.isArray(value) && value.length === 0) return false;
+  return true;
+}
+
+function buildJobDisplay(
+  model: TaskFormModel,
+  values: Record<string, ProcessingValue>
+): SubmittedJobDisplay {
+  let summaryCount = 0;
+  const parameters: SubmittedJobParameterDisplay[] = model.fields.map(
+    (field) => {
+      const value = values[field.id];
+      const summary = summaryCount < 2 && isSummaryParameter(field, value);
+      if (summary) summaryCount += 1;
+      return {
+        id: field.id,
+        label: fieldLabel(field),
+        value: formatProcessingValue(field, value),
+        ...(summary ? { summary } : {}),
+      };
+    }
+  );
+  const inputName = activeImageName();
+  return {
+    taskTitle: model.title,
+    ...(inputName ? { inputName } : {}),
+    parameters,
+  };
 }
 
 watch(
