@@ -85,6 +85,9 @@ const classifyError = (err: unknown): PollErrorKind => {
 const errorMessage = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 
+const missingJobErrorDetails = (jobId: string): string =>
+  `The provider reported this job failed but did not include error details. Job ID: ${jobId}`;
+
 // ---------------------------------------------------------------------------
 // Completion payload
 //
@@ -280,7 +283,8 @@ export const useProvidersStore = defineStore('providers', () => {
         ? `Job failed while fetching results: ${title}`
         : `Job failed: ${title}`;
       messageStore.addError(failureTitle, {
-        details: status.errorTail ?? `Job ${status.jobId} failed.`,
+        details:
+          status.errorTail?.trim() || missingJobErrorDetails(status.jobId),
       });
     } else if (status.state === 'cancelled') {
       messageStore.addInfo(`Job cancelled: ${title}`);

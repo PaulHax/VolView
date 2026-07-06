@@ -381,6 +381,40 @@ describe('Providers store — job lifecycle (D5 async-with-sync-fast-path)', () 
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
     expect(getJob).not.toHaveBeenCalled();
   });
+
+  it('surfaces a clear fallback when a job error has no backend details', async () => {
+    const store = useProvidersStore();
+
+    const status: ProcessingJobStatus = {
+      jobId: 'job-no-detail',
+      state: 'error',
+    };
+    const runTask = vi
+      .fn()
+      .mockResolvedValue({
+        jobId: 'job-no-detail',
+        status,
+      } as ProcessingJobRef);
+    const provider = makeProvider({
+      runTask,
+      getJob: vi.fn(),
+      getResults: vi.fn(),
+    });
+    store.instances.set('p1', provider);
+
+    await store.submitJob('p1', 'task-1', {}, {});
+
+    expect(
+      useMessageStore().messages.filter((m) => m.type === MessageType.Error)
+    ).toEqual([
+      expect.objectContaining({
+        title: 'Job failed: task-1',
+        options: expect.objectContaining({
+          details: expect.stringContaining('did not include error details'),
+        }),
+      }),
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

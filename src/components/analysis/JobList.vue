@@ -115,11 +115,8 @@
             </div>
           </div>
         </template>
-        <div
-          v-else-if="job.state === 'error' && job.errorTail"
-          class="job-error-summary mt-1"
-        >
-          <pre class="error-log">{{ errorSummaryFor(job.errorTail) }}</pre>
+        <div v-else-if="job.state === 'error'" class="job-error-summary mt-1">
+          <pre class="error-log">{{ errorSummaryFor(job) }}</pre>
         </div>
       </v-list-item>
     </v-list>
@@ -191,8 +188,10 @@ function subtitleFor(job: {
   return `${taskTitleFor(job.jobId)} - ${job.state}${pct}`;
 }
 
-function errorSummaryFor(errorTail: string): string {
-  const normalized = errorTail.trim().replace(/\s+/g, ' ');
+function errorSummaryFor(job: { jobId: string; errorTail?: string }): string {
+  const normalized =
+    job.errorTail?.trim().replace(/\s+/g, ' ') ||
+    `The provider reported this job failed but did not include error details. Job ID: ${job.jobId}`;
   return normalized.length > 240
     ? `${normalized.slice(0, 237).trimEnd()}...`
     : normalized;
