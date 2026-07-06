@@ -143,7 +143,13 @@ import type { ProcessingResult } from '@/src/processing/types';
 const providers = useProvidersStore();
 const messageStore = useMessageStore();
 
-const jobs = computed(() => Array.from(providers.jobs.values()));
+const jobs = computed(() =>
+  Array.from(providers.jobs.values()).sort((a, b) => {
+    const aSubmittedAt = providers.submittedContexts.get(a.jobId)?.submittedAt;
+    const bSubmittedAt = providers.submittedContexts.get(b.jobId)?.submittedAt;
+    return timestampFor(bSubmittedAt) - timestampFor(aSubmittedAt);
+  })
+);
 
 const loadingResultIds = reactive(new Set<string>());
 // Jobs with an in-flight cancel request (drives the Cancel button spinner).
@@ -167,6 +173,12 @@ function resultsFor(jobId: string): ProcessingResult[] {
 
 function taskTitleFor(jobId: string): string {
   return providers.submittedContexts.get(jobId)?.taskId ?? jobId;
+}
+
+function timestampFor(instant: string | undefined): number {
+  if (!instant) return 0;
+  const timestamp = Date.parse(instant);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
 function subtitleFor(job: {
