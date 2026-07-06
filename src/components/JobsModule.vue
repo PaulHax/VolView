@@ -1,6 +1,5 @@
 <template>
   <div class="jobs-module pa-3">
-    <div class="text-h6 mb-2">Jobs</div>
     <div
       v-if="providers.providerCount === 0"
       class="text-caption text-medium-emphasis"
@@ -63,7 +62,6 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue';
-import { useToast } from 'vue-toastification';
 
 import { useProvidersStore } from '@/src/store/providers';
 import { useCurrentImage } from '@/src/composables/useCurrentImage';
@@ -110,7 +108,7 @@ const datasetStore = useDatasetStore();
 const cropStore = useCropStore();
 const paintStore = usePaintToolStore();
 const segmentGroupStore = useSegmentGroupStore();
-const toast = useToast();
+const messageStore = useMessageStore();
 
 const providerItems = computed(() =>
   Array.from(providers.configs.values()).map((c) => ({
@@ -254,7 +252,7 @@ async function onSubmit(values: Record<string, ProcessingValue>) {
   try {
     stagedValues = await stageLabelmapInputs(model, finalValues);
   } catch (err) {
-    useMessageStore().addError('Failed to stage segment group input', {
+    messageStore.addError('Failed to stage segment group input', {
       error: err instanceof Error ? err : undefined,
     });
     submitting.value = false;
@@ -439,11 +437,11 @@ watch(
 );
 
 // ---------------------------------------------------------------------------
-// Result loading + completion toasts
+// Result loading + completion messages
 //
 // The dedup seen-set lives in the store now (Chunk 12): a job that finishes
 // while this tab is unmounted replays into a fresh subscription exactly once on
-// remount, so no completion (toast + auto-load) is lost across a tab switch.
+// remount, so no completion handling is lost across a tab switch.
 // ---------------------------------------------------------------------------
 
 let unsubscribe: (() => void) | null = null;
@@ -469,17 +467,6 @@ onMounted(() => {
             console.error('Failed to auto-load results', err);
           });
         }
-        const count = results.length;
-        toast.success(
-          `Job complete. ${count} result${count === 1 ? '' : 's'} available — open from the Jobs panel.`,
-          { timeout: 5000 }
-        );
-      } else if (status.state === 'error') {
-        toast.error(
-          `Job failed${status.errorTail ? `: ${status.errorTail.slice(0, 80)}` : ''}`
-        );
-      } else if (status.state === 'cancelled') {
-        toast.info('Job cancelled');
       }
     }
   );
@@ -488,19 +475,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   unsubscribe?.();
 });
-
-// Item 7: a mid-job 401/403 means the whole same-origin session is dead. Prompt
-// a reload — clicking the toast reloads so the user re-authenticates.
-watch(
-  () => providers.sessionExpired,
-  (expired) => {
-    if (!expired) return;
-    toast.error('Session expired. Click here to reload and sign in again.', {
-      timeout: false,
-      onClick: () => window.location.reload(),
-    });
-  }
-);
 </script>
 
 <style scoped>

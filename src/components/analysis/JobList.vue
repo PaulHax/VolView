@@ -5,9 +5,12 @@
       <v-list-item
         v-for="job in jobs"
         :key="job.jobId"
-        :title="taskTitleFor(job.jobId)"
         :subtitle="subtitleFor(job)"
       >
+        <template #title>
+          <span class="job-id">{{ job.jobId }}</span>
+        </template>
+
         <template #append>
           <div class="d-flex align-center" style="gap: 4px">
             <v-chip
@@ -112,18 +115,14 @@
             </div>
           </div>
         </template>
+        <div
+          v-else-if="job.state === 'error' && job.errorTail"
+          class="job-error-summary mt-1"
+        >
+          <pre class="error-log">{{ errorSummaryFor(job.errorTail) }}</pre>
+        </div>
       </v-list-item>
     </v-list>
-    <v-alert
-      v-for="job in failedJobs"
-      :key="`${job.jobId}-err`"
-      type="error"
-      density="compact"
-      class="mt-2 text-caption"
-    >
-      <div class="font-weight-medium">{{ taskTitleFor(job.jobId) }}</div>
-      <pre class="error-log">{{ job.errorTail }}</pre>
-    </v-alert>
   </div>
 </template>
 
@@ -145,9 +144,6 @@ const providers = useProvidersStore();
 const messageStore = useMessageStore();
 
 const jobs = computed(() => Array.from(providers.jobs.values()));
-const failedJobs = computed(() =>
-  jobs.value.filter((j) => j.state === 'error' && j.errorTail)
-);
 
 const loadingResultIds = reactive(new Set<string>());
 // Jobs with an in-flight cancel request (drives the Cancel button spinner).
@@ -173,10 +169,21 @@ function taskTitleFor(jobId: string): string {
   return providers.submittedContexts.get(jobId)?.taskId ?? jobId;
 }
 
-function subtitleFor(job: { state: string; progress?: number }): string {
+function subtitleFor(job: {
+  jobId: string;
+  state: string;
+  progress?: number;
+}): string {
   const pct =
     job.progress != null ? ` (${Math.round(job.progress * 100)}%)` : '';
-  return `${job.state}${pct}`;
+  return `${taskTitleFor(job.jobId)} - ${job.state}${pct}`;
+}
+
+function errorSummaryFor(errorTail: string): string {
+  const normalized = errorTail.trim().replace(/\s+/g, ' ');
+  return normalized.length > 240
+    ? `${normalized.slice(0, 237).trimEnd()}...`
+    : normalized;
 }
 
 // Map an explicit action button to the intent it requests. The user's choice —
@@ -253,10 +260,18 @@ async function dispatch(
 .job-list :deep(.v-list-item) {
   padding-inline-start: 0;
 }
+.job-list :deep(.v-list-item__content),
+.job-id {
+  user-select: text;
+  cursor: text;
+}
 .error-log {
   white-space: pre-wrap;
   font-size: 0.7rem;
   margin: 4px 0 0;
+}
+.job-error-summary {
+  color: rgb(var(--v-theme-error));
 }
 .result-row {
   padding: 2px 0;

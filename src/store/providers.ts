@@ -219,6 +219,7 @@ export const useProvidersStore = defineStore('providers', () => {
   // completion is retained but NOT marked seen, so the next `onJobComplete`
   // subscriber replays it — exactly once.
   function deliverCompletion(completion: JobCompletion) {
+    addTerminalJobMessage(completion.status, completion.results);
     terminalCompletions.set(completion.status.jobId, completion);
     if (completionListeners.size === 0) return;
     firedCompletions.add(completion.status.jobId);
@@ -258,13 +259,40 @@ export const useProvidersStore = defineStore('providers', () => {
     pollTimers.set(jobId, timer);
   }
 
-  // Fail LOUD: synthesize a terminal `error` status, surface it, and route it
-  // through the same completion path as any other terminal job so JobList shows
-  // it and the seen-set/replay covers it. `detail` prefixes the surfaced tail.
+  function taskLabelFor(jobId: string): string {
+    return submittedContexts.get(jobId)?.taskId ?? jobId;
+  }
+
+  function addTerminalJobMessage(
+    status: ProcessingJobStatus,
+    results: ProcessingResult[]
+  ) {
+    const title = taskLabelFor(status.jobId);
+    const messageStore = useMessageStore();
+    if (status.state === 'success') {
+      const count = results.length;
+      messageStore.addSuccess(
+        `Job complete: ${title}`,
+        `${count} result${count === 1 ? '' : 's'} available in the Jobs panel.`
+      );
+    } else if (status.state === 'error') {
+      const failureTitle = /result/i.test(status.errorTail ?? '')
+        ? `Job failed while fetching results: ${title}`
+        : `Job failed: ${title}`;
+      messageStore.addError(failureTitle, {
+        details: status.errorTail ?? `Job ${status.jobId} failed.`,
+      });
+    } else if (status.state === 'cancelled') {
+      messageStore.addInfo(`Job cancelled: ${title}`);
+    }
+  }
+
+  // Fail LOUD: synthesize a terminal `error` status and route it through the
+  // same completion path as any other terminal job so JobList shows it and the
+  // terminal-message path surfaces it. `detail` prefixes the surfaced tail.
   function failJob(
     jobId: string,
     err: unknown,
-    title: string,
     detail?: string
   ): ProcessingJobStatus {
     stopPolling(jobId);
@@ -272,7 +300,6 @@ export const useProvidersStore = defineStore('providers', () => {
     const errorTail = detail ? `${detail}: ${message}` : message;
     const status: ProcessingJobStatus = { jobId, state: 'error', errorTail };
     recordJob(status);
-    useMessageStore().addError(title, { details: errorTail });
     return status;
   }
 
@@ -303,7 +330,6 @@ export const useProvidersStore = defineStore('providers', () => {
       const status = failJob(
         jobId,
         err,
-        'Processing job failed',
         'the job or its base image may have been deleted'
       );
       deliverCompletion({
@@ -314,7 +340,7 @@ export const useProvidersStore = defineStore('providers', () => {
       return;
     }
     if (kind === 'permanent') {
-      const status = failJob(jobId, err, 'Processing job failed');
+      const status = failJob(jobId, err);
       deliverCompletion({
         status,
         results: [],
@@ -328,7 +354,6 @@ export const useProvidersStore = defineStore('providers', () => {
       const status = failJob(
         jobId,
         err,
-        'Processing job failed',
         `polling gave up after ${MAX_POLL_RETRIES} retries`
       );
       deliverCompletion({
@@ -390,7 +415,7 @@ export const useProvidersStore = defineStore('providers', () => {
         markSessionExpired(err);
         return;
       }
-      const errored = failJob(jobId, err, 'Failed to fetch job results');
+      const errored = failJob(jobId, err, 'failed to fetch job results');
       deliverCompletion({ status: errored, results: [], context });
       return;
     }

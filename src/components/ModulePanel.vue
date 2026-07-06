@@ -139,7 +139,7 @@ export default defineComponent({
               providerCount > 0
                 ? {
                     name: 'Jobs',
-                    icon: 'flask-outline',
+                    icon: 'creation',
                     component: JobsModule,
                   }
                 : null;

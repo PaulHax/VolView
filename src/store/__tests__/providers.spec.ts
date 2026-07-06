@@ -131,6 +131,16 @@ describe('Providers store — job lifecycle (D5 async-with-sync-fast-path)', () 
     );
     expect(store.jobs.get('job-sync')?.state).toBe('success');
     expect(store.jobResults.get('job-sync')).toEqual(sampleResults);
+    expect(
+      useMessageStore().messages.filter((m) => m.type === MessageType.Success)
+    ).toEqual([
+      expect.objectContaining({
+        title: 'Job complete: task-1',
+        options: expect.objectContaining({
+          details: '1 result available in the Jobs panel.',
+        }),
+      }),
+    ]);
 
     // No poller: getJob is never called, even after intervals elapse.
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
@@ -357,6 +367,14 @@ describe('Providers store — job lifecycle (D5 async-with-sync-fast-path)', () 
         context: expect.objectContaining({ jobId: 'job-born-err' }),
       })
     );
+    expect(
+      useMessageStore().messages.filter((m) => m.type === MessageType.Error)
+    ).toEqual([
+      expect.objectContaining({
+        title: 'Job failed: task-1',
+        options: expect.objectContaining({ details: 'malformed' }),
+      }),
+    ]);
     expect(getResults).not.toHaveBeenCalled();
 
     // No poller registered — getJob never called even after intervals elapse.
