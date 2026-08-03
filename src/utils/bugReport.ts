@@ -24,9 +24,9 @@ const getSourceFormat = (name: string, isDicom: boolean): string => {
 const formatScalarType = (constructorName: string): string =>
   constructorName.replace('Array', '');
 
-const formatError = (error?: Error): string => {
-  if (!error) return 'No error details available';
-  const text = error.stack ?? String(error);
+const formatError = (error?: Error, stack?: string): string => {
+  const text = stack ?? error?.stack ?? (error && String(error));
+  if (!text) return 'No error details available';
   return text.length > MAX_ERROR_LENGTH
     ? `${text.slice(0, MAX_ERROR_LENGTH)}\n... (truncated)`
     : text;
@@ -68,7 +68,10 @@ const collectDatasetInfo = (): string[] => {
   });
 };
 
-export const generateBugReport = (error?: Error): string => {
+/**
+ * @param stack overrides `error.stack`, e.g. with a source-mapped trace.
+ */
+export const generateBugReport = (error?: Error, stack?: string): string => {
   const versions = __VERSIONS__;
   const sha = __GIT_SHORT_SHA__;
 
@@ -78,7 +81,7 @@ export const generateBugReport = (error?: Error): string => {
     `Browser: ${getBrowserInfo()}`,
     '',
     'Error:',
-    formatError(error),
+    formatError(error, stack),
   ];
 
   const datasets = collectDatasetInfo();
