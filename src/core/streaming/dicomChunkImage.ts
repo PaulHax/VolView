@@ -16,7 +16,7 @@ import {
   getBufferValueRange,
   samplesAreIntegral,
   valuesFitBuffer,
-} from '@/src/utils/allocateImageFromChunks';
+} from '@/src/utils/dicom/allocateImageFromChunks';
 import { TypedArray } from '@kitware/vtk.js/types';
 import { Tags } from '@/src/core/dicomTags';
 import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';

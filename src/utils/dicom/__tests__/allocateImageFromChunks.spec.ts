@@ -10,7 +10,7 @@ import {
   getVolumeBufferType,
   samplesAreIntegral,
   valuesFitBuffer,
-} from '@/src/utils/allocateImageFromChunks';
+} from '@/src/utils/dicom/allocateImageFromChunks';
 import { describe, it, expect } from 'vitest';
 
 function chunk(overrides: Record<string, string> = {}) {
