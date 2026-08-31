@@ -146,6 +146,20 @@ describe('DICOM store acquisition split across imports', () => {
     setActivePinia(createPinia());
   });
 
+  it('refreshes the slice count when an existing volume gains chunks', async () => {
+    const store = useDICOMStore();
+    const first = [chunk('slice-0', 0)];
+    const second = [chunk('slice-1', 2.5)];
+
+    await importInto(store, first, { S: first });
+    expect(store.volumeInfo.S.NumberOfSlices).toBe(1);
+
+    await importInto(store, second, { S: second });
+
+    expect(store.volumeInfo.S.NumberOfSlices).toBe(2);
+    expect(store.studyVolumes['study-uid']).toEqual(['S']);
+  });
+
   it('re-splits a series imported one acquisition at a time', async () => {
     const store = useDICOMStore();
     const imageCacheStore = useImageCacheStore();

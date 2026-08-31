@@ -447,11 +447,11 @@ export const useDICOMStore = defineStore('dicom', {
       }
 
       if (!(volumeKey in this.volumeInfo)) {
-        this.volumeInfo[volumeKey] = volume;
         this.volumeStudy[volumeKey] = studyKey;
         this.sliceData[volumeKey] = {};
         this.studyVolumes[studyKey].push(volumeKey);
       }
+      this.volumeInfo[volumeKey] = volume;
     },
 
     // You should probably call datasetStore.remove instead as this does not
