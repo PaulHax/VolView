@@ -10,6 +10,7 @@ import {
   dceSevenPhasePhilips,
   dixonDualEcho,
   dixonUnevenEchoes,
+  dwiMultiBValue,
   doubledAcquisition,
   partialTemporalTags,
   type IdcSeriesFixture,
@@ -301,6 +302,54 @@ describe('splitOverlappingAcquisitions temporal and echo discriminators', () => 
     expect(volumes['vol.2']).toHaveLength(12);
   });
 
+  it('separates repeated diffusion positions by b-value', () => {
+    const merged = fixtureChunks(dwiMultiBValue);
+
+    const { volumes, duplicated, labels } = splitOverlappingAcquisitions({
+      vol: merged,
+    });
+
+    expect(Object.keys(volumes).sort()).toEqual([
+      'vol.0',
+      'vol.100',
+      'vol.600',
+      'vol.800',
+    ]);
+    Object.values(volumes).forEach((group) => {
+      expect(group).toHaveLength(30);
+    });
+    expect(duplicated).toEqual([]);
+    expect(labels['vol.600']).toBe('b-value 600');
+  });
+
+  it('does not split when b-value is missing from one slice', () => {
+    const merged = [
+      chunk(0, { [Tags.DiffusionBValue]: '0' }),
+      chunk(0),
+      chunk(0, { [Tags.DiffusionBValue]: '800' }),
+    ];
+
+    const { volumes, duplicated } = splitOverlappingAcquisitions({
+      vol: merged,
+    });
+
+    expect(Object.keys(volumes)).toEqual(['vol']);
+    expect(duplicated).toEqual(['vol']);
+  });
+
+  it('treats equivalent integer spellings as one tag value', () => {
+    const merged = [...stack('+1', 0, 5), ...stack('01', 0, 5)].sort(
+      byPosition
+    );
+
+    const { volumes, duplicated } = splitOverlappingAcquisitions({
+      vol: merged,
+    });
+
+    expect(Object.keys(volumes)).toEqual(['vol']);
+    expect(duplicated).toEqual(['vol']);
+  });
+
   it('does not split bilateral slabs whose stacks do not overlap', () => {
     // StackID (0020|9056) differs per slab, but the slabs form one sound
     // volume with a gap; this series is why StackID is not a discriminator.
@@ -385,9 +434,9 @@ describe('splitOverlappingAcquisitions temporal and echo discriminators', () => 
   });
 
   it('falls back unsplit when tag values collide into one ID', () => {
-    // '+1' and '-1' both encode to 'D1'; splitting would silently drop one
-    // group's chunks, so the volume must pass through whole and be reported.
-    const merged = [...stack('+1', 0, 5), ...stack('-1', 0, 5)].sort(
+    // Malformed '1.5' and '1-5' both encode to '1D5'; splitting would silently
+    // drop one group's chunks, so the volume passes through and is reported.
+    const merged = [...stack('1.5', 0, 5), ...stack('1-5', 0, 5)].sort(
       byPosition
     );
 

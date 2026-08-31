@@ -105,6 +105,26 @@ export const dixonUnevenEchoes: IdcSeriesFixture = {
   ],
 };
 
+export const dwiMultiBValue: IdcSeriesFixture = {
+  seriesInstanceUID:
+    '1.3.6.1.4.1.14519.5.2.1.7695.4164.198361347871486858845671445367',
+  seriesDescription: 'ACRIN-6698: DWI_Multi_bValue',
+  vendor: 'Philips',
+  why:
+    'Diffusion MR: 30 positions repeated at b-values 0, 100, 600, and 800. ' +
+    'AcquisitionNumber, TemporalPositionIdentifier, and EchoNumbers are ' +
+    'constant, so DiffusionBValue is the only standard discriminator.',
+  groups: [0, 100, 600, 800].map((bValue) => ({
+    tags: {
+      [Tags.AcquisitionNumber]: '6',
+      [Tags.TemporalPositionIdentifier]: '1',
+      [Tags.EchoNumbers]: '1',
+      [Tags.DiffusionBValue]: String(bValue),
+    },
+    zs: steps(-67.0785, 30, 4.0),
+  })),
+};
+
 export const bilateralSagittalSlabs: IdcSeriesFixture = {
   seriesInstanceUID:
     '1.3.6.1.4.1.14519.5.2.1.66737955842913643997059729379406867951',
