@@ -13,10 +13,36 @@ import {
 // both axes. Every entry traces to an IDC series in
 // __tests__/idcSeriesFixtures.ts. StackID (0020|9056) is absent on purpose:
 // bilateral slab series put two stacks in one sound volume.
+const normalizeInteger = (value: string) => {
+  try {
+    return BigInt(value).toString();
+  } catch {
+    return value;
+  }
+};
+
+const normalizeDecimal = (value: string) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? String(number) : value;
+};
+
 const SPLIT_TAGS = [
-  { tag: Tags.AcquisitionNumber, label: 'acquisition' },
-  { tag: Tags.TemporalPositionIdentifier, label: 'phase' },
-  { tag: Tags.EchoNumbers, label: 'echo' },
+  {
+    tag: Tags.AcquisitionNumber,
+    label: 'acquisition',
+    normalize: normalizeInteger,
+  },
+  {
+    tag: Tags.TemporalPositionIdentifier,
+    label: 'phase',
+    normalize: normalizeInteger,
+  },
+  { tag: Tags.EchoNumbers, label: 'echo', normalize: normalizeInteger },
+  {
+    tag: Tags.DiffusionBValue,
+    label: 'b-value',
+    normalize: normalizeDecimal,
+  },
 ];
 
 /**
@@ -58,11 +84,15 @@ export function hasDuplicateSlicePositions(chunks: Chunk[]) {
   return positions ? hasDuplicatePositions(chunks, positions) : false;
 }
 
-function groupByTag(chunks: Chunk[], tag: string) {
+function groupByTag(
+  chunks: Chunk[],
+  discriminator: (typeof SPLIT_TAGS)[number]
+) {
   const groups = new Map<string, Chunk[]>();
   for (let i = 0; i < chunks.length; i += 1) {
-    const value = getChunkTag(chunks[i], tag)?.trim();
-    if (!value) return null;
+    const rawValue = getChunkTag(chunks[i], discriminator.tag)?.trim();
+    if (!rawValue) return null;
+    const value = discriminator.normalize(rawValue);
     const group = groups.get(value);
     if (group) group.push(chunks[i]);
     else groups.set(value, [chunks[i]]);
@@ -110,10 +140,10 @@ function getSpan(chunks: Chunk[], positions: Positions) {
  */
 function findOverlappingGroups(
   chunks: Chunk[],
-  tag: string,
+  discriminator: (typeof SPLIT_TAGS)[number],
   positions: Positions
 ) {
-  const groups = groupByTag(chunks, tag);
+  const groups = groupByTag(chunks, discriminator);
   if (!groups || groups.size < 2) return null;
 
   const entries = [...groups.entries()].map(([value, group]) => ({
@@ -143,7 +173,7 @@ function splitByTags(
   const [head, ...rest] = tags;
   if (!head) return null;
 
-  const groups = findOverlappingGroups(chunks, head.tag, positions);
+  const groups = findOverlappingGroups(chunks, head, positions);
   if (!groups) return splitByTags(chunks, positions, rest);
 
   return groups.flatMap(({ value, chunks: group }) => {

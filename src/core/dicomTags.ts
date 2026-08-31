@@ -29,6 +29,7 @@ const tags: Tag[] = [
   { name: 'AcquisitionNumber', tag: '0020|0012' },
   { name: 'TemporalPositionIdentifier', tag: '0020|0100' },
   { name: 'EchoNumbers', tag: '0018|0086' },
+  { name: 'DiffusionBValue', tag: '0018|9087' },
   { name: 'ImagePositionPatient', tag: '0020|0032' },
   { name: 'ImageOrientationPatient', tag: '0020|0037' },
   { name: 'PixelSpacing', tag: '0028|0030' },

@@ -262,10 +262,10 @@ describe('DICOM store acquisition split across imports', () => {
 
     expect(Object.keys(store.volumeInfo).sort()).toEqual(['S.1', 'S.2']);
 
-    // '+1' and '-1' both encode to the ID suffix 'D1'. The union cannot
-    // split without silently dropping chunks, so the whole series must
+    // Malformed '1.5' and '1-5' both encode to the ID suffix '1D5'. The union
+    // cannot split without silently dropping chunks, so the whole series must
     // converge to the single base volume, not re-split batch-only.
-    const colliding = [chunk('plus-0', 10, '+1'), chunk('minus-0', 10.5, '-1')];
+    const colliding = [chunk('dot-0', 10, '1.5'), chunk('dash-0', 10.5, '1-5')];
     const volumes = await importInto(store, colliding, { S: colliding });
 
     expect(Object.keys(volumes)).toEqual(['S']);
