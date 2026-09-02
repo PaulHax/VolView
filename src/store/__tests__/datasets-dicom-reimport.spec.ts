@@ -3,69 +3,20 @@ import { createPinia, setActivePinia } from 'pinia';
 
 import type { Chunk } from '@/src/core/streaming/chunk';
 import type DicomChunkImage from '@/src/core/streaming/dicomChunkImage';
-import { Tags } from '@/src/core/dicomTags';
 import { useImageCacheStore } from '@/src/store/image-cache';
 import {
   useDICOMStore,
   type ImportChunksResult,
 } from '@/src/store/datasets-dicom';
 import { mergingChunks } from '@/src/core/dicom/__tests__/orientationFixtures';
-
-const SERIES_UID = '1.2.826.0.1.3680043.9.7';
-const OTHER_SERIES_UID = '1.2.826.0.1.3680043.9.8';
-
-// Records what the DICOM store asks a chunk volume to hold.
-class FakeChunkImage {
-  setChunksCalls: Chunk[][] = [];
-
-  startLoadCount = 0;
-
-  name = '';
-
-  async setChunks(chunks: Chunk[]) {
-    this.setChunksCalls.push(chunks);
-  }
-
-  getDicomMetadata() {
-    return this.setChunksCalls.at(-1)![0].metadata;
-  }
-
-  getChunks() {
-    return this.setChunksCalls.at(-1)!.slice();
-  }
-
-  setName(name: string) {
-    this.name = name;
-  }
-
-  getStatus() {
-    return 'incomplete';
-  }
-
-  isLoading() {
-    return false;
-  }
-
-  addEventListener() {}
-
-  removeEventListener() {}
-
-  startLoad() {
-    this.startLoadCount += 1;
-  }
-
-  dispose() {}
-}
-
-function imageFactory() {
-  const created: FakeChunkImage[] = [];
-  const createChunkImage = () => {
-    const image = new FakeChunkImage();
-    created.push(image);
-    return image as unknown as DicomChunkImage;
-  };
-  return { created, createChunkImage };
-}
+import {
+  chunkFor,
+  imageFactory,
+  FakeChunkImage,
+  OTHER_SERIES_UID,
+  SERIES_UID,
+  STUDY_UID,
+} from '@/src/store/__tests__/dicomImportFixtures';
 
 // Holds every setChunks until `open`, so two imports can be in flight at once.
 function deferredImageFactory() {
@@ -74,7 +25,7 @@ function deferredImageFactory() {
   let opened = false;
 
   const createChunkImage = () => {
-    const image = new FakeChunkImage();
+    const image = new FakeChunkImage(created.length);
     const { setChunks } = image;
     image.setChunks = (chunks: Chunk[]) =>
       new Promise<void>((resolve) => {
@@ -92,51 +43,6 @@ function deferredImageFactory() {
   };
 
   return { created, createChunkImage, open };
-}
-
-type SliceOptions = {
-  sop: string;
-  series?: string;
-  z?: number;
-  rows?: string;
-  orientation?: string;
-};
-
-function chunkFor({
-  sop,
-  series = SERIES_UID,
-  z = 0,
-  rows = '4',
-  orientation = '1\\0\\0\\0\\1\\0',
-}: SliceOptions) {
-  const metadata = [
-    [Tags.SOPClassUID, '1.2.840.10008.5.1.4.1.1.4'],
-    [Tags.NumberOfFrames, '1'],
-    [Tags.SOPInstanceUID, sop],
-    [Tags.PatientID, 'patient-1'],
-    [Tags.PatientName, 'Test Patient'],
-    [Tags.PatientBirthDate, ''],
-    [Tags.PatientSex, ''],
-    [Tags.StudyID, 'study-1'],
-    [Tags.StudyInstanceUID, '1.2.826.0.1.3680043.9.1'],
-    [Tags.StudyDate, ''],
-    [Tags.StudyTime, ''],
-    [Tags.AccessionNumber, ''],
-    [Tags.StudyDescription, ''],
-    [Tags.Modality, 'MR'],
-    [Tags.SeriesInstanceUID, series],
-    [Tags.SeriesNumber, '7'],
-    [Tags.SeriesDescription, 'Incremental series'],
-    [Tags.WindowLevel, ''],
-    [Tags.WindowWidth, ''],
-    [Tags.Rows, rows],
-    [Tags.Columns, '4'],
-    [Tags.SamplesPerPixel, '1'],
-    [Tags.ImageOrientationPatient, orientation],
-    [Tags.ImagePositionPatient, `0\\0\\${z}`],
-    ['0020|0013', String(z + 1)],
-  ] as Array<[string, string]>;
-  return { metadata } as unknown as Chunk;
 }
 
 const onlyId = ({ volumes }: ImportChunksResult) => {
@@ -265,9 +171,7 @@ describe('DICOM store incremental import', () => {
     expect(ids.map((id) => store.volumeInfo[id].NumberOfSlices).sort()).toEqual(
       [1, 2]
     );
-    expect(store.studyVolumes['1.2.826.0.1.3680043.9.1'].sort()).toEqual(
-      [...ids].sort()
-    );
+    expect(store.studyVolumes[STUDY_UID].sort()).toEqual([...ids].sort());
   });
 
   it('rebuilds a removed series from the chunks the re-import brings', async () => {
@@ -314,7 +218,7 @@ describe('DICOM store incremental import', () => {
 
     expect(store.volumeInfo[dissolved]).toBeUndefined();
     expect(imageCacheStore.imageById[dissolved]).toBeUndefined();
-    expect(store.studyVolumes['1.2.826.0.1.3680043.9.1']).toEqual([survivor]);
+    expect(store.studyVolumes[STUDY_UID]).toEqual([survivor]);
     expect(store.volumeInfo[survivor].NumberOfSlices).toBe(3);
     // The caller has to drop the dataset the dissolved id owned, and the
     // survivor has to carry the provenance of the member it inherited.
@@ -349,7 +253,7 @@ describe('DICOM store incremental import', () => {
     const created: FakeChunkImage[] = [];
     let failing = true;
     const createChunkImage = () => {
-      const image = new FakeChunkImage();
+      const image = new FakeChunkImage(created.length);
       const { setChunks } = image;
       image.setChunks = async (chunks: Chunk[]) => {
         if (failing) throw new Error('cannot allocate the volume buffer');
