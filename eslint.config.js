@@ -87,7 +87,6 @@ const featureBoundaries = (features) => {
 export default tseslint.config(
   {
     ignores: [
-      'src/io/itk-dicom/emscripten-build/**',
       'src/io/resample/emscripten-build/**',
       '**/*.d.ts',
       'dist/**',
