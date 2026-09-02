@@ -95,25 +95,38 @@ export function buildStateIDToStoreID(
   return stateIDToStoreID;
 }
 
-async function importDicomChunkSources(sources: ChunkSource[]) {
+// A chunk outlives the batch that brought it: a replan can move a member into
+// another collection, whose provenance must still name where that byte came
+// from. Weak keys let a released chunk take its entry with it.
+const chunkToDataSource = new WeakMap<Chunk, ChunkSource>();
+
+export async function importDicomChunkSources(
+  sources: ChunkSource[],
+  importChunks = (chunks: Chunk[]) => useDICOMStore().importChunks(chunks)
+) {
   if (sources.length === 0) return [];
 
-  const volumeChunks = await useDICOMStore().importChunks(
+  sources.forEach((src) => chunkToDataSource.set(src.chunk, src));
+
+  const { volumes, dissolved } = await importChunks(
     sources.map((src) => src.chunk)
   );
 
-  // this is used to reconstruct the ChunkSource list
-  const chunkToDataSource = new Map<Chunk, ChunkSource>();
-  sources.forEach((src) => {
-    chunkToDataSource.set(src.chunk, src);
-  });
+  // A replan folded these collections into others, so the datasets an earlier
+  // import created for them no longer describe anything loaded.
+  const datasetStore = useDatasetStore();
+  dissolved.forEach((id) => datasetStore.remove(id));
 
-  return Object.entries(volumeChunks).map(([id, chunks]) =>
+  // Every member reports back, so a collection that gained a member from a
+  // dissolved one carries its provenance too.
+  return Object.entries(volumes).map(([id, chunks]) =>
     asLoadableResult(
       id,
       {
         type: 'collection',
-        sources: chunks.map((chunk) => chunkToDataSource.get(chunk)!),
+        sources: chunks
+          .map((chunk) => chunkToDataSource.get(chunk))
+          .filter((src): src is ChunkSource => src !== undefined),
       },
       'image'
     )

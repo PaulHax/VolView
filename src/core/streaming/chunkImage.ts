@@ -28,7 +28,6 @@ export type ChunkImageEvents = {
 } & ProgressiveImageEvents;
 
 export type ChunkImage = ProgressiveImage & {
-  addChunks(chunks: Chunk[]): void;
   setChunks(chunks: Chunk[]): Promise<void>;
   addEventListener<T extends keyof ChunkImageEvents>(
     type: T,

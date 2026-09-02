@@ -536,6 +536,47 @@ describe('DicomChunkImage', () => {
     image.dispose();
   });
 
+  it('windows a multi component thumbnail on the component it reads', async () => {
+    const OTHER_COMPONENT = 1000;
+    const readRgbImage: DicomChunkImageInit['readDicomImage'] = async (
+      file
+    ) => {
+      const value = Number(await file.text()) * 100;
+      return {
+        image: {
+          size: [COLUMNS, ROWS, 1],
+          data: Uint16Array.from(
+            { length: PIXELS_PER_SLICE * 3 },
+            (_, index) => (index % 3 === 0 ? value : OTHER_COMPONENT)
+          ),
+          imageType: { components: 3 },
+        },
+      };
+    };
+
+    const encoder = capturingEncoder();
+    const image = new DicomChunkImage({
+      readDicomImage: readRgbImage,
+      encodeThumbnail: encoder.encodeThumbnail,
+    });
+    const chunks = await Promise.all(
+      [1, 2, 3].map((z) => makeLoadedChunk(z, { [Tags.SamplesPerPixel]: '3' }))
+    );
+
+    await image.setChunks(chunks);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(3))
+    );
+
+    await image.getThumbnail();
+
+    // Component 0 runs 100 to 300 across the volume, so the middle slice's 200
+    // is mid grey. The vector magnitude range would clamp it to black.
+    expect(Array.from(encoder.slices[0].data)).toEqual([128, 128, 128, 128]);
+
+    image.dispose();
+  });
+
   it('thumbnails the new middle slice after its membership changes', async () => {
     const encoder = capturingEncoder();
     const image = new DicomChunkImage({

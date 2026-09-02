@@ -13,7 +13,11 @@ import type {
   CineParseResult,
 } from '@/src/core/cine/parseCineDicom';
 import { useImageCacheStore } from '@/src/store/image-cache';
-import { isCineChunkGroup, useDICOMStore } from '@/src/store/datasets-dicom';
+import {
+  isCineChunkGroup,
+  useDICOMStore,
+  type ImportChunksResult,
+} from '@/src/store/datasets-dicom';
 
 class FakeChunkImage {
   chunks: Chunk[] = [];
@@ -216,8 +220,8 @@ describe('DICOM store cine routing', () => {
     expect(created).toHaveLength(1);
     expect(created[0].chunks).toEqual([unsupportedCineChunk]);
 
-    const id = onlyId(result);
-    expect(result[id]).toEqual([unsupportedCineChunk]);
+    const id = onlyId(result.volumes);
+    expect(result.volumes[id]).toEqual([unsupportedCineChunk]);
     expect(useImageCacheStore().imageById[id]).toBe(created[0]);
     expect(store.volumeInfo[id]).toMatchObject({
       NumberOfSlices: 1,
@@ -239,7 +243,7 @@ describe('DICOM store cine routing', () => {
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const store = useDICOMStore();
-    let result: Record<string, Chunk[]>;
+    let result: ImportChunksResult;
     try {
       result = await store.importChunks([malformedCineChunk], {
         createChunkImage,
@@ -254,7 +258,7 @@ describe('DICOM store cine routing', () => {
     expect(created).toHaveLength(1);
     expect(created[0].chunks).toEqual([malformedCineChunk]);
 
-    const id = onlyId(result!);
+    const id = onlyId(result!.volumes);
     expect(useImageCacheStore().imageById[id]).toBe(created[0]);
     expect(store.volumeInfo[id].kind).toBe('volume');
   });
@@ -274,7 +278,7 @@ describe('DICOM store cine routing', () => {
       createChunkImage: learner.createChunkImage,
       parseCineDicom,
     });
-    const id = onlyId(learned);
+    const id = onlyId(learned.volumes);
 
     // A fresh session plans the same id, but the cache holds a foreign image.
     setActivePinia(createPinia());
