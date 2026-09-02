@@ -372,6 +372,31 @@ describe('DicomChunkImage', () => {
     image.dispose();
   });
 
+  it('keeps the volume it has when a new membership cannot be allocated', async () => {
+    const image = new DicomChunkImage({ readDicomImage });
+    const [first, second] = await threeChunks();
+
+    await image.setChunks([first]);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(1))
+    );
+    const allocated = image.getVtkImageData();
+
+    // A multi-frame instance cannot lead a multi-chunk volume, so allocation
+    // rejects this membership.
+    const multiFrame = await makeLoadedChunk(4, { [Tags.NumberOfFrames]: '2' });
+    await expect(image.setChunks([multiFrame, second])).rejects.toThrow(
+      /multi-frame/
+    );
+
+    expect(image.getChunks()).toEqual([first]);
+    expect(image.getChunkStatuses()).toEqual(allLoaded(1));
+    expect(image.getVtkImageData()).toBe(allocated);
+    expect(sliceOf(image, 0)).toEqual(filledWith(1));
+
+    image.dispose();
+  });
+
   it('serializes overlapping calls so the last order wins', async () => {
     const image = new DicomChunkImage({ readDicomImage });
     const { chunk: gated, release } = makeGatedChunk(1);
