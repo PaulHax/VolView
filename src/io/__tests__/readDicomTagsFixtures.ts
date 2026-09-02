@@ -1,6 +1,8 @@
 import {
+  attributeTagValue,
   buildSyntheticCineDicom,
   buildSyntheticDicom,
+  rawElement,
   SyntheticSliceOptions,
 } from '@/tests/specs/syntheticDicom';
 
@@ -79,6 +81,67 @@ export const LATIN1_NAME_BYTES = bytes(
   0x72,
   0x67
 );
+
+const doubles = (...values: number[]) => {
+  const out = new Uint8Array(values.length * 8);
+  const view = new DataView(out.buffer);
+  values.forEach((value, i) => view.setFloat64(i * 8, value, true));
+  return out;
+};
+
+const floats = (...values: number[]) => {
+  const out = new Uint8Array(values.length * 4);
+  const view = new DataView(out.buffer);
+  values.forEach((value, i) => view.setFloat32(i * 4, value, true));
+  return out;
+};
+
+/**
+ * Elements the named writers cannot emit: a binary buffer VR, an attribute tag,
+ * binary floats, and the private elements every clinical vendor writes. Tags
+ * sort after (0028,1053) so the data set stays ascending.
+ */
+export const KATAKANA_NAME = 'ｱｲｳ^ｴｵ';
+export const KATAKANA_NAME_BYTES = bytes(0xb1, 0xb2, 0xb3, 0x5e, 0xb4, 0xb5);
+
+// Half width katakana and JIS X 0208 runs in one value, which ISO 2022 allows
+// and no single decoder covers. GDCM stopped at the first escape here, so this
+// fixture stays out of the differential corpus.
+export const MIXED_JIS_NAME = 'ﾔﾏﾀﾞ^ﾀﾛｳ=山田^太郎';
+export const MIXED_JIS_NAME_BYTES = concat(
+  bytes(0xd4, 0xcf, 0xc0, 0xde),
+  ascii('^'),
+  bytes(0xc0, 0xdb, 0xb3),
+  ascii('='),
+  jisX0208(0x3b, 0x33, 0x45, 0x44),
+  ascii('^'),
+  jisX0208(0x42, 0x40, 0x4f, 0x3a)
+);
+
+export const MIXED_VR_ELEMENTS = [
+  // (0028,2000) ICC Profile, OB.
+  rawElement(0x0028, 0x2000, 'OB', new Uint8Array(8).fill(0x7f)),
+  // (0028,9445) is FL in the dictionary; written UN, as a vendor would.
+  rawElement(0x0028, 0x9445, 'UN', bytes(0x01, 0x02, 0x03, 0x04)),
+  // Odd groups, which every clinical vendor writes and GDCM never reported.
+  rawElement(0x0029, 0x0010, 'LO', ascii('SIEMENS CSA HEADER  ')),
+  rawElement(0x0029, 0x1010, 'OB', new Uint8Array(6).fill(0x41)),
+  rawElement(0x0029, 0x1020, 'UN', new Uint8Array(4).fill(0x02)),
+  rawElement(0x0009, 0x1001, 'SH', ascii('GEPRIV  ')),
+  // (0018,9087) Diffusion b-value FD, (0018,9089) gradient orientation FD x 3.
+  rawElement(0x0018, 0x9087, 'FD', doubles(1234567)),
+  rawElement(0x0018, 0x9089, 'FD', doubles(3, 0.000012345678, -0.1 - 0.2)),
+  // (0028,9459) LUT Frame Range, FL.
+  rawElement(0x0028, 0x9459, 'FL', floats(-2.5, 1e-30)),
+  // (0028,0009) Frame Increment Pointer, AT, single and multi valued.
+  rawElement(0x0028, 0x0009, 'AT', attributeTagValue(0x0018, 0x10ab)),
+  rawElement(
+    0x0028,
+    0x000a,
+    'AT',
+    concat(attributeTagValue(0x0018, 0x1063), attributeTagValue(0x0028, 0x00ff))
+  ),
+];
 
 /** Fixed UIDs, so a fixture's tag values are the same on every run. */
 export const sliceOptions = (
@@ -205,6 +268,21 @@ export const tagReaderCorpus = () => [
     bytes: buildSlice({
       specificCharacterSet: 'ISO_IR 100',
       patientNameBytes: LATIN1_NAME_BYTES,
+    }),
+  },
+  {
+    name: 'binary, attribute tag, float and private elements',
+    bytes: buildSlice({ extraElements: MIXED_VR_ELEMENTS }),
+  },
+  {
+    name: 'implicit VR binary, attribute tag, float and private elements',
+    bytes: buildSlice({ implicitVr: true, extraElements: MIXED_VR_ELEMENTS }),
+  },
+  {
+    name: 'ISO 2022 IR 13 half width katakana name',
+    bytes: buildSlice({
+      specificCharacterSet: 'ISO 2022 IR 13\\ISO 2022 IR 87',
+      patientNameBytes: KATAKANA_NAME_BYTES,
     }),
   },
   {

@@ -8,6 +8,11 @@ import {
   GB18030_NAME_BYTES,
   GB18030_NAME_PADDED,
   JAPANESE_NAME,
+  KATAKANA_NAME,
+  KATAKANA_NAME_BYTES,
+  MIXED_JIS_NAME,
+  MIXED_JIS_NAME_BYTES,
+  MIXED_VR_ELEMENTS,
   JAPANESE_NAME_BYTES,
   KOREAN_NAME,
   KOREAN_NAME_BYTES,
@@ -26,6 +31,12 @@ const valueOf = (tags: TagPairs, tag: string) =>
 const keysOf = (tags: TagPairs) => tags.map(([name]) => name);
 
 const SPECIFIC_CHARACTER_SET = '0008|0005';
+const ICC_PROFILE = '0028|2000';
+const FRAME_INCREMENT_POINTER = '0028|0009';
+const FRAME_DIMENSION_POINTER = '0028|000a';
+const DIFFUSION_B_VALUE = '0018|9087';
+const DIFFUSION_GRADIENT_ORIENTATION = '0018|9089';
+const LUT_FRAME_RANGE = '0028|9459';
 const PIXEL_DATA = '7fe0|0010';
 const SEQUENCE_ITEM = 'fffe|e000';
 
@@ -180,6 +191,49 @@ describe('readDicomTags', () => {
     expect(keysOf(tags)).toEqual([...keysOf(tags)].sort());
   });
 
+  it('base64 encodes a binary buffer VR', async () => {
+    const tags = await readDicomTags(
+      buildSlice({ extraElements: MIXED_VR_ELEMENTS })
+    );
+
+    expect(valueOf(tags, ICC_PROFILE)).toBe('f39/f39/f38=');
+  });
+
+  it('writes an attribute tag value as a parenthesised tag', async () => {
+    const tags = await readDicomTags(
+      buildSlice({ extraElements: MIXED_VR_ELEMENTS })
+    );
+
+    expect(valueOf(tags, FRAME_INCREMENT_POINTER)).toBe('(0018,10ab)');
+    expect(valueOf(tags, FRAME_DIMENSION_POINTER)).toBe(
+      '(0018,1063)\\(0028,00ff)'
+    );
+  });
+
+  it('prints a binary float to six significant digits', async () => {
+    const tags = await readDicomTags(
+      buildSlice({ extraElements: MIXED_VR_ELEMENTS })
+    );
+
+    expect(valueOf(tags, DIFFUSION_B_VALUE)).toBe('1.23457e+06');
+    expect(valueOf(tags, DIFFUSION_GRADIENT_ORIENTATION)).toBe(
+      '3\\1.23457e-05\\-0.3'
+    );
+    expect(valueOf(tags, LUT_FRAME_RANGE)).toBe('-2.5\\1e-30');
+  });
+
+  it('omits private elements', async () => {
+    const tags = await readDicomTags(
+      buildSlice({ extraElements: MIXED_VR_ELEMENTS })
+    );
+
+    expect(
+      keysOf(tags).filter(
+        (tag) => (Number.parseInt(tag.slice(0, 4), 16) & 1) === 1
+      )
+    ).toEqual([]);
+  });
+
   it('rejects a buffer that is not a DICOM file', async () => {
     const notDicom = new Uint8Array(256).fill(0x41);
 
@@ -240,6 +294,35 @@ describe('readDicomTags specific character set', () => {
     expect(await nameFromCharacterSet('ISO_IR 192', UTF8_NAME_BYTES)).toBe(
       UTF8_NAME
     );
+  });
+
+  it('decodes ISO 2022 IR 13 half width katakana', async () => {
+    expect(
+      await nameFromCharacterSet(
+        'ISO 2022 IR 13\\ISO 2022 IR 87',
+        KATAKANA_NAME_BYTES
+      )
+    ).toBe(KATAKANA_NAME);
+  });
+
+  it('decodes a value that switches between IR 13 and IR 87', async () => {
+    expect(
+      await nameFromCharacterSet(
+        'ISO 2022 IR 13\\ISO 2022 IR 87',
+        MIXED_JIS_NAME_BYTES
+      )
+    ).toBe(MIXED_JIS_NAME);
+  });
+
+  it('renders 0x5c as a yen sign when JIS X 0201 is declared', async () => {
+    const tags = await readDicomTags(
+      buildSlice({
+        specificCharacterSet: 'ISO 2022 IR 13\\ISO 2022 IR 87',
+        patientNameBytes: KATAKANA_NAME_BYTES,
+      })
+    );
+
+    expect(valueOf(tags, Tags.ImagePositionPatient)).toBe('0\u00a50\u00a50 ');
   });
 
   it('decodes ISO_IR 100', async () => {

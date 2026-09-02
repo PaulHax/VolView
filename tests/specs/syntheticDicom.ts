@@ -105,7 +105,36 @@ const pnRaw = (g: number, e: number, v: Uint8Array) =>
   );
 
 // VRs whose explicit form carries 2 reserved bytes and a 4-byte length.
-const LONG_FORM_VRS = new Set(['OB', 'OW', 'OF', 'SQ', 'UT', 'UN']);
+const LONG_FORM_VRS = new Set([
+  'OB',
+  'OD',
+  'OF',
+  'OL',
+  'OV',
+  'OW',
+  'SQ',
+  'SV',
+  'UC',
+  'UN',
+  'UR',
+  'UT',
+]);
+
+// One Explicit VR LE element, short or long form as the VR requires. Lets a
+// fixture write a VR this helper has no named writer for.
+export const rawElement = (
+  group: number,
+  element: number,
+  vr: string,
+  value: Uint8Array
+) =>
+  LONG_FORM_VRS.has(vr)
+    ? elemLong(group, element, vr, value)
+    : elemShort(group, element, vr, value);
+
+// An AT value is the referenced tag as two little-endian unsigned shorts.
+export const attributeTagValue = (group: number, element: number) =>
+  tagBytes(group, element);
 
 // Re-encodes an Explicit VR LE dataset as Implicit VR LE: tag, 4-byte length,
 // value, with the VR carried only by the reader's dictionary.
@@ -205,6 +234,9 @@ export type SyntheticSliceOptions = {
   implicitVr?: boolean;
   // Writes a Sequence of Ultrasound Regions (0018,6011) holding one item.
   ultrasoundRegion?: { physicalDeltaX: number; physicalDeltaY: number };
+  // Explicit VR LE element bytes, from `rawElement`, written just before Pixel
+  // Data. Tags must sort after (0028,1053) to keep the data set ascending.
+  extraElements?: readonly Uint8Array[];
 };
 
 export function buildSyntheticDicom(opts: SyntheticSliceOptions): Uint8Array {
@@ -237,6 +269,7 @@ export function buildSyntheticDicom(opts: SyntheticSliceOptions): Uint8Array {
     patientNameBytes,
     implicitVr = false,
     ultrasoundRegion,
+    extraElements = [],
   } = opts;
 
   if (bitsAllocated !== 8 && bitsAllocated !== 16) {
@@ -311,6 +344,7 @@ export function buildSyntheticDicom(opts: SyntheticSliceOptions): Uint8Array {
       ? []
       : [ds(0x0028, 0x1052, String(rescaleIntercept))]),
     ...(rescaleSlope == null ? [] : [ds(0x0028, 0x1053, String(rescaleSlope))]),
+    ...extraElements,
     bitsAllocated === 8
       ? elemLong(0x7fe0, 0x0010, 'OB', frameBytes8(rows * cols, pixelValue))
       : elemLong(0x7fe0, 0x0010, 'OW', frameBytes16(rows * cols, pixelValue))
