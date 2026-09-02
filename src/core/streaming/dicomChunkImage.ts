@@ -53,6 +53,27 @@ function readDicomImage(file: File) {
   return readItkImage(file, { webWorker: getWorker() });
 }
 
+const modalityOf = (chunks: Chunk[]) => {
+  const meta = Object.fromEntries(chunks[0]?.metadata ?? []);
+  return meta[Tags.Modality]?.trim() ?? null;
+};
+
+function initialChunkStatus(chunk: Chunk) {
+  switch (chunk.state) {
+    case ChunkState.Init:
+    case ChunkState.MetaLoading:
+    case ChunkState.MetaOnly:
+      return ChunkStatus.NotLoaded;
+    case ChunkState.DataLoading:
+      return ChunkStatus.Loading;
+    // Loaded pixels belong to the previous allocation.
+    case ChunkState.Loaded:
+      return ChunkStatus.Loading;
+    default:
+      throw new Error('Chunk is in an invalid state');
+  }
+}
+
 export interface DicomChunkImageInit {
   encodeThumbnail: (slice: ThumbnailSlice) => string;
   readDicomImage: (file: File) => Promise<{
@@ -108,8 +129,7 @@ export default class DicomChunkImage
   }
 
   getModality() {
-    const meta = Object.fromEntries(this.getDicomMetadata() ?? []);
-    return meta[Tags.Modality]?.trim() ?? null;
+    return modalityOf(this.chunks);
   }
 
   getChunkStatuses(): Array<ChunkStatus> {
@@ -180,38 +200,31 @@ export default class DicomChunkImage
     // Nothing changes while the metadata the allocation needs is still coming.
     await Promise.all(chunks.map((chunk) => chunk.loadMeta()));
 
+    // Everything that can throw runs before the first mutation, so a
+    // membership this image cannot hold leaves it exactly as it was.
+    const status = chunks.map(initialChunkStatus);
+    const allocated =
+      modalityOf(chunks) === 'SEG' ? null : allocateImageFromChunks(chunks);
+
     this.unregisterChunkListeners();
 
     // Invalidate decodes targeting the previous buffer and chunk order.
     this.allocationGeneration += 1;
     this.chunks = chunks;
-
-    this.chunkStatus = this.chunks.map((chunk) => {
-      switch (chunk.state) {
-        case ChunkState.Init:
-        case ChunkState.MetaLoading:
-        case ChunkState.MetaOnly:
-          return ChunkStatus.NotLoaded;
-        case ChunkState.DataLoading:
-          return ChunkStatus.Loading;
-        // Loaded pixels belong to the previous allocation.
-        case ChunkState.Loaded:
-          return ChunkStatus.Loading;
-        default:
-          throw new Error('Chunk is in an invalid state');
-      }
-    });
+    this.chunkStatus = status;
     this.onChunksUpdated();
 
-    if (this.getModality() !== 'SEG') {
-      this.reallocateImage();
+    if (allocated) {
+      this.vtkImageData.value.delete();
+      this.vtkImageData.value = allocated;
+      this.applyUltrasoundSpacing();
     }
 
     this.registerChunkListeners();
     this.processLoadedChunks();
 
     // Update data range with already loaded chunks after reallocating image
-    if (this.getModality() !== 'SEG') {
+    if (allocated) {
       this.updateDataRangeFromChunks();
     }
   }
@@ -317,12 +330,6 @@ export default class DicomChunkImage
     while (this.chunkListeners.length) {
       this.chunkListeners.pop()!();
     }
-  }
-
-  private reallocateImage() {
-    this.vtkImageData.value.delete();
-    this.vtkImageData.value = allocateImageFromChunks(this.chunks);
-    this.applyUltrasoundSpacing();
   }
 
   private applyUltrasoundSpacing() {
