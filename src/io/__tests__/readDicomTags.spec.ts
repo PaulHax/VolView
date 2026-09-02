@@ -1,0 +1,250 @@
+import { describe, expect, it } from 'vitest';
+import { Tags } from '@/src/core/dicomTags';
+import { readDicomTags } from '@/src/io/readDicomTags';
+import {
+  buildSlice,
+  CHINESE_NAME_BYTES,
+  CHINESE_NAME_PADDED,
+  GB18030_NAME_BYTES,
+  GB18030_NAME_PADDED,
+  JAPANESE_NAME,
+  JAPANESE_NAME_BYTES,
+  KOREAN_NAME,
+  KOREAN_NAME_BYTES,
+  LATIN1_NAME_BYTES,
+  LATIN1_NAME_PADDED,
+  UTF8_NAME,
+  UTF8_NAME_BYTES,
+} from './readDicomTagsFixtures';
+import { buildSyntheticCineDicom } from '@/tests/specs/syntheticDicom';
+
+type TagPairs = ReadonlyArray<readonly [string, string]>;
+
+const valueOf = (tags: TagPairs, tag: string) =>
+  tags.find(([name]) => name === tag)?.[1];
+
+const keysOf = (tags: TagPairs) => tags.map(([name]) => name);
+
+const SPECIFIC_CHARACTER_SET = '0008|0005';
+const PIXEL_DATA = '7fe0|0010';
+const SEQUENCE_ITEM = 'fffe|e000';
+
+const nameFromCharacterSet = async (
+  specificCharacterSet: string,
+  patientNameBytes: Uint8Array
+) =>
+  valueOf(
+    await readDicomTags(buildSlice({ specificCharacterSet, patientNameBytes })),
+    Tags.PatientName
+  );
+
+describe('readDicomTags', () => {
+  it('keys every pair with a lowercase group|element tag', async () => {
+    const tags = await readDicomTags(buildSlice());
+
+    expect(keysOf(tags).length).toBeGreaterThan(0);
+    expect(
+      keysOf(tags).filter((tag) => !/^[0-9a-f]{4}\|[0-9a-f]{4}$/.test(tag))
+    ).toEqual([]);
+    expect(keysOf(tags)).toContain(Tags.SOPInstanceUID);
+  });
+
+  it('stringifies binary numeric VRs as plain decimals', async () => {
+    const tags = await readDicomTags(
+      buildSlice({
+        rows: 3,
+        cols: 5,
+        bitsAllocated: 8,
+        bitsStored: 8,
+        highBit: 7,
+      })
+    );
+
+    expect(valueOf(tags, Tags.Rows)).toBe('3');
+    expect(valueOf(tags, Tags.Columns)).toBe('5');
+    expect(valueOf(tags, Tags.BitsAllocated)).toBe('8');
+    expect(valueOf(tags, Tags.BitsStored)).toBe('8');
+    expect(valueOf(tags, Tags.SamplesPerPixel)).toBe('1');
+    expect(valueOf(tags, Tags.PixelRepresentation)).toBe('0');
+  });
+
+  it("joins multiple values with DICOM's own backslash", async () => {
+    const tags = await readDicomTags(
+      buildSlice({
+        imageOrientationPatient: [1, 0, 0, 0, -1, 0],
+        imagePositionPatient: [1.5, -2, 3],
+        pixelSpacing: [0.5, 0.75],
+      })
+    );
+
+    expect(valueOf(tags, Tags.ImagePositionPatient)).toBe('1.5\\-2\\3');
+    expect(valueOf(tags, Tags.ImageOrientationPatient)).toBe(
+      '1\\0\\0\\0\\-1\\0'
+    );
+    expect(valueOf(tags, Tags.PixelSpacing)).toBe('0.5\\0.75');
+  });
+
+  it('keeps the trailing space padding of a text VR', async () => {
+    const tags = await readDicomTags(
+      buildSlice({ patientId: 'TEST001', seriesNumber: 1 })
+    );
+
+    expect(valueOf(tags, Tags.PatientID)).toBe('TEST001 ');
+    expect(valueOf(tags, Tags.SeriesNumber)).toBe('1 ');
+    expect(valueOf(tags, Tags.ImagePositionPatient)).toBe('0\\0\\0 ');
+  });
+
+  it('strips the null padding of a UI value', async () => {
+    const tags = await readDicomTags(
+      buildSlice({ studyUid: '1.2.3', seriesUid: '1.2.4', sopUid: '1.2.5' })
+    );
+
+    expect(valueOf(tags, Tags.StudyInstanceUID)).toBe('1.2.3');
+    expect(valueOf(tags, Tags.SeriesInstanceUID)).toBe('1.2.4');
+    expect(valueOf(tags, Tags.SOPInstanceUID)).toBe('1.2.5');
+  });
+
+  it('passes a person name through unchanged', async () => {
+    const tags = await readDicomTags(buildSlice({ patientName: 'DOE^JOHN' }));
+
+    expect(valueOf(tags, Tags.PatientName)).toBe('DOE^JOHN');
+  });
+
+  it('reports a zero length element as an empty value', async () => {
+    const tags = await readDicomTags(
+      buildSlice({ patientNameBytes: new Uint8Array(0) })
+    );
+
+    expect(keysOf(tags)).toContain(Tags.PatientName);
+    expect(valueOf(tags, Tags.PatientName)).toBe('');
+  });
+
+  it('reports an empty character set when the file declares none', async () => {
+    const tags = await readDicomTags(buildSlice());
+
+    expect(keysOf(tags)).toContain(SPECIFIC_CHARACTER_SET);
+    expect(valueOf(tags, SPECIFIC_CHARACTER_SET)).toBe('');
+  });
+
+  it('omits the file meta group', async () => {
+    const tags = await readDicomTags(buildSlice());
+
+    expect(keysOf(tags).filter((tag) => tag.startsWith('0002|'))).toEqual([]);
+  });
+
+  it('omits pixel data', async () => {
+    const tags = await readDicomTags(buildSlice());
+
+    expect(keysOf(tags)).not.toContain(PIXEL_DATA);
+  });
+
+  it('reads the header of a file truncated inside pixel data', async () => {
+    const whole = buildSlice({ rows: 4, cols: 4, bitsAllocated: 16 });
+    // Drops all 32 pixel bytes and keeps the element header, so only a reader
+    // that stops at the pixel data tag can still return the header.
+    const truncated = whole.slice(0, whole.length - 4 * 4 * 2);
+
+    expect(await readDicomTags(truncated)).toEqual(await readDicomTags(whole));
+  });
+
+  it('omits sequences and the elements nested in them', async () => {
+    const tags = await readDicomTags(
+      buildSlice({
+        ultrasoundRegion: { physicalDeltaX: 0.1, physicalDeltaY: 0.2 },
+      })
+    );
+
+    expect(keysOf(tags)).not.toContain(Tags.SequenceOfUltrasoundRegions);
+    expect(keysOf(tags)).not.toContain(Tags.PhysicalDeltaX);
+    expect(keysOf(tags)).not.toContain(SEQUENCE_ITEM);
+    expect(tags).toEqual(await readDicomTags(buildSlice()));
+  });
+
+  it('reads an implicit VR dataset the same as an explicit VR one', async () => {
+    expect(await readDicomTags(buildSlice({ implicitVr: true }))).toEqual(
+      await readDicomTags(buildSlice())
+    );
+  });
+
+  it('orders the pairs by tag', async () => {
+    // The cine fixture writes SeriesDescription after the 0028 group.
+    const tags = await readDicomTags(
+      buildSyntheticCineDicom({
+        studyUid: '1.2.826.0.1.3680043.10.999.4',
+        seriesUid: '1.2.826.0.1.3680043.10.999.5',
+        sopUid: '1.2.826.0.1.3680043.10.999.6',
+      })
+    );
+
+    expect(keysOf(tags)).toContain(Tags.SeriesDescription);
+    expect(keysOf(tags)).toEqual([...keysOf(tags)].sort());
+  });
+
+  it('rejects a buffer that is not a DICOM file', async () => {
+    const notDicom = new Uint8Array(256).fill(0x41);
+
+    await expect(
+      Promise.resolve().then(() => readDicomTags(notDicom))
+    ).rejects.toThrow();
+  });
+});
+
+describe('readDicomTags specific character set', () => {
+  it('keeps the declared character set as its own padded value', async () => {
+    const tags = await readDicomTags(
+      buildSlice({
+        specificCharacterSet: 'ISO 2022 IR 6\\ISO 2022 IR 149',
+        patientNameBytes: KOREAN_NAME_BYTES,
+      })
+    );
+
+    expect(valueOf(tags, SPECIFIC_CHARACTER_SET)).toBe(
+      'ISO 2022 IR 6\\ISO 2022 IR 149 '
+    );
+  });
+
+  it('decodes ISO 2022 IR 87', async () => {
+    expect(
+      await nameFromCharacterSet(
+        'ISO 2022 IR 6\\ISO 2022 IR 87',
+        JAPANESE_NAME_BYTES
+      )
+    ).toBe(JAPANESE_NAME);
+  });
+
+  it('decodes ISO 2022 IR 149', async () => {
+    expect(
+      await nameFromCharacterSet(
+        'ISO 2022 IR 6\\ISO 2022 IR 149',
+        KOREAN_NAME_BYTES
+      )
+    ).toBe(KOREAN_NAME);
+  });
+
+  it('decodes ISO 2022 IR 58', async () => {
+    expect(
+      await nameFromCharacterSet(
+        'ISO 2022 IR 6\\ISO 2022 IR 58',
+        CHINESE_NAME_BYTES
+      )
+    ).toBe(CHINESE_NAME_PADDED);
+  });
+
+  it('decodes GB18030, four byte code points included', async () => {
+    expect(await nameFromCharacterSet('GB18030', GB18030_NAME_BYTES)).toBe(
+      GB18030_NAME_PADDED
+    );
+  });
+
+  it('decodes ISO_IR 192', async () => {
+    expect(await nameFromCharacterSet('ISO_IR 192', UTF8_NAME_BYTES)).toBe(
+      UTF8_NAME
+    );
+  });
+
+  it('decodes ISO_IR 100', async () => {
+    expect(await nameFromCharacterSet('ISO_IR 100', LATIN1_NAME_BYTES)).toBe(
+      LATIN1_NAME_PADDED
+    );
+  });
+});
