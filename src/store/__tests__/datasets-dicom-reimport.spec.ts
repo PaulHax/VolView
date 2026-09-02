@@ -5,7 +5,11 @@ import type { Chunk } from '@/src/core/streaming/chunk';
 import type DicomChunkImage from '@/src/core/streaming/dicomChunkImage';
 import { Tags } from '@/src/core/dicomTags';
 import { useImageCacheStore } from '@/src/store/image-cache';
-import { useDICOMStore } from '@/src/store/datasets-dicom';
+import {
+  useDICOMStore,
+  type ImportChunksResult,
+} from '@/src/store/datasets-dicom';
+import { mergingChunks } from '@/src/core/dicom/__tests__/orientationFixtures';
 
 const SERIES_UID = '1.2.826.0.1.3680043.9.7';
 const OTHER_SERIES_UID = '1.2.826.0.1.3680043.9.8';
@@ -63,11 +67,39 @@ function imageFactory() {
   return { created, createChunkImage };
 }
 
+// Holds every setChunks until `open`, so two imports can be in flight at once.
+function deferredImageFactory() {
+  const created: FakeChunkImage[] = [];
+  const pending: Array<() => void> = [];
+  let opened = false;
+
+  const createChunkImage = () => {
+    const image = new FakeChunkImage();
+    const { setChunks } = image;
+    image.setChunks = (chunks: Chunk[]) =>
+      new Promise<void>((resolve) => {
+        const apply = () => resolve(setChunks.call(image, chunks));
+        if (opened) apply();
+        else pending.push(apply);
+      });
+    created.push(image);
+    return image as unknown as DicomChunkImage;
+  };
+
+  const open = () => {
+    opened = true;
+    pending.splice(0).forEach((apply) => apply());
+  };
+
+  return { created, createChunkImage, open };
+}
+
 type SliceOptions = {
   sop: string;
   series?: string;
   z?: number;
   rows?: string;
+  orientation?: string;
 };
 
 function chunkFor({
@@ -75,6 +107,7 @@ function chunkFor({
   series = SERIES_UID,
   z = 0,
   rows = '4',
+  orientation = '1\\0\\0\\0\\1\\0',
 }: SliceOptions) {
   const metadata = [
     [Tags.SOPClassUID, '1.2.840.10008.5.1.4.1.1.4'],
@@ -99,14 +132,14 @@ function chunkFor({
     [Tags.Rows, rows],
     [Tags.Columns, '4'],
     [Tags.SamplesPerPixel, '1'],
-    [Tags.ImageOrientationPatient, '1\\0\\0\\0\\1\\0'],
+    [Tags.ImageOrientationPatient, orientation],
     [Tags.ImagePositionPatient, `0\\0\\${z}`],
     ['0020|0013', String(z + 1)],
   ] as Array<[string, string]>;
   return { metadata } as unknown as Chunk;
 }
 
-const onlyId = (volumes: Record<string, Chunk[]>) => {
+const onlyId = ({ volumes }: ImportChunksResult) => {
   const ids = Object.keys(volumes);
   expect(ids).toHaveLength(1);
   return ids[0];
@@ -136,8 +169,8 @@ describe('DICOM store incremental import', () => {
     const id = onlyId(firstResult);
     expect(onlyId(secondResult)).toBe(id);
     expect(useImageCacheStore().imageById[id]).toBe(image);
-    // Only the newly imported chunk reports back, for its own provenance.
-    expect(secondResult[id]).toEqual([second]);
+    // Every member reports back, so the dataset's provenance stays complete.
+    expect(secondResult.volumes[id]).toEqual([first, second]);
   });
 
   it('hands the image the planned order, not the arrival order', async () => {
@@ -193,7 +226,7 @@ describe('DICOM store incremental import', () => {
 
     expect(created).toHaveLength(1);
     expect(created[0].setChunksCalls).toEqual([[original], [original]]);
-    expect(second[onlyId(first)]).toEqual([resupplied]);
+    expect(second.volumes[onlyId(first)]).toEqual([resupplied]);
     expect(store.volumeInfo[onlyId(first)].NumberOfSlices).toBe(1);
   });
 
@@ -222,10 +255,10 @@ describe('DICOM store incremental import', () => {
     });
 
     expect(created).toHaveLength(2);
-    const ids = Object.keys(result);
+    const ids = Object.keys(result.volumes);
     expect(ids).toHaveLength(2);
-    expect(Object.values(result)).toContainEqual([scout]);
-    expect(Object.values(result)).toContainEqual(slices);
+    expect(Object.values(result.volumes)).toContainEqual([scout]);
+    expect(Object.values(result.volumes)).toContainEqual(slices);
 
     const imageCacheStore = useImageCacheStore();
     ids.forEach((id) => expect(imageCacheStore.imageById[id]).toBeDefined());
@@ -235,6 +268,110 @@ describe('DICOM store incremental import', () => {
     expect(store.studyVolumes['1.2.826.0.1.3680043.9.1'].sort()).toEqual(
       [...ids].sort()
     );
+  });
+
+  it('rebuilds a removed series from the chunks the re-import brings', async () => {
+    const { created, createChunkImage } = imageFactory();
+    const store = useDICOMStore();
+    const original = chunkFor({ sop: 'a', z: 0 });
+
+    const id = onlyId(
+      await store.importChunks([original], { createChunkImage })
+    );
+    useImageCacheStore().removeImage(id);
+    store.deleteVolume(id);
+
+    const resupplied = chunkFor({ sop: 'a', z: 0 });
+    const reimported = onlyId(
+      await store.importChunks([resupplied], { createChunkImage })
+    );
+
+    expect(reimported).toBe(id);
+    expect(created).toHaveLength(2);
+    // Identity, not shape: the released chunk is an equal but stale object.
+    expect(created[1].setChunksCalls).toHaveLength(1);
+    expect(created[1].setChunksCalls[0]).toHaveLength(1);
+    expect(created[1].setChunksCalls[0][0]).toBe(resupplied);
+  });
+
+  const merging = () => mergingChunks(chunkFor);
+
+  it('drops the volume a replan dissolved', async () => {
+    const { createChunkImage } = imageFactory();
+    const store = useDICOMStore();
+    const imageCacheStore = useImageCacheStore();
+    const { between, straight, tilted } = merging();
+
+    const first = await store.importChunks([straight, tilted], {
+      createChunkImage,
+    });
+    const ids = Object.keys(first.volumes);
+    expect(ids).toHaveLength(2);
+
+    const merged = await store.importChunks([between], { createChunkImage });
+    const survivor = onlyId(merged);
+    const dissolved = ids.find((id) => id !== survivor)!;
+
+    expect(store.volumeInfo[dissolved]).toBeUndefined();
+    expect(imageCacheStore.imageById[dissolved]).toBeUndefined();
+    expect(store.studyVolumes['1.2.826.0.1.3680043.9.1']).toEqual([survivor]);
+    expect(store.volumeInfo[survivor].NumberOfSlices).toBe(3);
+    // The caller has to drop the dataset the dissolved id owned, and the
+    // survivor has to carry the provenance of the member it inherited.
+    expect(merged.dissolved).toEqual([dissolved]);
+    expect(merged.volumes[survivor]).toEqual([straight, tilted, between]);
+  });
+
+  it('does not resurrect a volume a concurrent import dissolved', async () => {
+    const { createChunkImage, open } = deferredImageFactory();
+    const store = useDICOMStore();
+    const imageCacheStore = useImageCacheStore();
+    const { between, straight, tilted } = merging();
+
+    const firstImport = store.importChunks([straight, tilted], {
+      createChunkImage,
+    });
+    const secondImport = store.importChunks([between], { createChunkImage });
+    open();
+    const first = await firstImport;
+    const survivor = onlyId(await secondImport);
+
+    Object.keys(first.volumes)
+      .filter((id) => id !== survivor)
+      .forEach((id) => {
+        expect(imageCacheStore.imageById[id]).toBeUndefined();
+        expect(store.volumeInfo[id]).toBeUndefined();
+      });
+    expect(store.volumeInfo[survivor].NumberOfSlices).toBe(3);
+  });
+
+  it('lets a corrected re-import replace the chunk a failed import brought', async () => {
+    const created: FakeChunkImage[] = [];
+    let failing = true;
+    const createChunkImage = () => {
+      const image = new FakeChunkImage();
+      const { setChunks } = image;
+      image.setChunks = async (chunks: Chunk[]) => {
+        if (failing) throw new Error('cannot allocate the volume buffer');
+        return setChunks.call(image, chunks);
+      };
+      created.push(image);
+      return image as unknown as DicomChunkImage;
+    };
+
+    const store = useDICOMStore();
+    await expect(
+      store.importChunks([chunkFor({ sop: 'a', z: 0 })], { createChunkImage })
+    ).rejects.toThrow(/buffer/);
+
+    failing = false;
+    const corrected = chunkFor({ sop: 'a', z: 0 });
+    await store.importChunks([corrected], { createChunkImage });
+
+    const image = created.at(-1)!;
+    expect(image.setChunksCalls).toHaveLength(1);
+    // Identity, not shape: the failed import must not pin its chunk.
+    expect(image.setChunksCalls[0][0]).toBe(corrected);
   });
 
   it('keeps two series in one batch apart', async () => {
@@ -247,7 +384,7 @@ describe('DICOM store incremental import', () => {
       createChunkImage,
     });
 
-    const ids = Object.keys(result);
+    const ids = Object.keys(result.volumes);
     expect(ids).toHaveLength(2);
     expect(
       ids.map((id) => store.volumeInfo[id].SeriesInstanceUID).sort()

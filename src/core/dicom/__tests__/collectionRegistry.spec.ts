@@ -5,6 +5,10 @@ import {
   createDicomCollectionRegistry,
   type CollectionUpdate,
 } from '@/src/core/dicom/collectionRegistry';
+import {
+  mergingChunks,
+  tilt,
+} from '@/src/core/dicom/__tests__/orientationFixtures';
 
 const SERIES_UID = '1.2.826.0.1.3680043.9.7';
 const OTHER_SERIES_UID = '1.2.826.0.1.3680043.9.8';
@@ -65,12 +69,12 @@ describe('DICOM collection registry', () => {
     const third = chunkFor({ sop: 'c', z: 2 });
 
     // Arrival order deliberately differs from slice order.
-    const updates = await registry.register([third, first, second]);
+    const { updates } = await registry.register([third, first, second]);
 
     expect(updates).toHaveLength(1);
     const [update] = updates;
     expect(sops(update.members)).toEqual(['a', 'b', 'c']);
-    expect(sops(update.added)).toEqual(['a', 'b', 'c']);
+    expect(update.provenance).toEqual(update.members);
     expect(update.collection.order).toBe('spatial');
     expect(update.collection.diagnostics).toEqual([]);
   });
@@ -79,7 +83,8 @@ describe('DICOM collection registry', () => {
     const registry = createDicomCollectionRegistry();
     const chunks = [chunkFor({ sop: 'a', z: 2 }), chunkFor({ sop: 'b', z: 0 })];
 
-    const [update] = await registry.register(chunks);
+    const { updates } = await registry.register(chunks);
+    const [update] = updates;
 
     expect(update.collection.members.map((m) => m.sopInstanceUid)).toEqual(
       sops(update.members)
@@ -91,9 +96,9 @@ describe('DICOM collection registry', () => {
   it('mints an id that starts with the series instance uid', async () => {
     const registry = createDicomCollectionRegistry();
 
-    const [update] = await registry.register([chunkFor({ sop: 'a' })]);
+    const { updates } = await registry.register([chunkFor({ sop: 'a' })]);
 
-    expect(update.id.startsWith(SERIES_UID)).toBe(true);
+    expect(updates[0].id.startsWith(SERIES_UID)).toBe(true);
   });
 
   it('keeps the collection id and grows its members across two batches', async () => {
@@ -101,12 +106,13 @@ describe('DICOM collection registry', () => {
     const first = chunkFor({ sop: 'a', z: 0 });
     const second = chunkFor({ sop: 'b', z: 1 });
 
-    const [firstUpdate] = await registry.register([first]);
-    const [secondUpdate] = await registry.register([second]);
+    const [firstUpdate] = (await registry.register([first])).updates;
+    const [secondUpdate] = (await registry.register([second])).updates;
 
     expect(secondUpdate.id).toBe(firstUpdate.id);
     expect(sops(secondUpdate.members)).toEqual(['a', 'b']);
-    expect(sops(secondUpdate.added)).toEqual(['b']);
+    // Every member reports its provenance, not just the one the batch brought.
+    expect(secondUpdate.provenance).toEqual([first, second]);
   });
 
   it('orders a late arriving earlier slice into its planned position', async () => {
@@ -115,10 +121,10 @@ describe('DICOM collection registry', () => {
     const second = chunkFor({ sop: 'b', z: 1 });
 
     await registry.register([second]);
-    const [update] = await registry.register([first]);
+    const [update] = (await registry.register([first])).updates;
 
     expect(sops(update.members)).toEqual(['a', 'b']);
-    expect(sops(update.added)).toEqual(['a']);
+    expect(update.provenance).toEqual([first, second]);
   });
 
   const POSITIONS: Record<string, number> = { a: 0, b: 1, c: 2 };
@@ -128,9 +134,9 @@ describe('DICOM collection registry', () => {
     return batches.reduce(
       (chain, batch) =>
         chain.then(() =>
-          registry.register(
-            batch.map((sop) => chunkFor({ sop, z: POSITIONS[sop] }))
-          )
+          registry
+            .register(batch.map((sop) => chunkFor({ sop, z: POSITIONS[sop] })))
+            .then((result) => result.updates)
         ),
       Promise.resolve([] as CollectionUpdate[])
     );
@@ -179,18 +185,18 @@ describe('DICOM collection registry', () => {
     const resupplied = chunkFor({ sop: 'a', z: 0 });
 
     await registry.register([original]);
-    const [update] = await registry.register([resupplied]);
+    const [update] = (await registry.register([resupplied])).updates;
 
     expect(update.members).toEqual([original]);
     // The batch's own chunk still reports back, so its provenance can merge.
-    expect(update.added).toEqual([resupplied]);
+    expect(update.provenance).toEqual([resupplied]);
   });
 
   it('counts one chunk once however often a batch repeats it', async () => {
     const registry = createDicomCollectionRegistry();
     const chunk = chunkFor({ sop: 'a', z: 0 });
 
-    const [update] = await registry.register([chunk, chunk]);
+    const [update] = (await registry.register([chunk, chunk])).updates;
 
     expect(update.members).toEqual([chunk]);
   });
@@ -200,7 +206,7 @@ describe('DICOM collection registry', () => {
     const first = chunkFor({ sop: null, z: 0 });
     const second = chunkFor({ sop: null, z: 1 });
 
-    const [update] = await registry.register([first, second]);
+    const [update] = (await registry.register([first, second])).updates;
 
     expect(update.members).toEqual([first, second]);
   });
@@ -210,7 +216,7 @@ describe('DICOM collection registry', () => {
     const chunk = chunkFor({ sop: null, z: 0 });
 
     await registry.register([chunk]);
-    const [update] = await registry.register([chunk]);
+    const [update] = (await registry.register([chunk])).updates;
 
     expect(update.members).toEqual([chunk]);
   });
@@ -220,7 +226,7 @@ describe('DICOM collection registry', () => {
     const scout = chunkFor({ sop: 'scout', rows: '8', z: 0 });
     const slices = [chunkFor({ sop: 'a', z: 0 }), chunkFor({ sop: 'b', z: 1 })];
 
-    const updates = await registry.register([scout, ...slices]);
+    const { updates } = await registry.register([scout, ...slices]);
 
     expect(updates).toHaveLength(2);
     const membership = updates.map((update) => sops(update.members));
@@ -237,8 +243,8 @@ describe('DICOM collection registry', () => {
     const scout = chunkFor({ sop: 'scout', rows: '8', z: 0 });
     const slice = chunkFor({ sop: 'a', z: 0 });
 
-    const [sliceUpdate] = await registry.register([slice]);
-    const updates = await registry.register([scout]);
+    const [sliceUpdate] = (await registry.register([slice])).updates;
+    const { updates } = await registry.register([scout]);
 
     expect(updates).toHaveLength(1);
     expect(sops(updates[0].members)).toEqual(['scout']);
@@ -250,10 +256,164 @@ describe('DICOM collection registry', () => {
     const slice = chunkFor({ sop: 'a', z: 0 });
 
     await registry.register([slice]);
-    const updates = await registry.register([slice]);
+    const { updates } = await registry.register([slice]);
 
     expect(updates).toHaveLength(1);
-    expect(sops(updates[0].added)).toEqual(['a']);
+    expect(updates[0].provenance).toEqual([slice]);
+  });
+
+  const merging = () => mergingChunks(chunkFor);
+
+  it('reports the id a replan dissolved when two collections merge', async () => {
+    const registry = createDicomCollectionRegistry();
+    const { between, straight, tilted } = merging();
+
+    const first = await registry.register([straight, tilted]);
+    expect(first.updates).toHaveLength(2);
+    expect(first.removed).toEqual([]);
+
+    const second = await registry.register([between]);
+
+    expect(second.updates).toHaveLength(1);
+    expect(sops(second.updates[0].members)).toEqual([
+      'sop-2',
+      'sop-3',
+      'sop-1',
+    ]);
+    expect(second.removed).toEqual(
+      first.updates
+        .map((update) => update.id)
+        .filter((id) => id !== second.updates[0].id)
+    );
+  });
+
+  it('reports a collection that lost members without gaining a chunk', async () => {
+    const registry = createDicomCollectionRegistry();
+    const straight = chunkFor({ sop: 'sop-2', z: 0, orientation: tilt(0) });
+    const near = chunkFor({ sop: 'sop-3', z: 1, orientation: tilt(0.01) });
+    // Agrees with the straight instance but not with the near one, so the
+    // bucket it seeds as the new reference leaves the near one behind.
+    const splitter = chunkFor({
+      sop: 'sop-1',
+      z: 2,
+      orientation: tilt(-0.005),
+    });
+
+    const first = await registry.register([straight, near]);
+    expect(first.updates).toHaveLength(1);
+
+    const second = await registry.register([splitter]);
+
+    const orphaned = second.updates.find(
+      (update) => !update.members.includes(splitter)
+    );
+    expect(orphaned).toBeDefined();
+    expect(sops(orphaned!.members)).toEqual(['sop-3']);
+    expect(second.removed).toEqual([first.updates[0].id]);
+  });
+
+  it('lets a rolled back batch re-supply the chunk for its instance', async () => {
+    const registry = createDicomCollectionRegistry();
+    const malformed = chunkFor({ sop: 'a', z: 0 });
+    const first = await registry.register([malformed]);
+
+    first.rollback(first.updates.map((update) => update.seriesKey));
+
+    const corrected = chunkFor({ sop: 'a', z: 0 });
+    const second = await registry.register([corrected]);
+
+    expect(second.updates[0].members).toHaveLength(1);
+    expect(second.updates[0].members[0]).toBe(corrected);
+    expect(second.updates[0].id).toBe(first.updates[0].id);
+  });
+
+  it('rolls back only the series it is given', async () => {
+    const registry = createDicomCollectionRegistry();
+    const kept = chunkFor({ sop: 'a', series: SERIES_UID });
+    const undone = chunkFor({ sop: 'b', series: OTHER_SERIES_UID });
+
+    const first = await registry.register([kept, undone]);
+    const undoneUpdate = first.updates.find((update) =>
+      update.members.includes(undone)
+    )!;
+    first.rollback([undoneUpdate.seriesKey]);
+
+    const second = await registry.register([
+      chunkFor({ sop: 'a', series: SERIES_UID }),
+      chunkFor({ sop: 'b', series: OTHER_SERIES_UID }),
+    ]);
+    const bySeries = (uid: string) =>
+      second.updates.find((update) => update.id.startsWith(uid))!;
+
+    // Identity, not shape: the rolled back series drops its stale chunk.
+    expect(bySeries(SERIES_UID).members[0]).toBe(kept);
+    expect(bySeries(OTHER_SERIES_UID).members[0]).not.toBe(undone);
+  });
+
+  it('restores the collections a rolled back batch dissolved', async () => {
+    const registry = createDicomCollectionRegistry();
+    const { between, straight, tilted } = merging();
+
+    await registry.register([straight, tilted]);
+    const merged = await registry.register([between]);
+    expect(merged.removed).toHaveLength(1);
+
+    merged.rollback(merged.updates.map((update) => update.seriesKey));
+    const retried = await registry.register([between]);
+
+    expect(retried.removed).toEqual(merged.removed);
+    expect(retried.updates[0].id).toBe(merged.updates[0].id);
+    expect(sops(retried.updates[0].members)).toEqual([
+      'sop-2',
+      'sop-3',
+      'sop-1',
+    ]);
+  });
+
+  it('replans without the instances a forgotten collection held', async () => {
+    const registry = createDicomCollectionRegistry();
+    const original = chunkFor({ sop: 'a', z: 0 });
+    const { updates } = await registry.register([original]);
+
+    registry.forget(updates[0].id);
+    const resupplied = chunkFor({ sop: 'a', z: 0 });
+    const second = await registry.register([resupplied]);
+
+    // Identity, not shape: the released chunk is an equal but stale object.
+    expect(second.updates[0].members).toHaveLength(1);
+    expect(second.updates[0].members[0]).toBe(resupplied);
+    expect(second.updates[0].id).toBe(updates[0].id);
+  });
+
+  it('keeps the members a replan moved when the dissolved id is forgotten', async () => {
+    const registry = createDicomCollectionRegistry();
+    const { between, straight, tilted } = merging();
+
+    await registry.register([straight, tilted]);
+    const merged = await registry.register([between]);
+    merged.removed.forEach((id) => registry.forget(id));
+
+    const third = await registry.register([between]);
+
+    expect(third.updates[0].members).toHaveLength(3);
+  });
+
+  it('forgets one collection of a series without touching the others', async () => {
+    const registry = createDicomCollectionRegistry();
+    const scout = chunkFor({ sop: 'scout', rows: '8', z: 0 });
+    const slice = chunkFor({ sop: 'a', z: 0 });
+
+    const { updates } = await registry.register([scout, slice]);
+    const scoutUpdate = updates.find((update) => update.members[0] === scout)!;
+    registry.forget(scoutUpdate.id);
+
+    const resupplied = chunkFor({ sop: 'scout', rows: '8', z: 0 });
+    const second = await registry.register([resupplied]);
+
+    expect(second.updates).toHaveLength(1);
+    expect(second.updates[0].members).toHaveLength(1);
+    expect(second.updates[0].members[0]).toBe(resupplied);
+    expect(second.removed).toEqual([]);
   });
 
   it('plans two series independently', async () => {
@@ -261,7 +421,7 @@ describe('DICOM collection registry', () => {
     const first = chunkFor({ sop: 'a', series: SERIES_UID });
     const second = chunkFor({ sop: 'b', series: OTHER_SERIES_UID });
 
-    const updates = byId(await registry.register([first, second]));
+    const updates = byId((await registry.register([first, second])).updates);
 
     expect(updates).toHaveLength(2);
     expect(updates[0].id).not.toBe(updates[1].id);
@@ -281,9 +441,9 @@ describe('DICOM collection registry', () => {
       registry.register([second]),
     ]);
 
-    expect(sops(firstResult[0].members)).toEqual(['a']);
-    expect(sops(secondResult[0].members)).toEqual(['a', 'b']);
-    expect(secondResult[0].id).toBe(firstResult[0].id);
+    expect(sops(firstResult.updates[0].members)).toEqual(['a']);
+    expect(sops(secondResult.updates[0].members)).toEqual(['a', 'b']);
+    expect(secondResult.updates[0].id).toBe(firstResult.updates[0].id);
   });
 
   it('surfaces the planner order and diagnostics for a positionless series', async () => {
@@ -293,7 +453,7 @@ describe('DICOM collection registry', () => {
       chunkFor({ sop: 'beta', z: null, instanceNumber: 1 }),
     ];
 
-    const [update] = await registry.register(chunks);
+    const [update] = (await registry.register(chunks)).updates;
 
     expect(sops(update.members)).toEqual(['beta', 'alpha']);
     expect(update.collection.order).toBe('instance-number');

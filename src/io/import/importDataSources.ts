@@ -42,7 +42,7 @@ import handleDicomStream from '@/src/io/import/processors/handleDicomStream';
 import { FILE_EXT_TO_MIME } from '@/src/io/mimeTypes';
 import { asyncSelect } from '@/src/utils/asyncSelect';
 import { evaluateChain, Skip } from '@/src/utils/evaluateChain';
-import { ensureError, nonNullable, partition } from '@/src/utils';
+import { ensureError, partition } from '@/src/utils';
 import { Chunk } from '@/src/core/streaming/chunk';
 import { useDatasetStore } from '@/src/store/datasets';
 import { useDICOMStore } from '@/src/store/datasets-dicom';
@@ -105,35 +105,42 @@ export function buildStateIDToStoreID(
   );
 }
 
-async function importDicomChunkSources(sources: ChunkSource[]) {
+// A chunk outlives the batch that brought it: a replan can move a member into
+// another collection, whose provenance must still name where that byte came
+// from. Weak keys let a released chunk take its entry with it.
+const chunkToDataSource = new WeakMap<Chunk, ChunkSource>();
+
+export async function importDicomChunkSources(
+  sources: ChunkSource[],
+  importChunks = (chunks: Chunk[]) => useDICOMStore().importChunks(chunks)
+) {
   if (sources.length === 0) return [];
 
-  const volumeChunks = await useDICOMStore().importChunks(
+  sources.forEach((src) => chunkToDataSource.set(src.chunk, src));
+
+  const { volumes, dissolved } = await importChunks(
     sources.map((src) => src.chunk)
   );
 
-  // this is used to reconstruct the ChunkSource list
-  const chunkToDataSource = new Map<Chunk, ChunkSource>();
-  sources.forEach((src) => {
-    chunkToDataSource.set(src.chunk, src);
-  });
+  // A replan folded these collections into others, so the datasets an earlier
+  // import created for them no longer describe anything loaded.
+  const datasetStore = useDatasetStore();
+  dissolved.forEach((id) => datasetStore.remove(id));
 
-  // A volume can hold chunks imported by an earlier call (the store re-splits
-  // a series over everything imported so far); this call's loadables cover
-  // only the chunks it carried in.
-  return Object.entries(volumeChunks).flatMap(([id, chunks]) => {
-    const volumeSources = chunks
-      .map((chunk) => chunkToDataSource.get(chunk))
-      .filter(nonNullable);
-    if (volumeSources.length === 0) return [];
-    return [
-      asLoadableResult(
-        id,
-        { type: 'collection', sources: volumeSources },
-        'image'
-      ),
-    ];
-  });
+  // Every member reports back, so a collection that gained a member from a
+  // dissolved one carries its provenance too.
+  return Object.entries(volumes).map(([id, chunks]) =>
+    asLoadableResult(
+      id,
+      {
+        type: 'collection',
+        sources: chunks
+          .map((chunk) => chunkToDataSource.get(chunk))
+          .filter((src): src is ChunkSource => src !== undefined),
+      },
+      'image'
+    )
+  );
 }
 
 type ImportPolicy = 'application' | 'volume-data';

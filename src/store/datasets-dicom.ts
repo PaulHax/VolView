@@ -1,16 +1,16 @@
 import { defineStore } from 'pinia';
 import { Image } from 'itk-wasm';
-import * as DICOM from '@/src/io/dicom';
 import { Chunk } from '@/src/core/streaming/chunk';
 import { useImageCacheStore } from '@/src/store/image-cache';
 import DicomChunkImage from '@/src/core/streaming/dicomChunkImage';
 import DicomCineImage from '@/src/core/cine/DicomCineImage';
 import { parseCineDicom } from '@/src/core/cine/parseCineDicom';
+import {
+  createDicomCollectionRegistry,
+  type DicomCollectionRegistry,
+} from '@/src/core/dicom/collectionRegistry';
+import type { ProgressiveImage } from '@/src/core/progressiveImage';
 import { isUltrasoundMultiframeSopClass, Tags } from '@/src/core/dicomTags';
-import { splitOverlappingAcquisitions } from '@/src/utils/dicom/splitOverlappingAcquisitions';
-import { getChunkTag } from '@/src/utils/dicom/dicomChunks';
-import { useMessageStore } from '@/src/store/messages';
-import { useDatasetStore } from '@/src/store/datasets';
 import { removeFromArray } from '../utils';
 
 export const ANONYMOUS_PATIENT = 'Anonymous';
@@ -51,9 +51,6 @@ export type VolumeInfo = {
   SeriesDescription: string;
   WindowLevel: string;
   WindowWidth: string;
-  // Names the scan a split volume was separated out as ('acquisition 2',
-  // 'phase 3, echo 1'). Absent on volumes that were not split.
-  splitLabel?: string;
   // For 'cine', NumberOfSlices is the frame count. Optional for back-compat
   // with saved state that predates the field.
   kind?: 'volume' | 'cine';
@@ -84,9 +81,6 @@ type State = {
   volumeStudy: Record<string, string>;
   // studyKey -> patientKey
   studyPatient: Record<string, string>;
-
-  // categorize-pipeline volume ID -> volume keys currently imported from it
-  volumeKeysByBase: Record<string, string[]>;
 };
 
 /**
@@ -99,10 +93,10 @@ const cleanupName = (name: string) => {
 };
 
 export const getDisplayName = (info: VolumeInfo) => {
-  const name =
+  return (
     cleanupName(info.SeriesDescription || info.SeriesNumber) ||
-    info.SeriesInstanceUID;
-  return info.splitLabel ? `${name} (${info.splitLabel})` : name;
+    info.SeriesInstanceUID
+  );
 };
 
 export function isCineChunkGroup(chunks: Chunk[]): boolean {
@@ -145,10 +139,59 @@ export const getWindowLevels = (info: VolumeInfo) => {
   return widths.map((width, i) => ({ width, level: levels[i] }));
 };
 
-type SplitAndSortChunks = (
-  chunks: Chunk[],
-  mapToBlob: (chunk: Chunk, index: number) => Blob
-) => Promise<Record<string, Chunk[]>>;
+// One import session per store instance, so a fresh pinia replans from nothing
+// and the chunks the registry holds stay outside reactive state.
+type ImportSession = {
+  registry: DicomCollectionRegistry;
+  transactions: Promise<unknown>;
+};
+
+const sessions = new WeakMap<object, ImportSession>();
+
+const sessionFor = (store: object) => {
+  const existing = sessions.get(store);
+  if (existing) return existing;
+  const created: ImportSession = {
+    registry: createDicomCollectionRegistry(),
+    transactions: Promise.resolve(),
+  };
+  sessions.set(store, created);
+  return created;
+};
+
+// Planning and applying must not interleave: a later replan can dissolve an ID
+// an earlier call is still inserting, which would resurrect the dead volume.
+const inTransaction = <T>(store: object, run: () => Promise<T>) => {
+  const session = sessionFor(store);
+  const transaction = session.transactions.then(run);
+  session.transactions = transaction.catch(() => {});
+  return transaction;
+};
+
+// Everything the store asks of a chunk volume, so the capability check below
+// names exactly what it calls. An instanceof would refuse an injected image.
+type ChunkVolume = Pick<
+  DicomChunkImage,
+  'setChunks' | 'startLoad' | 'getChunks' | 'getDicomMetadata' | 'setName'
+>;
+
+const canHoldChunks = (
+  image: ProgressiveImage
+): image is ProgressiveImage & ChunkVolume =>
+  typeof (image as Partial<ChunkVolume>).setChunks === 'function';
+
+export type ImportChunksDeps = {
+  createChunkImage?: () => DicomChunkImage;
+  parseCineDicom?: typeof parseCineDicom;
+};
+
+export type ImportChunksResult = {
+  // Collection ID to every chunk whose provenance the collection now covers,
+  // not just the ones this batch brought.
+  volumes: Record<string, Chunk[]>;
+  // Collection IDs a replan dissolved. Their datasets must be removed.
+  dissolved: string[];
+};
 
 export const useDICOMStore = defineStore('dicom', {
   state: (): State => ({
@@ -161,215 +204,118 @@ export const useDICOMStore = defineStore('dicom', {
     volumeStudy: {},
     studyPatient: {},
     needsRebuild: {},
-    volumeKeysByBase: {},
   }),
   actions: {
     async importChunks(
       chunks: Chunk[],
-      splitAndSort: SplitAndSortChunks = DICOM.splitAndSort,
-      ChunkImage = DicomChunkImage
-    ) {
-      const messageStore = useMessageStore();
-      const datasetStore = useDatasetStore();
+      deps: ImportChunksDeps = {}
+    ): Promise<ImportChunksResult> {
+      const createChunkImage =
+        deps.createChunkImage ?? (() => new DicomChunkImage());
+      const parseCine = deps.parseCineDicom ?? parseCineDicom;
+      const imageCacheStore = useImageCacheStore();
 
-      // split into groups
-      const categorized = await splitAndSort(
-        chunks,
-        (chunk) => chunk.metaBlob!
-      );
+      return inTransaction(this, async () => {
+        const { updates, removed, rollback } =
+          await sessionFor(this).registry.register(chunks);
 
-      const imported: Record<string, Chunk[]> = {};
-      let anyChange = false;
+        // A replan can dissolve a collection by moving its members elsewhere.
+        // Undo exactly what a previous import created for that ID.
+        removed.forEach((id) => {
+          imageCacheStore.removeImage(id);
+          this.deleteVolume(id);
+        });
 
-      await Promise.all(
-        Object.entries(categorized).map(async ([baseId, batchChunks]) => {
-          const {
-            volumes,
-            duplicated,
-            labels,
-            retainedIds,
-            staleIds,
-            changed,
-          } = this._resolveVolumes(baseId, batchChunks, ChunkImage);
-          if (changed) anyChange = true;
-
-          datasetStore.replaceDicomDataSources(staleIds, volumes);
-          this.volumeKeysByBase[baseId] = retainedIds;
-
-          duplicated.forEach((volumeId) => {
-            const description = getChunkTag(
-              volumes[volumeId][0],
-              Tags.SeriesDescription
-            )?.trim();
-            const name = description
-              ? `Series "${description}"`
-              : `Volume ${volumeId}`;
-            messageStore.addWarning(
-              'A DICOM series has more than one slice at the same position',
-              `${name} holds repeated slice positions that no tag ` +
-                'separates. Its slice spacing and measurements along the ' +
-                'slice axis may be wrong.'
-            );
-          });
-
-          await Promise.all(
-            Object.entries(volumes).map(async ([id, sortedChunks]) => {
-              await this._importVolume(
+        const applied = await Promise.allSettled(
+          updates.map(async ({ id, members }) => {
+            if (isCineChunkGroup(members)) {
+              const importedAsCine = await this._importCineChunk(
                 id,
-                sortedChunks,
-                labels[id],
-                ChunkImage
+                members[0],
+                parseCine
               );
-              imported[id] = sortedChunks;
-            })
-          );
-        })
-      );
+              if (importedAsCine) return;
+            }
 
-      return anyChange ? imported : categorized;
-    },
+            const cachedImage = imageCacheStore.imageById[id];
+            if (cachedImage && !canHoldChunks(cachedImage)) {
+              throw new Error(
+                `Volume ${id} is already loaded as a non-chunk progressive image; cannot re-import as a chunk volume.`
+              );
+            }
+            const image = cachedImage ?? createChunkImage();
 
-    /**
-     * Which volumes a categorize-pipeline group becomes.
-     *
-     * The pipeline groups on series details that ignore the acquisition, so a
-     * series holding several overlapping scans arrives as one volume with
-     * interleaved slices. The split is decided over this batch plus every
-     * chunk already imported for the same group, so a series loaded across
-     * several imports converges on the same volumes as one loaded at once.
-     */
-    _resolveVolumes(
-      baseId: string,
-      batchChunks: Chunk[],
-      ChunkImage = DicomChunkImage
-    ) {
-      const imageCacheStore = useImageCacheStore();
+            await image.setChunks(members);
+            // Registration starts the first load; a re-import starts its own.
+            if (cachedImage) image.startLoad();
+            else imageCacheStore.addProgressiveImage(image, { id });
 
-      const priorIds =
-        this.volumeKeysByBase[baseId] ??
-        (imageCacheStore.imageById[baseId] ? [baseId] : []);
-      const cachedChunks = priorIds
-        .map((id) => imageCacheStore.imageById[id])
-        .filter(
-          (image): image is DicomChunkImage => image instanceof ChunkImage
-        )
-        .flatMap((image) => image.getChunks());
+            // update database
+            const metaPairs = image.getDicomMetadata();
+            if (!metaPairs) throw new Error('Metdata not ready');
+            const metadata = Object.fromEntries(metaPairs);
 
-      // Batch instances win SOP collisions so callers can map the returned
-      // chunks back to this call's sources.
-      const allChunks = cachedChunks.length
-        ? [
-            ...new Map(
-              [...cachedChunks, ...batchChunks].map((chunk) => [
-                getChunkTag(chunk, Tags.SOPInstanceUID),
-                chunk,
-              ])
-            ).values(),
-          ]
-        : batchChunks;
+            const patientInfo: PatientInfo = {
+              PatientID: metadata[Tags.PatientID],
+              PatientName: metadata[Tags.PatientName],
+              PatientBirthDate: metadata[Tags.PatientBirthDate],
+              PatientSex: metadata[Tags.PatientSex],
+            };
 
-      let split = splitOverlappingAcquisitions({ [baseId]: allChunks });
+            const studyInfo: StudyInfo = {
+              StudyID: metadata[Tags.StudyID],
+              StudyInstanceUID: metadata[Tags.StudyInstanceUID],
+              StudyDate: metadata[Tags.StudyDate],
+              StudyTime: metadata[Tags.StudyTime],
+              AccessionNumber: metadata[Tags.AccessionNumber],
+              StudyDescription: metadata[Tags.StudyDescription],
+            };
 
-      // Overlap never disappears as chunks accumulate, so a merged verdict
-      // after the series already split means the union became unjudgeable (a
-      // chunk without a discriminator tag or readable geometry). Keep the
-      // split volumes and decide this batch on its own. Collisions are
-      // excluded: re-splitting the batch alone would mint the colliding ID
-      // again and silently merge two tag values.
-      const priorWasSplit = priorIds.some((id) => id !== baseId);
-      const collapsed =
-        priorWasSplit &&
-        baseId in split.volumes &&
-        !split.collided.includes(baseId);
-      if (collapsed) {
-        split = splitOverlappingAcquisitions({ [baseId]: batchChunks });
-      }
+            const volumeInfo: VolumeInfo = {
+              NumberOfSlices: image.getChunks().length,
+              VolumeID: id,
+              Modality: metadata[Tags.Modality],
+              SeriesInstanceUID: metadata[Tags.SeriesInstanceUID],
+              SeriesNumber: metadata[Tags.SeriesNumber],
+              SeriesDescription: metadata[Tags.SeriesDescription],
+              WindowLevel: metadata[Tags.WindowLevel],
+              WindowWidth: metadata[Tags.WindowWidth],
+              kind: 'volume',
+            };
 
-      const finalIds = Object.keys(split.volumes);
-      // A group that re-splits under new chunks changes volume identity; drop
-      // the stale entries so the same scan is not listed twice.
-      const retainedIds = collapsed
-        ? [...new Set([...priorIds, ...finalIds])]
-        : finalIds;
+            this._updateDatabase(patientInfo, studyInfo, volumeInfo);
 
-      return {
-        ...split,
-        retainedIds,
-        staleIds: priorIds.filter((id) => !retainedIds.includes(id)),
-        changed:
-          collapsed ||
-          split.volumes[baseId] !== batchChunks ||
-          finalIds.length !== 1,
-      };
-    },
-
-    async _importVolume(
-      id: string,
-      sortedChunks: Chunk[],
-      label?: string,
-      ChunkImage = DicomChunkImage
-    ) {
-      const imageCacheStore = useImageCacheStore();
-
-      if (isCineChunkGroup(sortedChunks)) {
-        const importedAsCine = await this._importCineChunk(id, sortedChunks[0]);
-        if (importedAsCine) return;
-      }
-
-      const cachedImage = imageCacheStore.imageById[id];
-      if (cachedImage && !(cachedImage instanceof ChunkImage)) {
-        throw new Error(
-          `Volume ${id} is already loaded as a non-chunk progressive image; cannot re-import as a chunk volume.`
+            // save the image name
+            image.setName(getDisplayName(volumeInfo));
+          })
         );
-      }
-      const image = cachedImage ?? new ChunkImage();
 
-      await image.addChunks(sortedChunks);
-      // Registration starts the first load; a re-import starts its own.
-      if (cachedImage) image.startLoad();
-      else imageCacheStore.addProgressiveImage(image, { id });
+        const rejected = applied.flatMap((result, index) =>
+          result.status === 'rejected'
+            ? [{ update: updates[index], reason: result.reason }]
+            : []
+        );
+        if (rejected.length > 0) {
+          // An uncommitted failure must not pin its chunks, or a corrected
+          // re-import keeps receiving the one that failed.
+          rollback(rejected.map(({ update }) => update.seriesKey));
+          throw rejected[0].reason;
+        }
 
-      // update database
-      const metaPairs = image.getDicomMetadata();
-      if (!metaPairs) throw new Error('Metdata not ready');
-      const metadata = Object.fromEntries(metaPairs);
-
-      const patientInfo: PatientInfo = {
-        PatientID: metadata[Tags.PatientID],
-        PatientName: metadata[Tags.PatientName],
-        PatientBirthDate: metadata[Tags.PatientBirthDate],
-        PatientSex: metadata[Tags.PatientSex],
-      };
-
-      const studyInfo: StudyInfo = {
-        StudyID: metadata[Tags.StudyID],
-        StudyInstanceUID: metadata[Tags.StudyInstanceUID],
-        StudyDate: metadata[Tags.StudyDate],
-        StudyTime: metadata[Tags.StudyTime],
-        AccessionNumber: metadata[Tags.AccessionNumber],
-        StudyDescription: metadata[Tags.StudyDescription],
-      };
-
-      const volumeInfo: VolumeInfo = {
-        NumberOfSlices: image.getChunks().length,
-        VolumeID: id,
-        Modality: metadata[Tags.Modality],
-        SeriesInstanceUID: metadata[Tags.SeriesInstanceUID],
-        SeriesNumber: metadata[Tags.SeriesNumber],
-        SeriesDescription: metadata[Tags.SeriesDescription],
-        WindowLevel: metadata[Tags.WindowLevel],
-        WindowWidth: metadata[Tags.WindowWidth],
-        splitLabel: label,
-        kind: 'volume',
-      };
-
-      this._updateDatabase(patientInfo, studyInfo, volumeInfo);
-
-      // save the image name
-      image.setName(getDisplayName(volumeInfo));
+        return {
+          volumes: Object.fromEntries(
+            updates.map(({ id, provenance }) => [id, provenance])
+          ),
+          dissolved: removed,
+        };
+      });
     },
 
-    async _importCineChunk(id: string, chunk: Chunk): Promise<boolean> {
+    async _importCineChunk(
+      id: string,
+      chunk: Chunk,
+      parseCine: typeof parseCineDicom = parseCineDicom
+    ): Promise<boolean> {
       const imageCacheStore = useImageCacheStore();
 
       // If we already created this cine image (state-file reload), bail.
@@ -390,7 +336,7 @@ export const useDICOMStore = defineStore('dicom', {
       const buffer = await blob.arrayBuffer();
       let parsed: ReturnType<typeof parseCineDicom>;
       try {
-        parsed = parseCineDicom(buffer);
+        parsed = parseCine(buffer);
       } catch (err) {
         console.warn(
           'Failed to parse cine DICOM; falling back to volume import',
@@ -451,22 +397,22 @@ export const useDICOMStore = defineStore('dicom', {
         this.sliceData[volumeKey] = {};
         this.studyVolumes[studyKey].push(volumeKey);
       }
+      // A re-import grows the membership, so the record is rewritten.
       this.volumeInfo[volumeKey] = volume;
     },
 
     // You should probably call datasetStore.remove instead as this does not
     // remove files/images/layers associated with the volume
     deleteVolume(volumeKey: string) {
+      // Releases the chunks the registry pinned for this collection, so a
+      // removed volume stops holding its DICOM bytes.
+      sessionFor(this).registry.forget(volumeKey);
+
       if (volumeKey in this.volumeInfo) {
         const studyKey = this.volumeStudy[volumeKey];
         delete this.volumeInfo[volumeKey];
         delete this.sliceData[volumeKey];
         delete this.volumeStudy[volumeKey];
-
-        Object.entries(this.volumeKeysByBase).forEach(([baseId, ids]) => {
-          removeFromArray(ids, volumeKey);
-          if (ids.length === 0) delete this.volumeKeysByBase[baseId];
-        });
 
         removeFromArray(this.studyVolumes[studyKey], volumeKey);
         if (this.studyVolumes[studyKey].length === 0) {

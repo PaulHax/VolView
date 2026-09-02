@@ -20,6 +20,7 @@ const tags: Tag[] = [
   { name: 'SeriesNumber', tag: '0020|0011' },
   { name: 'SeriesDate', tag: '0008|0021' },
   { name: 'SeriesDescription', tag: '0008|103e' },
+  { name: 'InstanceNumber', tag: '0020|0013' },
   { name: 'WindowLevel', tag: '0028|1050' },
   { name: 'WindowWidth', tag: '0028|1051' },
   { name: 'Rows', tag: '0028|0010' },

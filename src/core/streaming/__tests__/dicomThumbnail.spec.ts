@@ -102,7 +102,7 @@ describe('sliceToThumbnail', () => {
 
   it('reads the first component of a multi sample slice', () => {
     const slice = sliceToThumbnail({
-      data: [10, 0, 0, 20, 0, 0, 30, 0, 0],
+      data: [0, 9, 9, 10, 9, 9, 30, 9, 9],
       width: 3,
       height: 1,
       components: 3,
