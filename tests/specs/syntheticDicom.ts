@@ -94,6 +94,15 @@ const ds = (g: number, e: number, v: string) =>
 const us = (g: number, e: number, v: number) =>
   elemShort(g, e, 'US', writeShort(v));
 
+const writeDouble = (v: number) => {
+  const b = new Uint8Array(8);
+  new DataView(b.buffer).setFloat64(0, v, true);
+  return b;
+};
+
+const fd = (g: number, e: number, v: number) =>
+  elemShort(g, e, 'FD', writeDouble(v));
+
 // A PN whose bytes are already encoded in some Specific Character Set, padded
 // to DICOM's even length with a space.
 const pnRaw = (g: number, e: number, v: Uint8Array) =>
@@ -306,8 +315,8 @@ export function buildSyntheticDicom(opts: SyntheticSliceOptions): Uint8Array {
             combine(
               us(0x0018, 0x6024, 3),
               us(0x0018, 0x6026, 3),
-              ds(0x0018, 0x602c, String(ultrasoundRegion.physicalDeltaX)),
-              ds(0x0018, 0x602e, String(ultrasoundRegion.physicalDeltaY))
+              fd(0x0018, 0x602c, ultrasoundRegion.physicalDeltaX),
+              fd(0x0018, 0x602e, ultrasoundRegion.physicalDeltaY)
             )
           ),
         ]),
