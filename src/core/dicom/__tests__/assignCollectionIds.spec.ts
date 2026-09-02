@@ -4,16 +4,25 @@ import {
   encodeCollectionKey,
 } from '@/src/core/dicom/assignCollectionIds';
 import type { CommittedCollection } from '@/src/core/dicom/assignCollectionIds';
+import {
+  ORIENTATION_TOLERANCE,
+  planDicomCollections,
+} from '@/src/core/dicom/planDicomCollections';
 import type {
   CollectionKey,
   DicomCollection,
 } from '@/src/core/dicom/planDicomCollections';
 import {
+  IDENTITY_ORIENTATION,
   clone,
   makeFacts,
+  tiltedOrientation,
 } from '@/src/core/dicom/__tests__/instanceFactsFixture';
 
 const SERIES_KEY = 'series-1';
+
+// A second orientation row rotation the bucketing tolerance still accepts.
+const WITHIN_TOLERANCE = Math.acos(1 - ORIENTATION_TOLERANCE / 2);
 
 const keyOf = (orientation: string): CollectionKey => ({
   seriesKey: SERIES_KEY,
@@ -46,45 +55,48 @@ describe('encodeCollectionKey', () => {
     );
   });
 
-  it.each(['|', '/', ':', ',', '\\', '-', '.', ' ', '#'])(
-    'escapes %s so a shifted separator changes the encoding',
-    (separator) => {
-      const left: CollectionKey = {
-        seriesKey: SERIES_KEY,
-        parts: [
-          ['rows', `x${separator}y`],
-          ['columns', 'z'],
-        ],
-      };
-      const right: CollectionKey = {
-        seriesKey: SERIES_KEY,
-        parts: [
-          ['rows', 'x'],
-          ['columns', `y${separator}z`],
-        ],
-      };
+  // The structured key this encodes: the same characters the encoding joins on,
+  // smuggled inside a series key, a rule name or a value.
+  const structured: CollectionKey = {
+    seriesKey: SERIES_KEY,
+    parts: [
+      ['rows', '4'],
+      ['columns', '8'],
+    ],
+  };
 
-      expect(encodeCollectionKey(left)).not.toBe(encodeCollectionKey(right));
+  const smuggled: Array<[string, CollectionKey]> = [
+    [
+      'the series key',
+      { seriesKey: `${SERIES_KEY}|rows=.4`, parts: [['columns', '8']] },
+    ],
+    [
+      'a rule name',
+      { seriesKey: SERIES_KEY, parts: [['rows=.4|columns', '8']] },
+    ],
+    ['a value', { seriesKey: SERIES_KEY, parts: [['rows', '4|columns=.8']] }],
+  ];
+
+  it.each(smuggled)(
+    'does not collide when a separator hides in %s',
+    (_where, key) => {
+      expect(encodeCollectionKey(key)).not.toBe(
+        encodeCollectionKey(structured)
+      );
     }
   );
 
   it('separates a missing value from the literal strings for it', () => {
-    const missing: CollectionKey = {
-      seriesKey: SERIES_KEY,
-      parts: [['rows', null]],
-    };
-    const literalNull: CollectionKey = {
-      seriesKey: SERIES_KEY,
-      parts: [['rows', 'null']],
-    };
-    const empty: CollectionKey = {
-      seriesKey: SERIES_KEY,
-      parts: [['rows', '']],
-    };
+    const literals = [null, 'null', '', '~'].map(
+      (value): CollectionKey => ({
+        seriesKey: SERIES_KEY,
+        parts: [['rows', value]],
+      })
+    );
 
-    const encodings = [missing, literalNull, empty].map(encodeCollectionKey);
+    const encodings = literals.map(encodeCollectionKey);
 
-    expect(new Set(encodings).size).toBe(3);
+    expect(new Set(encodings).size).toBe(literals.length);
   });
 
   it('separates keys differing only in series key or rule name', () => {
@@ -136,15 +148,50 @@ describe('assignIds', () => {
     expect(collections[0].id).toBe('visible-1');
   });
 
-  it('keeps the committed id when the key changed but the members did not', () => {
-    const collection = collectionOf(['a', 'b', 'c'], keyOf('0.9999,0,0,0,1,0'));
-    const committed: CommittedCollection[] = [
-      { id: 'visible-1', sopInstanceUids: ['a', 'b', 'c'] },
+  it('keeps the committed id when a later batch changes the bucket key', () => {
+    // A lower-sorting SOP UID takes over as the orientation bucket's
+    // representative, so the second batch keys the same dataset differently.
+    const firstBatch = [
+      makeFacts('uid-m', {
+        orientation: IDENTITY_ORIENTATION,
+        projectedPosition: 0,
+      }),
+      makeFacts('uid-n', {
+        orientation: IDENTITY_ORIENTATION,
+        projectedPosition: 1,
+      }),
     ];
+    const newcomer = makeFacts('uid-a', {
+      orientation: tiltedOrientation(WITHIN_TOLERANCE),
+      projectedPosition: 2,
+    });
 
-    const { collections } = assignIds(planOf(collection), committed);
+    const before = assignIds(
+      planDicomCollections({ seriesKey: SERIES_KEY, instances: firstBatch }),
+      []
+    );
+    const committed = before.collections.map((collection) => ({
+      id: collection.id,
+      sopInstanceUids: collection.members.flatMap((member) =>
+        member.sopInstanceUid === null ? [] : [member.sopInstanceUid]
+      ),
+    }));
+    const after = assignIds(
+      planDicomCollections({
+        seriesKey: SERIES_KEY,
+        instances: [...firstBatch, newcomer],
+      }),
+      committed
+    );
 
-    expect(collections[0].id).toBe('visible-1');
+    expect(after.collections).toHaveLength(1);
+    expect(encodeCollectionKey(after.collections[0].key)).not.toBe(
+      encodeCollectionKey(before.collections[0].key)
+    );
+    expect(after.collections[0].id).toBe(before.collections[0].id);
+    expect(after.collections[0].id).not.toBe(
+      encodeCollectionKey(after.collections[0].key)
+    );
   });
 
   it('gives a committed id to the collection holding most of its members', () => {

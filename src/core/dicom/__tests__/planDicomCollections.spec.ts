@@ -195,6 +195,20 @@ describe('planDicomCollections', () => {
     ).toBe(orientationKeyValue(tiltedOrientation(BEYOND)));
   });
 
+  it('buckets identical cosines that are slightly over normalized', () => {
+    const overNormalized = [1.0001, 0, 0, 0, 1, 0];
+    const a = makeFacts('uid-a', { orientation: overNormalized });
+    const b = makeFacts('uid-b', { orientation: overNormalized });
+
+    const { collections } = plan([a, b]);
+
+    expect(collections).toHaveLength(1);
+    expect(uidsOf(collections[0])).toEqual(['uid-a', 'uid-b']);
+    expect(partValue(collections[0], ORIENTATION_RULE)).toBe(
+      orientationKeyValue(overNormalized)
+    );
+  });
+
   it('buckets a chain of near orientations the same way under permutation', () => {
     const a = makeFacts('uid-a', { orientation: IDENTITY_ORIENTATION });
     const b = makeFacts('uid-b', { orientation: tiltedOrientation(CHAIN) });
@@ -214,6 +228,30 @@ describe('planDicomCollections', () => {
     ]);
     expect(backward).toEqual(forward);
     expect(shuffled).toEqual(forward);
+  });
+
+  it('buckets a chain of anonymous near orientations the same under permutation', () => {
+    const anonymousChain = () => [
+      makeFacts(null, {
+        orientation: IDENTITY_ORIENTATION,
+        projectedPosition: 0,
+      }),
+      makeFacts(null, {
+        orientation: tiltedOrientation(CHAIN),
+        projectedPosition: 1,
+      }),
+      makeFacts(null, {
+        orientation: tiltedOrientation(2 * CHAIN),
+        projectedPosition: 2,
+      }),
+    ];
+
+    const [x, y, z] = anonymousChain();
+    const forward = plan([x, y, z]);
+
+    expect(forward.collections.map((c) => c.members.length)).toEqual([2, 1]);
+    expect(plan([z, y, x])).toEqual(forward);
+    expect(plan([y, x, z])).toEqual(forward);
   });
 
   it('takes the orientation key from the smallest SOP UID, not the first input', () => {
@@ -278,6 +316,15 @@ describe('planDicomCollections', () => {
     expect(collections[0].members).toHaveLength(2);
   });
 
+  it('keeps both entries when one anonymous instance is listed twice', () => {
+    const shared = makeFacts(null);
+
+    const { collections } = plan([shared, shared]);
+
+    expect(collections).toHaveLength(1);
+    expect(collections[0].members).toEqual([shared, shared]);
+  });
+
   it('orders members by projected position ascending', () => {
     const high = makeFacts('uid-a', { projectedPosition: 10 });
     const low = makeFacts('uid-b', { projectedPosition: -5 });
@@ -298,6 +345,37 @@ describe('planDicomCollections', () => {
 
     expect(uidsOf(collections[0])).toEqual(['uid-a', 'uid-b']);
     expect(collections[0].order).toBe('spatial');
+  });
+
+  it('breaks a shared position between anonymous members on content', () => {
+    const anonymousPair = () => [
+      makeFacts(null, { projectedPosition: 0, instanceNumber: 1 }),
+      makeFacts(null, { projectedPosition: 0, instanceNumber: 2 }),
+    ];
+
+    const [a, b] = anonymousPair();
+    const forward = plan([a, b]);
+
+    expect(forward.collections[0].members.map((m) => m.instanceNumber)).toEqual(
+      [1, 2]
+    );
+    expect(plan([b, a])).toEqual(forward);
+  });
+
+  it('breaks an anonymous tie on facts outside the ordering keys', () => {
+    const anonymousPair = () => [
+      makeFacts(null, { position: [0, 0, 0] }),
+      makeFacts(null, { position: [9, 9, 9] }),
+    ];
+
+    const [a, b] = anonymousPair();
+    const forward = plan([a, b]);
+
+    expect(forward.collections[0].members.map((m) => m.position)).toEqual([
+      [0, 0, 0],
+      [9, 9, 9],
+    ]);
+    expect(plan([b, a])).toEqual(forward);
   });
 
   it('falls back to instance number when a position is unreadable', () => {
@@ -456,6 +534,24 @@ describe('validateCollections', () => {
         [collectionOf([a], partsOne), collectionOf([a], partsTwo)]
       )
     ).toThrow('uid-a');
+  });
+
+  it('accepts an instance listed twice when it is placed twice', () => {
+    expect(() =>
+      validateCollections([a, a], [collectionOf([a, a], partsOne)])
+    ).not.toThrow();
+  });
+
+  it('rejects an instance listed twice but placed once', () => {
+    expect(() =>
+      validateCollections([a, a], [collectionOf([a], partsOne)])
+    ).toThrow('uid-a');
+  });
+
+  it('rejects a member that was never one of the instances', () => {
+    expect(() =>
+      validateCollections([a], [collectionOf([a, b], partsOne)])
+    ).toThrow('uid-b');
   });
 
   it('rejects two collections sharing a key', () => {
