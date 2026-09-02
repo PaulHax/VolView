@@ -1,4 +1,7 @@
+import { ref } from 'vue';
+import vtkImageData from '@kitware/vtk.js/Common/DataModel/ImageData';
 import { SOP_CLASS_ULTRASOUND_MULTIFRAME, Tags } from '@/src/core/dicomTags';
+import { defaultImageMetadata } from '@/src/core/progressiveImage';
 import type { Chunk } from '@/src/core/streaming/chunk';
 import type DicomChunkImage from '@/src/core/streaming/dicomChunkImage';
 
@@ -70,6 +73,12 @@ export class FakeChunkImage {
 
   name = '';
 
+  loading = ref(false);
+
+  loaded = ref(true);
+
+  private readonly imageData = vtkImageData.newInstance();
+
   constructor(
     private readonly index: number,
     private readonly hooks: FakeImageHooks = {}
@@ -78,6 +87,14 @@ export class FakeChunkImage {
   async setChunks(chunks: Chunk[]) {
     await this.hooks.onPrepare?.(this.index, chunks);
     this.setChunksCalls.push(chunks);
+  }
+
+  getImageMetadata() {
+    return defaultImageMetadata();
+  }
+
+  getVtkImageData() {
+    return this.imageData;
   }
 
   getDicomMetadata() {
@@ -94,6 +111,10 @@ export class FakeChunkImage {
 
   getStatus() {
     return 'incomplete';
+  }
+
+  isLoaded() {
+    return false;
   }
 
   isLoading() {

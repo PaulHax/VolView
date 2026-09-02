@@ -67,6 +67,17 @@ const readChunk = (chunk: Chunk) => {
   };
 };
 
+/**
+ * Splits a batch into one list per series, preserving input order. Every chunk
+ * is read here, so a batch naming an unread chunk fails before any series
+ * transaction starts.
+ */
+export const groupChunksBySeries = (chunks: Chunk[]) =>
+  chunks.reduce((groups, chunk) => {
+    const { seriesKey } = readChunk(chunk);
+    return groups.set(seriesKey, [...(groups.get(seriesKey) ?? []), chunk]);
+  }, new Map<string, Chunk[]>());
+
 /** Groups preserve input order, both of the series and of their instances. */
 const groupBySeries = (chunks: Chunk[]) => {
   const groups = new Map<string, RegisteredInstance[]>();
