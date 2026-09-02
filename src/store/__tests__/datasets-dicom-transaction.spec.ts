@@ -5,7 +5,11 @@ import type { Chunk } from '@/src/core/streaming/chunk';
 import { FILE_EXT_TO_MIME } from '@/src/io/mimeTypes';
 import type { ChunkSource, DataSource } from '@/src/io/import/dataSource';
 import { uriToDataSource } from '@/src/io/import/dataSource';
-import { importDicomChunkSources } from '@/src/io/import/importDataSources';
+import type { LoadableResult } from '@/src/io/import/common';
+import {
+  importDicomChunkSources,
+  PartialDicomImportError,
+} from '@/src/io/import/importDataSources';
 import { useDatasetStore } from '@/src/store/datasets';
 import { useImageCacheStore } from '@/src/store/image-cache';
 import {
@@ -67,6 +71,35 @@ const splitting = () => ({
 });
 
 const cachedIds = () => Object.keys(useImageCacheStore().imageById);
+
+// The same image is asked twice: once for the first slice, once for the
+// membership the second slice grows it to.
+const failsFirstGrowth = () => {
+  let failed = false;
+  return (_index: number, chunks: Chunk[]) => {
+    if (chunks.length === 1 || failed) return Promise.resolve();
+    failed = true;
+    return Promise.reject(new Error(BUFFER_FAILURE));
+  };
+};
+
+/** Loads one slice, then fails the batch that grows the volume with a second. */
+const failGrowth = async () => {
+  const { created, createChunkImage } = imageFactory({
+    onPrepare: failsFirstGrowth(),
+  });
+  const store = useDICOMStore();
+  const first = chunkFor({ sop: 'a', z: 0 });
+  const second = chunkFor({ sop: 'b', z: 1 });
+
+  const id = onlyId(await store.importChunks([first], { createChunkImage }));
+  await expect(
+    store.importChunks([second], { createChunkImage })
+  ).rejects.toThrow(/buffer/);
+  await flush();
+
+  return { store, id, first, second, created, createChunkImage };
+};
 
 /** Loads one slice, then fails a batch that grows it and adds a scout. */
 const growAndFail = async () => {
@@ -193,8 +226,9 @@ describe('DICOM store transactional commit', () => {
     const { store, id, first, created } = await growAndFail();
 
     const [loaded, candidate] = created;
-    // Growth is applied at commit, so a failed sibling leaves the volume alone.
-    expect(loaded.setChunksCalls).toEqual([[first]]);
+    // Growth is undone, so a failed sibling leaves the volume as it was.
+    expect(loaded.getChunks()).toEqual([first]);
+    expect(loaded.startLoadCount).toBe(1);
     expect(loaded.disposeCount).toBe(0);
     expect(candidate.disposeCount).toBe(1);
     expect(cachedIds()).toEqual([id]);
@@ -228,6 +262,85 @@ describe('DICOM store transactional commit', () => {
     expect(grown[1]).toBe(corrected);
     expect(store.volumeInfo[id].NumberOfSlices).toBe(2);
     expect(store.volumeInfo[scoutId].NumberOfSlices).toBe(1);
+  });
+
+  it('loads a growing volume once it holds the members it gained', async () => {
+    const held: number[] = [];
+    const { created, createChunkImage } = imageFactory({
+      onStartLoad: (index) => held.push(created[index].getChunks().length),
+    });
+    const store = useDICOMStore();
+
+    await store.importChunks([chunkFor({ sop: 'a', z: 0 })], {
+      createChunkImage,
+    });
+    await store.importChunks([chunkFor({ sop: 'b', z: 1 })], {
+      createChunkImage,
+    });
+    await flush();
+
+    // A load started beside the membership change would never reach the slice
+    // the second import added.
+    expect(created).toHaveLength(1);
+    expect(held).toEqual([1, 2]);
+  });
+
+  it('keeps the volume the growth could not change', async () => {
+    const { store, id, first, created } = await failGrowth();
+
+    // The record never promises slices the image does not hold.
+    expect(store.volumeInfo[id].NumberOfSlices).toBe(1);
+    expect(created[0].getChunks()).toEqual([first]);
+    expect(created[0].startLoadCount).toBe(1);
+    expect(cachedIds()).toEqual([id]);
+  });
+
+  it('does not let a failed growth undo the import that follows it', async () => {
+    // Rejects only after the next import of the series would have committed,
+    // which is when a growth that outlives its transaction does its damage.
+    const failsLateOnGrowth = () => {
+      let failed = false;
+      return (_index: number, chunks: Chunk[]) => {
+        if (chunks.length !== 2 || failed) return Promise.resolve();
+        failed = true;
+        return flush().then(() => Promise.reject(new Error(BUFFER_FAILURE)));
+      };
+    };
+    const { created, createChunkImage } = imageFactory({
+      onPrepare: failsLateOnGrowth(),
+    });
+    const store = useDICOMStore();
+    const first = chunkFor({ sop: 'a', z: 0 });
+
+    const id = onlyId(await store.importChunks([first], { createChunkImage }));
+    await expect(
+      store.importChunks([chunkFor({ sop: 'b', z: 1 })], { createChunkImage })
+    ).rejects.toThrow(/buffer/);
+
+    const third = chunkFor({ sop: 'c', z: 2 });
+    await store.importChunks([third], { createChunkImage });
+    await flush();
+
+    expect(store.volumeInfo[id].NumberOfSlices).toBe(2);
+    expect(created[0].getChunks()).toEqual([first, third]);
+  });
+
+  it('lets a corrected re-import replace the chunk a failed growth brought', async () => {
+    const { store, id, first, second, created, createChunkImage } =
+      await failGrowth();
+
+    const corrected = chunkFor({ sop: 'b', z: 1 });
+    const result = await store.importChunks([corrected], { createChunkImage });
+    await flush();
+
+    // Identity, not shape: a chunk the batch could not apply stays unpinned.
+    expect(created).toHaveLength(1);
+    expect(result.volumes[id][1]).toBe(corrected);
+    const grown = created[0].getChunks();
+    expect(grown[0]).toBe(first);
+    expect(grown[1]).toBe(corrected);
+    expect(grown[1]).not.toBe(second);
+    expect(store.volumeInfo[id].NumberOfSlices).toBe(2);
   });
 
   it('keeps a dissolved volume until its replacements exist', async () => {
@@ -387,6 +500,29 @@ const sopsOfDataset = (dataSource: DataSource | undefined) => {
   });
 };
 
+/**
+ * The pipeline's own shape: whatever landed reaches the dataset store, whether
+ * or not the import as a whole failed.
+ */
+const load = (
+  chunks: Chunk[],
+  createChunkImage: ReturnType<typeof imageFactory>['createChunkImage']
+) => {
+  const register = (loadables: LoadableResult[]) => {
+    useDatasetStore().addDataSources(
+      loadables.map(({ dataID, dataSource }) => ({ dataID, dataSource }))
+    );
+    return loadables;
+  };
+
+  return importDicomChunkSources(chunks.map(sourceFor), (batch) =>
+    useDICOMStore().importChunks(batch, { createChunkImage })
+  ).then(register, (err) => {
+    if (err instanceof PartialDicomImportError) register(err.loadables);
+    throw err;
+  });
+};
+
 describe('importDicomChunkSources transactional commit', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -396,20 +532,6 @@ describe('importDicomChunkSources transactional commit', () => {
     const { zero, one, two, three } = splitting();
     const store = useDICOMStore();
     const datasetStore = useDatasetStore();
-
-    const load = async (
-      chunks: Chunk[],
-      createChunkImage: ReturnType<typeof imageFactory>['createChunkImage']
-    ) => {
-      const loadables = await importDicomChunkSources(
-        chunks.map(sourceFor),
-        (batch) => store.importChunks(batch, { createChunkImage })
-      );
-      datasetStore.addDataSources(
-        loadables.map(({ dataID, dataSource }) => ({ dataID, dataSource }))
-      );
-      return loadables;
-    };
 
     const [loadable] = await load(
       [one, three],
@@ -435,5 +557,51 @@ describe('importDicomChunkSources transactional commit', () => {
     ]);
     expect(cachedIds()).toEqual([id]);
     expect(store.volumeInfo[id].NumberOfSlices).toBe(2);
+  });
+
+  it('reports what a committed series landed and blames only what failed', async () => {
+    const { zero, one, two, three } = splitting();
+    const store = useDICOMStore();
+    const datasetStore = useDatasetStore();
+
+    const [loadable] = await load(
+      [one, three],
+      imageFactory().createChunkImage
+    );
+    const dissolvedId = loadable.dataID;
+
+    // The split commits on its own lane while the second series never prepares.
+    const failure = await load(
+      [zero, two, chunkFor({ sop: 'other', series: OTHER_SERIES_UID })],
+      imageFactory({
+        onPrepare: (_index, chunks) =>
+          sopOf(chunks[0]) === 'other'
+            ? Promise.reject(new Error(BUFFER_FAILURE))
+            : Promise.resolve(),
+      }).createChunkImage
+    ).then(
+      () => null,
+      (err) => err
+    );
+
+    expect(failure).toBeInstanceOf(PartialDicomImportError);
+    expect((failure as Error).message).toMatch(/buffer/);
+
+    // A committed series must not be reported as loaded and failed at once.
+    expect(
+      (failure as PartialDicomImportError).failedSources.map((src) =>
+        sopOf(src.chunk)
+      )
+    ).toEqual(['other']);
+
+    // The committed series dissolved this collection, so its dataset goes with it.
+    const landed = (failure as PartialDicomImportError).loadables;
+    const ids = landed.map(({ dataID }) => dataID);
+    expect(ids).toHaveLength(2);
+    expect(datasetStore.idsAsSelections.sort()).toEqual([...ids].sort());
+    expect(store.volumeInfo[dissolvedId]).toBeUndefined();
+    expect(
+      ids.map((id) => sopsOfDataset(datasetStore.getDataSource(id)))
+    ).toContainEqual(['sop-0', 'sop-1']);
   });
 });

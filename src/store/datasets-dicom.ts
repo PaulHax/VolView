@@ -7,11 +7,13 @@ import DicomCineImage from '@/src/core/cine/DicomCineImage';
 import { parseCineDicom } from '@/src/core/cine/parseCineDicom';
 import {
   createDicomCollectionRegistry,
+  groupChunksBySeries,
+  type CollectionUpdate,
   type DicomCollectionRegistry,
 } from '@/src/core/dicom/collectionRegistry';
 import type { ProgressiveImage } from '@/src/core/progressiveImage';
 import { isUltrasoundMultiframeSopClass, Tags } from '@/src/core/dicomTags';
-import { removeFromArray } from '../utils';
+import { ensureError, removeFromArray } from '../utils';
 
 export const ANONYMOUS_PATIENT = 'Anonymous';
 export const ANONYMOUS_PATIENT_ID = 'ANONYMOUS';
@@ -143,7 +145,8 @@ export const getWindowLevels = (info: VolumeInfo) => {
 // and the chunks the registry holds stay outside reactive state.
 type ImportSession = {
   registry: DicomCollectionRegistry;
-  transactions: Promise<unknown>;
+  // Series key to the transaction the next import of that series waits on.
+  lanes: Map<string, Promise<unknown>>;
 };
 
 const sessions = new WeakMap<object, ImportSession>();
@@ -153,27 +156,33 @@ const sessionFor = (store: object) => {
   if (existing) return existing;
   const created: ImportSession = {
     registry: createDicomCollectionRegistry(),
-    transactions: Promise.resolve(),
+    lanes: new Map(),
   };
   sessions.set(store, created);
   return created;
 };
 
-// Planning and applying must not interleave: a later replan can dissolve an ID
-// an earlier call is still inserting, which would resurrect the dead volume.
-const inTransaction = <T>(store: object, run: () => Promise<T>) => {
-  const session = sessionFor(store);
-  const transaction = session.transactions.then(run);
-  session.transactions = transaction.catch(() => {});
+// Planning, preparing and committing one series must not interleave: a later
+// replan can dissolve an ID an earlier call is still inserting, which would
+// resurrect the dead volume. Lanes are per series, so one stuck import blocks
+// only the series it names.
+const inSeriesTransaction = <T>(
+  store: object,
+  seriesKey: string,
+  run: () => Promise<T>
+) => {
+  const { lanes } = sessionFor(store);
+  const transaction = (lanes.get(seriesKey) ?? Promise.resolve()).then(run);
+  lanes.set(
+    seriesKey,
+    transaction.catch(() => {})
+  );
   return transaction;
 };
 
-// Everything the store asks of a chunk volume, so the capability check below
-// names exactly what it calls. An instanceof would refuse an injected image.
-type ChunkVolume = Pick<
-  DicomChunkImage,
-  'setChunks' | 'startLoad' | 'getChunks' | 'getDicomMetadata' | 'setName'
->;
+// A chunk volume, as this store uses it. An instanceof would refuse an
+// injected image, so the capability check names the method it calls.
+type ChunkVolume = Pick<DicomChunkImage, 'setChunks' | 'getChunks'>;
 
 const canHoldChunks = (
   image: ProgressiveImage
@@ -192,6 +201,273 @@ export type ImportChunksResult = {
   // Collection IDs a replan dissolved. Their datasets must be removed.
   dissolved: string[];
 };
+
+/**
+ * A batch whose series did not all commit. Each series commits on its own
+ * lane, so what landed is reported alongside the failure instead of being
+ * thrown away with it.
+ */
+export class PartialImportError extends Error {
+  readonly committed: ImportChunksResult;
+
+  // The chunks of every series that failed, so the caller blames those sources
+  // and not the whole batch.
+  readonly failed: Chunk[];
+
+  constructor(cause: Error, committed: ImportChunksResult, failed: Chunk[]) {
+    super(cause.message);
+    this.name = 'PartialImportError';
+    this.cause = cause;
+    this.committed = committed;
+    this.failed = failed;
+  }
+}
+
+type DatabaseRecord = {
+  patient: PatientInfo;
+  study: StudyInfo;
+  volume: VolumeInfo;
+};
+
+/**
+ * One collection's replacement, prepared before any store is touched. `add`
+ * builds a fresh image off-store, `grow` has already applied its members to
+ * the image an earlier import registered, and `none` is a collection already
+ * loaded as it is planned.
+ */
+type Candidate =
+  | { kind: 'none' }
+  | {
+      kind: 'add';
+      id: string;
+      image: ProgressiveImage;
+      record: DatabaseRecord;
+    }
+  | {
+      kind: 'grow';
+      id: string;
+      image: ProgressiveImage & ChunkVolume;
+      // The membership held before this batch grew the image, so a sibling's
+      // failure can put it back.
+      previous: Chunk[];
+      record: DatabaseRecord;
+    };
+
+// Every image a batch builds, so a failure releases them all. An uncommitted
+// candidate owns a volume buffer nothing else can free.
+const candidateTracker = () => {
+  const built: ProgressiveImage[] = [];
+  return {
+    track: <T extends ProgressiveImage>(image: T) => {
+      built.push(image);
+      return image;
+    },
+    release: () => built.forEach((image) => image.dispose()),
+  };
+};
+
+/**
+ * Puts the images a failed batch already grew back to the membership they held,
+ * so an abandoned plan leaves no image holding members no record names.
+ */
+const undoGrowth = (candidates: Candidate[]) =>
+  Promise.all(
+    candidates.map((candidate) =>
+      candidate.kind === 'grow'
+        ? candidate.image.setChunks(candidate.previous).catch((err) => {
+            console.error('Failed to restore DICOM volume membership', err);
+          })
+        : null
+    )
+  );
+
+type PrepareDeps = {
+  createChunkImage: () => DicomChunkImage;
+  parseCine: typeof parseCineDicom;
+  track: ReturnType<typeof candidateTracker>['track'];
+};
+
+const volumeRecord = (id: string, members: Chunk[]): DatabaseRecord => {
+  const metaPairs = members[0].metadata;
+  if (!metaPairs) throw new Error('Metadata not ready');
+  const metadata = Object.fromEntries(metaPairs);
+  return {
+    patient: {
+      PatientID: metadata[Tags.PatientID],
+      PatientName: metadata[Tags.PatientName],
+      PatientBirthDate: metadata[Tags.PatientBirthDate],
+      PatientSex: metadata[Tags.PatientSex],
+    },
+    study: {
+      StudyID: metadata[Tags.StudyID],
+      StudyInstanceUID: metadata[Tags.StudyInstanceUID],
+      StudyDate: metadata[Tags.StudyDate],
+      StudyTime: metadata[Tags.StudyTime],
+      AccessionNumber: metadata[Tags.AccessionNumber],
+      StudyDescription: metadata[Tags.StudyDescription],
+    },
+    volume: {
+      NumberOfSlices: members.length,
+      VolumeID: id,
+      Modality: metadata[Tags.Modality],
+      SeriesInstanceUID: metadata[Tags.SeriesInstanceUID],
+      SeriesNumber: metadata[Tags.SeriesNumber],
+      SeriesDescription: metadata[Tags.SeriesDescription],
+      WindowLevel: metadata[Tags.WindowLevel],
+      WindowWidth: metadata[Tags.WindowWidth],
+      kind: 'volume',
+    },
+  };
+};
+
+const cineRecord = (
+  id: string,
+  header: ReturnType<typeof parseCineDicom>['header']
+): DatabaseRecord => ({
+  patient: header.patient,
+  study: header.study,
+  volume: {
+    NumberOfSlices: header.numberOfFrames,
+    VolumeID: id,
+    Modality: header.series.Modality,
+    SeriesInstanceUID: header.series.SeriesInstanceUID,
+    SeriesNumber: header.series.SeriesNumber,
+    SeriesDescription: header.series.SeriesDescription,
+    WindowLevel: '',
+    WindowWidth: '',
+    kind: 'cine',
+  },
+});
+
+const tryParseCine = (parse: typeof parseCineDicom, buffer: ArrayBuffer) => {
+  try {
+    return parse(buffer);
+  } catch (err) {
+    console.warn(
+      'Failed to parse cine DICOM; falling back to volume import',
+      err
+    );
+    return null;
+  }
+};
+
+/** Null when the clip is not a cine this app can play, so the volume path takes it. */
+async function prepareCine(
+  loaded: Record<string, VolumeInfo>,
+  id: string,
+  chunk: Chunk,
+  deps: PrepareDeps
+): Promise<Candidate | null> {
+  // A state-file reload already built this clip.
+  if (loaded[id]?.kind === 'cine') return { kind: 'none' };
+
+  const cachedImage = useImageCacheStore().imageById[id];
+  if (cachedImage && !(cachedImage instanceof DicomCineImage)) {
+    throw new Error(
+      `Volume ${id} is already loaded as a non-cine progressive image; cannot re-import as a cine clip.`
+    );
+  }
+
+  await chunk.loadData();
+  const blob = chunk.dataBlob;
+  if (!blob) throw new Error('Cine DICOM chunk has no data');
+
+  const parsed = tryParseCine(deps.parseCine, await blob.arrayBuffer());
+  if (!parsed || !DicomCineImage.isSupported(parsed.header)) return null;
+
+  return {
+    kind: 'add',
+    id,
+    image: deps.track(new DicomCineImage(parsed)),
+    record: cineRecord(id, parsed.header),
+  };
+}
+
+async function prepareVolume(
+  id: string,
+  members: Chunk[],
+  deps: PrepareDeps
+): Promise<Candidate> {
+  const cachedImage = useImageCacheStore().imageById[id];
+  if (cachedImage && !canHoldChunks(cachedImage)) {
+    throw new Error(
+      `Volume ${id} is already loaded as a non-chunk progressive image; cannot re-import as a chunk volume.`
+    );
+  }
+
+  const record = volumeRecord(id, members);
+  // Growth is part of preparation, not of the commit: the members have to be
+  // in the image before any record promises them, and a membership the image
+  // cannot hold has to fail while the batch can still be abandoned.
+  if (cachedImage) {
+    const previous = cachedImage.getChunks();
+    await cachedImage.setChunks(members);
+    return { kind: 'grow', id, image: cachedImage, previous, record };
+  }
+
+  const image = deps.track(deps.createChunkImage());
+  await image.setChunks(members);
+  return { kind: 'add', id, image, record };
+}
+
+/** Builds a collection's replacement without touching any store. */
+async function prepareCandidate(
+  loaded: Record<string, VolumeInfo>,
+  { id, members }: CollectionUpdate,
+  deps: PrepareDeps
+): Promise<Candidate> {
+  if (isCineChunkGroup(members)) {
+    const cine = await prepareCine(loaded, id, members[0], deps);
+    if (cine) return cine;
+  }
+  return prepareVolume(id, members, deps);
+}
+
+type CommitTarget = {
+  volumeInfo: Record<string, VolumeInfo>;
+  _updateDatabase: (
+    patient: PatientInfo,
+    study: StudyInfo,
+    volume: VolumeInfo
+  ) => void;
+  deleteVolume: (volumeKey: string) => void;
+};
+
+/**
+ * Applies a prepared batch. Synchronous by contract: no await separates the
+ * first store mutation from the last, and stale IDs go last so nothing visible
+ * is removed before its replacement exists.
+ */
+function commitPlan(
+  store: CommitTarget,
+  candidates: Candidate[],
+  dissolved: string[]
+) {
+  const imageCacheStore = useImageCacheStore();
+
+  candidates.forEach((candidate) => {
+    if (candidate.kind === 'none') return;
+
+    if (candidate.kind === 'grow') {
+      // The image already holds the members preparation gave it, so this load
+      // covers them.
+      candidate.image.startLoad();
+    } else {
+      imageCacheStore.addProgressiveImage(candidate.image, {
+        id: candidate.id,
+      });
+    }
+
+    const { patient, study, volume } = candidate.record;
+    store._updateDatabase(patient, study, volume);
+    candidate.image.setName(getDisplayName(volume));
+  });
+
+  dissolved.forEach((id) => {
+    imageCacheStore.removeImage(id);
+    store.deleteVolume(id);
+  });
+}
 
 export const useDICOMStore = defineStore('dicom', {
   state: (): State => ({
@@ -213,162 +489,79 @@ export const useDICOMStore = defineStore('dicom', {
       const createChunkImage =
         deps.createChunkImage ?? (() => new DicomChunkImage());
       const parseCine = deps.parseCineDicom ?? parseCineDicom;
-      const imageCacheStore = useImageCacheStore();
+      const { registry } = sessionFor(this);
 
-      return inTransaction(this, async () => {
-        const { updates, removed, rollback } =
-          await sessionFor(this).registry.register(chunks);
+      const batches = [...groupChunksBySeries(chunks)];
+      const perSeries = batches.map(([seriesKey, batch]) =>
+        inSeriesTransaction(this, seriesKey, async () => {
+          const { updates, removed, rollback } = await registry.register(batch);
 
-        // A replan can dissolve a collection by moving its members elsewhere.
-        // Undo exactly what a previous import created for that ID.
-        removed.forEach((id) => {
-          imageCacheStore.removeImage(id);
-          this.deleteVolume(id);
-        });
+          const { track, release } = candidateTracker();
+          const prepared = await Promise.allSettled(
+            updates.map((update) =>
+              prepareCandidate(this.volumeInfo, update, {
+                createChunkImage,
+                parseCine,
+                track,
+              })
+            )
+          );
 
-        const applied = await Promise.allSettled(
-          updates.map(async ({ id, members }) => {
-            if (isCineChunkGroup(members)) {
-              const importedAsCine = await this._importCineChunk(
-                id,
-                members[0],
-                parseCine
-              );
-              if (importedAsCine) return;
-            }
+          const candidates = prepared.flatMap((result) =>
+            result.status === 'fulfilled' ? [result.value] : []
+          );
+          const failure = prepared.find(
+            (result): result is PromiseRejectedResult =>
+              result.status === 'rejected'
+          );
+          if (failure) {
+            // Every candidate has settled, so nothing is still writing to the
+            // images this puts back before the lane releases.
+            await undoGrowth(candidates);
+            release();
+            // A failure must not pin its chunks, or a corrected re-import
+            // keeps receiving the one that failed.
+            rollback([seriesKey]);
+            throw failure.reason;
+          }
 
-            const cachedImage = imageCacheStore.imageById[id];
-            if (cachedImage && !canHoldChunks(cachedImage)) {
-              throw new Error(
-                `Volume ${id} is already loaded as a non-chunk progressive image; cannot re-import as a chunk volume.`
-              );
-            }
-            const image = cachedImage ?? createChunkImage();
+          commitPlan(this, candidates, removed);
 
-            await image.setChunks(members);
-            // Registration starts the first load; a re-import starts its own.
-            if (cachedImage) image.startLoad();
-            else imageCacheStore.addProgressiveImage(image, { id });
+          return {
+            volumes: updates.map(
+              ({ id, provenance }) => [id, provenance] as const
+            ),
+            dissolved: removed,
+          };
+        })
+      );
 
-            // update database
-            const metaPairs = image.getDicomMetadata();
-            if (!metaPairs) throw new Error('Metdata not ready');
-            const metadata = Object.fromEntries(metaPairs);
-
-            const patientInfo: PatientInfo = {
-              PatientID: metadata[Tags.PatientID],
-              PatientName: metadata[Tags.PatientName],
-              PatientBirthDate: metadata[Tags.PatientBirthDate],
-              PatientSex: metadata[Tags.PatientSex],
-            };
-
-            const studyInfo: StudyInfo = {
-              StudyID: metadata[Tags.StudyID],
-              StudyInstanceUID: metadata[Tags.StudyInstanceUID],
-              StudyDate: metadata[Tags.StudyDate],
-              StudyTime: metadata[Tags.StudyTime],
-              AccessionNumber: metadata[Tags.AccessionNumber],
-              StudyDescription: metadata[Tags.StudyDescription],
-            };
-
-            const volumeInfo: VolumeInfo = {
-              NumberOfSlices: image.getChunks().length,
-              VolumeID: id,
-              Modality: metadata[Tags.Modality],
-              SeriesInstanceUID: metadata[Tags.SeriesInstanceUID],
-              SeriesNumber: metadata[Tags.SeriesNumber],
-              SeriesDescription: metadata[Tags.SeriesDescription],
-              WindowLevel: metadata[Tags.WindowLevel],
-              WindowWidth: metadata[Tags.WindowWidth],
-              kind: 'volume',
-            };
-
-            this._updateDatabase(patientInfo, studyInfo, volumeInfo);
-
-            // save the image name
-            image.setName(getDisplayName(volumeInfo));
-          })
-        );
-
-        const rejected = applied.flatMap((result, index) =>
-          result.status === 'rejected'
-            ? [{ update: updates[index], reason: result.reason }]
-            : []
-        );
-        if (rejected.length > 0) {
-          // An uncommitted failure must not pin its chunks, or a corrected
-          // re-import keeps receiving the one that failed.
-          rollback(rejected.map(({ update }) => update.seriesKey));
-          throw rejected[0].reason;
-        }
-
-        return {
-          volumes: Object.fromEntries(
-            updates.map(({ id, provenance }) => [id, provenance])
-          ),
-          dissolved: removed,
-        };
-      });
-    },
-
-    async _importCineChunk(
-      id: string,
-      chunk: Chunk,
-      parseCine: typeof parseCineDicom = parseCineDicom
-    ): Promise<boolean> {
-      const imageCacheStore = useImageCacheStore();
-
-      // If we already created this cine image (state-file reload), bail.
-      if (this.volumeInfo[id]?.kind === 'cine') {
-        return true;
-      }
-
-      const cachedImage = imageCacheStore.imageById[id];
-      if (cachedImage && !(cachedImage instanceof DicomCineImage)) {
-        throw new Error(
-          `Volume ${id} is already loaded as a non-cine progressive image; cannot re-import as a cine clip.`
-        );
-      }
-
-      await chunk.loadData();
-      const blob = chunk.dataBlob;
-      if (!blob) throw new Error('Cine DICOM chunk has no data');
-      const buffer = await blob.arrayBuffer();
-      let parsed: ReturnType<typeof parseCineDicom>;
-      try {
-        parsed = parseCine(buffer);
-      } catch (err) {
-        console.warn(
-          'Failed to parse cine DICOM; falling back to volume import',
-          err
-        );
-        return false;
-      }
-
-      if (!DicomCineImage.isSupported(parsed.header)) {
-        return false;
-      }
-
-      const image = new DicomCineImage(parsed);
-      imageCacheStore.addProgressiveImage(image, { id });
-
-      const { patient, study, series } = parsed.header;
-      const volumeInfo: VolumeInfo = {
-        NumberOfSlices: parsed.header.numberOfFrames,
-        VolumeID: id,
-        Modality: series.Modality,
-        SeriesInstanceUID: series.SeriesInstanceUID,
-        SeriesNumber: series.SeriesNumber,
-        SeriesDescription: series.SeriesDescription,
-        WindowLevel: '',
-        WindowWidth: '',
-        kind: 'cine',
+      const settled = await Promise.allSettled(perSeries);
+      const results = settled.flatMap((result) =>
+        result.status === 'fulfilled' ? [result.value] : []
+      );
+      const committed = {
+        volumes: Object.fromEntries(results.flatMap(({ volumes }) => volumes)),
+        dissolved: results.flatMap(({ dissolved }) => dissolved),
       };
 
-      this._updateDatabase(patient, study, volumeInfo);
+      const failure = settled.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === 'rejected'
+      );
+      // A lane that committed still has datasets to reconcile, so a sibling's
+      // failure reports what landed instead of discarding it, and names only
+      // the chunks whose own lane failed.
+      if (failure)
+        throw new PartialImportError(
+          ensureError(failure.reason),
+          committed,
+          settled.flatMap((result, index) =>
+            result.status === 'rejected' ? batches[index][1] : []
+          )
+        );
 
-      image.setName(getDisplayName(volumeInfo));
-      return true;
+      return committed;
     },
 
     _updateDatabase(
