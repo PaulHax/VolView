@@ -37,6 +37,7 @@ import vtkITKHelper from '@kitware/vtk.js/Common/DataModel/ITKHelper';
 import { unitToMm } from '@/src/core/streaming/dicom/ultrasoundRegion';
 import { isUsableSpacing } from '@/src/utils/imageSpace';
 import { surfaceWarning } from '@/src/store/messages';
+import type { ThumbnailSlice } from '@/src/core/streaming/dicomThumbnail';
 
 const { fastComputeRange } = vtkDataArray;
 
@@ -91,6 +92,7 @@ export interface DicomChunkImageInit {
     chunks: Chunk[],
     mapToBlob: (chunk: Chunk, index: number) => Blob
   ) => Promise<Record<string, Chunk[]>>;
+  encodeThumbnail: (slice: ThumbnailSlice) => string;
   readDicomImage: (file: File) => Promise<{
     image: Pick<Image, 'size' | 'data'> & {
       imageType: Pick<Image['imageType'], 'components'>;
@@ -205,6 +207,11 @@ export default class DicomChunkImage
       chunk.stopLoad();
     });
     this.events.emit('loading', false);
+  }
+
+  // eslint-disable-next-line class-methods-use-this, @typescript-eslint/no-unused-vars
+  setChunks(chunks: Chunk[]): Promise<void> {
+    throw new Error('setChunks is not implemented');
   }
 
   addChunks(chunks: Chunk[]) {
