@@ -36,6 +36,7 @@ describe('src/core/dicom boundaries', () => {
       'collectionRegistry.ts',
       'instanceFacts.ts',
       'planDicomCollections.ts',
+      'reconstructVolume.ts',
       'splitOverlappingAcquisitions.ts',
     ]);
   });
