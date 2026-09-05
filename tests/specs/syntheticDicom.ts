@@ -122,7 +122,9 @@ export type SyntheticSliceOptions = {
     number,
     number,
   ];
-  imagePositionPatient: readonly [number, number, number];
+  // Null writes a zero length ImagePositionPatient, which reads as a slice
+  // whose geometry is unknown.
+  imagePositionPatient: readonly [number, number, number] | null;
   rows?: number;
   cols?: number;
   bitsAllocated?: number;
@@ -204,7 +206,9 @@ export function buildSyntheticDicom(opts: SyntheticSliceOptions): Uint8Array {
     ds(
       0x0020,
       0x0032,
-      imagePositionPatient.map((n) => n.toString()).join('\\')
+      imagePositionPatient === null
+        ? ''
+        : imagePositionPatient.map((n) => n.toString()).join('\\')
     ),
     ds(
       0x0020,

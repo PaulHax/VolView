@@ -64,16 +64,6 @@ async function writeSeries() {
   await writeManifestToFile({ resources }, MANIFEST_NAME);
 }
 
-// The card label carries the slice count as "[N]".
-async function getVolumeCardSliceCounts() {
-  const cards = [...(await $$('.volume-card'))];
-  const labels = await Promise.all(cards.map((card) => card.getText()));
-  return labels
-    .map((label) => Number(label.match(/\[(\d+)\]/)?.[1]))
-    .filter(Number.isFinite)
-    .sort((a, b) => a - b);
-}
-
 describe('Multi-acquisition series: one series holding three overlapping scans', () => {
   before(async () => {
     await writeSeries();
@@ -87,15 +77,7 @@ describe('Multi-acquisition series: one series holding three overlapping scans',
       (a, b) => a - b
     );
 
-    await browser.waitUntil(
-      async () => (await getVolumeCardSliceCounts()).length === expected.length,
-      {
-        timeout: 30000,
-        timeoutMsg: `expected ${expected.length} labelled volume cards`,
-      }
-    );
-
     // One card per acquisition, each holding only that acquisition's slices.
-    expect(await getVolumeCardSliceCounts()).toEqual(expected);
+    await volViewPage.waitForVolumeCardSliceCounts(expected);
   });
 });
