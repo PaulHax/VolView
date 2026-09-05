@@ -15,6 +15,8 @@ type SliceOptions = {
   z?: number;
   rows?: string;
   orientation?: string;
+  // Extra tags, keyed 'gggg|eeee', appended after the fixed ones.
+  tags?: Record<string, string>;
 };
 
 /** One chunk's worth of metadata, as `readDicomTags` hands it back. */
@@ -24,6 +26,7 @@ export function chunkFor({
   z = 0,
   rows = '4',
   orientation = '1\\0\\0\\0\\1\\0',
+  tags = {},
 }: SliceOptions) {
   const metadata = [
     [Tags.SOPClassUID, '1.2.840.10008.5.1.4.1.1.4'],
@@ -51,6 +54,7 @@ export function chunkFor({
     [Tags.ImageOrientationPatient, orientation],
     [Tags.ImagePositionPatient, `0\\0\\${z}`],
     [Tags.InstanceNumber, String(z + 1)],
+    ...Object.entries(tags),
   ] as Array<[string, string]>;
   return { metadata } as unknown as Chunk;
 }

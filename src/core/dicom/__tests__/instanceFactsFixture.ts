@@ -34,6 +34,10 @@ export const makeFacts = (
   projectedPosition: 0,
   pixelSpacing: [1, 1],
   instanceNumber: 1,
+  acquisitionNumber: null,
+  temporalPositionIdentifier: null,
+  echoNumbers: null,
+  diffusionBValue: null,
   ...overrides,
 });
 

@@ -13,6 +13,7 @@ import {
 } from '@/src/core/dicom/collectionRegistry';
 import type { ProgressiveImage } from '@/src/core/progressiveImage';
 import { isUltrasoundMultiframeSopClass, Tags } from '@/src/core/dicomTags';
+import { useMessageStore } from '@/src/store/messages';
 import { ensureError, removeFromArray } from '../utils';
 
 export const ANONYMOUS_PATIENT = 'Anonymous';
@@ -53,6 +54,9 @@ export type VolumeInfo = {
   SeriesDescription: string;
   WindowLevel: string;
   WindowWidth: string;
+  // Names the scan a split volume was separated out as ('acquisition 2',
+  // 'phase 3, echo 1'). Absent on volumes that were not split.
+  splitLabel?: string;
   // For 'cine', NumberOfSlices is the frame count. Optional for back-compat
   // with saved state that predates the field.
   kind?: 'volume' | 'cine';
@@ -95,10 +99,10 @@ const cleanupName = (name: string) => {
 };
 
 export const getDisplayName = (info: VolumeInfo) => {
-  return (
+  const name =
     cleanupName(info.SeriesDescription || info.SeriesNumber) ||
-    info.SeriesInstanceUID
-  );
+    info.SeriesInstanceUID;
+  return info.splitLabel ? `${name} (${info.splitLabel})` : name;
 };
 
 export function isCineChunkGroup(chunks: Chunk[]): boolean {
@@ -227,6 +231,8 @@ type DatabaseRecord = {
   patient: PatientInfo;
   study: StudyInfo;
   volume: VolumeInfo;
+  // What the planner wants the user told about this collection.
+  warnings: string[];
 };
 
 /**
@@ -287,7 +293,11 @@ type PrepareDeps = {
   track: ReturnType<typeof candidateTracker>['track'];
 };
 
-const volumeRecord = (id: string, members: Chunk[]): DatabaseRecord => {
+const volumeRecord = ({
+  id,
+  members,
+  collection,
+}: CollectionUpdate): DatabaseRecord => {
   const metaPairs = members[0].metadata;
   if (!metaPairs) throw new Error('Metadata not ready');
   const metadata = Object.fromEntries(metaPairs);
@@ -315,8 +325,10 @@ const volumeRecord = (id: string, members: Chunk[]): DatabaseRecord => {
       SeriesDescription: metadata[Tags.SeriesDescription],
       WindowLevel: metadata[Tags.WindowLevel],
       WindowWidth: metadata[Tags.WindowWidth],
+      ...(collection.label === null ? {} : { splitLabel: collection.label }),
       kind: 'volume',
     },
+    warnings: collection.warnings,
   };
 };
 
@@ -337,6 +349,7 @@ const cineRecord = (
     WindowWidth: '',
     kind: 'cine',
   },
+  warnings: [],
 });
 
 const tryParseCine = (parse: typeof parseCineDicom, buffer: ArrayBuffer) => {
@@ -384,10 +397,10 @@ async function prepareCine(
 }
 
 async function prepareVolume(
-  id: string,
-  members: Chunk[],
+  update: CollectionUpdate,
   deps: PrepareDeps
 ): Promise<Candidate> {
+  const { id, members } = update;
   const cachedImage = useImageCacheStore().imageById[id];
   if (cachedImage && !canHoldChunks(cachedImage)) {
     throw new Error(
@@ -395,7 +408,7 @@ async function prepareVolume(
     );
   }
 
-  const record = volumeRecord(id, members);
+  const record = volumeRecord(update);
   // Growth is part of preparation, not of the commit: the members have to be
   // in the image before any record promises them, and a membership the image
   // cannot hold has to fail while the batch can still be abandoned.
@@ -413,14 +426,15 @@ async function prepareVolume(
 /** Builds a collection's replacement without touching any store. */
 async function prepareCandidate(
   loaded: Record<string, VolumeInfo>,
-  { id, members }: CollectionUpdate,
+  update: CollectionUpdate,
   deps: PrepareDeps
 ): Promise<Candidate> {
+  const { id, members } = update;
   if (isCineChunkGroup(members)) {
     const cine = await prepareCine(loaded, id, members[0], deps);
     if (cine) return cine;
   }
-  return prepareVolume(id, members, deps);
+  return prepareVolume(update, deps);
 }
 
 type CommitTarget = {
@@ -458,9 +472,15 @@ function commitPlan(
       });
     }
 
-    const { patient, study, volume } = candidate.record;
+    const { patient, study, volume, warnings } = candidate.record;
     store._updateDatabase(patient, study, volume);
     candidate.image.setName(getDisplayName(volume));
+    warnings.forEach((warning) =>
+      useMessageStore().addWarning(
+        'A DICOM series did not load as one sound volume',
+        `${getDisplayName(volume)} ${warning}`
+      )
+    );
   });
 
   dissolved.forEach((id) => {

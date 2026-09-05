@@ -55,6 +55,10 @@ describe('readInstanceFacts', () => {
       projectedPosition: 30,
       pixelSpacing: [0.5, 0.75],
       instanceNumber: 5,
+      acquisitionNumber: null,
+      temporalPositionIdentifier: null,
+      echoNumbers: null,
+      diffusionBValue: null,
     });
   });
 
@@ -75,6 +79,10 @@ describe('readInstanceFacts', () => {
       projectedPosition: null,
       pixelSpacing: null,
       instanceNumber: null,
+      acquisitionNumber: null,
+      temporalPositionIdentifier: null,
+      echoNumbers: null,
+      diffusionBValue: null,
     });
   });
 
