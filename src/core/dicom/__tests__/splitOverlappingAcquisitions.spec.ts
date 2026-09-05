@@ -184,6 +184,51 @@ describe('splitOverlappingAcquisitions', () => {
     ]);
   });
 
+  it('does not fan out a counter stamped per slice over one repeated position', () => {
+    // Some scanners set AcquisitionNumber from InstanceNumber. One duplicate
+    // slice must not turn such a stack into one dataset per slice.
+    const members = [0, 2.5, 5, 5, 7.5, 10].map((z, i) =>
+      slice(z, { [Tags.AcquisitionNumber]: String(i + 1) })
+    );
+
+    const parts = splitOverlappingAcquisitions(members);
+
+    expect(parts).toHaveLength(1);
+    expect(parts[0].label).toBeNull();
+    expect(parts[0].repeatedPositions).toBe(true);
+  });
+
+  it('leaves a single overlapping slice of another pass merged', () => {
+    const members = [...stack('1', 0, 3), ...stack('2', 2.5, 1)].sort(
+      byPosition
+    );
+
+    const parts = splitOverlappingAcquisitions(members);
+
+    expect(parts).toHaveLength(1);
+    expect(parts[0].repeatedPositions).toBe(true);
+  });
+
+  it('leaves a repeated plane inside a split whole', () => {
+    // A full stack plus a bolus-tracking pass of one plane, each frame with
+    // its own phase: the pass is a time series, not twenty datasets.
+    const volume = stack('1', 0, 10);
+    const monitoring = Array.from({ length: 20 }, (_, i) =>
+      slice(5, {
+        [Tags.AcquisitionNumber]: '2',
+        [Tags.TemporalPositionIdentifier]: String(i + 1),
+      })
+    );
+
+    const parts = splitOverlappingAcquisitions(
+      [...volume, ...monitoring].sort(byPosition)
+    );
+
+    expect(labels(parts)).toEqual(['acquisition 1', 'acquisition 2']);
+    expect(partLabelled(parts, 'acquisition 2').members).toHaveLength(20);
+    expect(partLabelled(parts, 'acquisition 2').repeatedPositions).toBe(true);
+  });
+
   it('separates scans that share a boundary slice', () => {
     const merged = [...stack('1', 0, 4), ...stack('2', 7.5, 4)].sort(
       byPosition
@@ -351,9 +396,28 @@ describe('splitOverlappingAcquisitions temporal and echo axes', () => {
       [...b0, untagged, ...b800].sort(byPosition)
     );
 
-    expect(labels(parts)).toEqual(['b-value 0', 'b-value 800', 'no b-value']);
-    expect(partLabelled(parts, 'no b-value').members).toEqual([untagged]);
-    expect(partValue(partLabelled(parts, 'no b-value'), 'b-value')).toBeNull();
+    expect(labels(parts)).toEqual([
+      'b-value 0',
+      'b-value 800',
+      'b-value unknown',
+    ]);
+    expect(partLabelled(parts, 'b-value unknown').members).toEqual([untagged]);
+    expect(
+      partValue(partLabelled(parts, 'b-value unknown'), 'b-value')
+    ).toBeNull();
+  });
+
+  it('still separates contrasts of a single plane', () => {
+    // A one-slice in/out-phase pair differs in echo, not in time, so each
+    // echo is its own dataset even at one position.
+    const members = ['1', '2'].map((echo) =>
+      slice(0, { [Tags.AcquisitionNumber]: '1', [Tags.EchoNumbers]: echo })
+    );
+
+    const parts = splitOverlappingAcquisitions(members);
+
+    expect(labels(parts)).toEqual(['echo 1', 'echo 2']);
+    expect(parts.every((part) => !part.repeatedPositions)).toBe(true);
   });
 
   it('treats equivalent integer spellings as one tag value', () => {
