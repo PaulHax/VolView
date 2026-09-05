@@ -253,6 +253,16 @@ describe('readDicomTags', () => {
     ).toEqual([]);
   });
 
+  it('reads a view that does not start at the head of its buffer', async () => {
+    const whole = buildSlice();
+    const padded = new Uint8Array(whole.length + 3);
+    padded.set(whole, 3);
+
+    expect(await readDicomTags(padded.subarray(3))).toEqual(
+      await readDicomTags(whole)
+    );
+  });
+
   it('rejects a buffer that is not a DICOM file', async () => {
     const notDicom = new Uint8Array(256).fill(0x41);
 

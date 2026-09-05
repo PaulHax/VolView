@@ -34,6 +34,7 @@ declare module 'dcmjs' {
     readUint32(): number;
     setDecoder(decoder: DicomStringDecoder): void;
     more(length: number): DicomReadStream;
+    slice(start: number, end: number): ArrayBuffer;
   }
 
   export interface DicomDictionaryEntry {
@@ -46,6 +47,7 @@ declare module 'dcmjs' {
   export interface DicomDataElement {
     vr: string;
     Value: unknown[];
+    _rawValue: unknown;
   }
 
   const dcmjs: {
