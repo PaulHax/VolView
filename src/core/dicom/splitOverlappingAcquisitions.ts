@@ -42,31 +42,42 @@ export const GEOMETRY_RULE = 'geometry';
 export const UNREADABLE_GEOMETRY = 'unreadable';
 export const UNREADABLE_GEOMETRY_LABEL = 'position unknown';
 
-const positionOf = (member: InstanceFacts) =>
-  member.projectedPosition as number;
+/**
+ * Where a member sits along the slice axis. The planner passes the projection
+ * on its bucket's common normal; the member's own is the default.
+ */
+export type PositionOf = (member: InstanceFacts) => number | null;
 
-const countDistinctPositions = (members: InstanceFacts[]) =>
-  new Set(members.map(positionOf)).size;
+const ownPosition: PositionOf = (member) => member.projectedPosition;
 
-const hasRepeatedPositions = (members: InstanceFacts[]) =>
-  countDistinctPositions(members) !== members.length;
+const countDistinctPositions = (
+  members: InstanceFacts[],
+  positionOf: PositionOf
+) => new Set(members.map(positionOf)).size;
+
+const hasRepeatedPositions = (
+  members: InstanceFacts[],
+  positionOf: PositionOf
+) => countDistinctPositions(members, positionOf) !== members.length;
 
 /**
  * Whether any two groups cover overlapping stretches of the slice axis.
  * Bounds are closed, so scans sharing a boundary slice count as overlapping:
  * that shared position is a duplicate either way.
  */
-const spanOf = (group: InstanceFacts[]) =>
+const spanOf = (group: InstanceFacts[], positionOf: PositionOf) =>
   group.reduce(
     (span, member) => ({
-      min: Math.min(span.min, positionOf(member)),
-      max: Math.max(span.max, positionOf(member)),
+      min: Math.min(span.min, positionOf(member) as number),
+      max: Math.max(span.max, positionOf(member) as number),
     }),
     { min: Infinity, max: -Infinity }
   );
 
-const anySpansOverlap = (groups: InstanceFacts[][]) => {
-  const spans = groups.map(spanOf).sort((a, b) => a.min - b.min);
+const anySpansOverlap = (groups: InstanceFacts[][], positionOf: PositionOf) => {
+  const spans = groups
+    .map((group) => spanOf(group, positionOf))
+    .sort((a, b) => a.min - b.min);
   let reach = -Infinity;
   return spans.some((span) => {
     if (span.min <= reach) return true;
@@ -103,12 +114,16 @@ const splittingGroups = (axis: SemanticAxis, tagged: InstanceFacts[][]) =>
  * that follow one another along the axis are one volume between them and stay
  * merged, however their acquisition is numbered.
  */
-const firstSplittingAxis = (members: InstanceFacts[], axes: SemanticAxis[]) =>
+const firstSplittingAxis = (
+  members: InstanceFacts[],
+  axes: SemanticAxis[],
+  positionOf: PositionOf
+) =>
   axes
     .map((axis) => ({ axis, ...groupByAxis(members, axis) }))
     .find(({ axis, tagged }) => {
       const groups = splittingGroups(axis, [...tagged.values()]);
-      return groups.length >= 2 && anySpansOverlap(groups);
+      return groups.length >= 2 && anySpansOverlap(groups, positionOf);
     });
 
 const unsplit = (
@@ -145,16 +160,19 @@ const labelFor = (axis: SemanticAxis, value: string | null) =>
 
 function splitByAxes(
   members: InstanceFacts[],
-  axes: SemanticAxis[]
+  axes: SemanticAxis[],
+  positionOf: PositionOf
 ): SemanticPart[] {
   // One plane scanned repeatedly is a time series, not a stack of volumes;
   // only a contrast axis may still tell its frames apart.
-  const singlePlane = countDistinctPositions(members) === 1;
+  const singlePlane = countDistinctPositions(members, positionOf) === 1;
   const found = firstSplittingAxis(
     members,
-    singlePlane ? axes.filter((axis) => !axis.counter) : axes
+    singlePlane ? axes.filter((axis) => !axis.counter) : axes,
+    positionOf
   );
-  if (!found) return unsplit(members, axes, hasRepeatedPositions(members));
+  if (!found)
+    return unsplit(members, axes, hasRepeatedPositions(members, positionOf));
 
   const { axis, tagged, untagged } = found;
   const index = axes.indexOf(axis);
@@ -166,7 +184,7 @@ function splitByAxes(
   ];
 
   return splits.flatMap(({ value, members: group }) =>
-    splitByAxes(group, rest).map((child) => ({
+    splitByAxes(group, rest, positionOf).map((child) => ({
       ...child,
       parts: [
         ...skipped.map((s): [string, null] => [s.rule, null]),
@@ -201,18 +219,17 @@ function splitByAxes(
  * the result depends only on the members given.
  */
 export function splitOverlappingAcquisitions(
-  members: InstanceFacts[]
+  members: InstanceFacts[],
+  positionOf: PositionOf = ownPosition
 ): SemanticPart[] {
   const axes = [...SEMANTIC_AXES];
-  const judgeable = members.filter((member) =>
-    Number.isFinite(member.projectedPosition)
-  );
-  const unreadable = members.filter(
-    (member) => !Number.isFinite(member.projectedPosition)
-  );
+  const readable = (member: InstanceFacts) =>
+    Number.isFinite(positionOf(member));
+  const judgeable = members.filter(readable);
+  const unreadable = members.filter((member) => !readable(member));
 
   return [
-    ...(judgeable.length > 0 ? splitByAxes(judgeable, axes) : []),
+    ...(judgeable.length > 0 ? splitByAxes(judgeable, axes, positionOf) : []),
     ...(unreadable.length > 0 ? [unreadableGeometry(unreadable, axes)] : []),
   ];
 }

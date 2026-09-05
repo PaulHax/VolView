@@ -583,6 +583,26 @@ describe('planDicomCollections semantic partition', () => {
     expect(collections.every((c) => c.warnings.length === 0)).toBe(true);
   });
 
+  // Two members whose cosines agree within the tolerance are one plane. Each
+  // member's own normal would place them at two positions a fraction of a
+  // micron apart, and the repeated slice would go unreported.
+  it('projects a bucket on one normal rather than on each member of it', () => {
+    const straight = makeFacts('uid-a', {
+      position: [0, 0, 10],
+      projectedPosition: 10,
+    });
+    const tilted = makeFacts('uid-b', {
+      orientation: tiltedOrientation(WITHIN),
+      position: [0, 0, 10],
+      projectedPosition: 10 * Math.cos(WITHIN),
+    });
+
+    const { collections } = plan([straight, tilted]);
+
+    expect(collections).toHaveLength(1);
+    expect(collections[0].warnings).toEqual([REPEATED_POSITIONS_WARNING]);
+  });
+
   it('partitions each orientation bucket on its own', () => {
     const stack = [...pass('1', [0, 2]), ...pass('2', [1, 3])];
     const scout = makeFacts('scout', {
