@@ -4,6 +4,7 @@ import {
   ORIENTATION_RULE,
   ORIENTATION_TOLERANCE,
   REPEATED_POSITIONS_WARNING,
+  UNREADABLE_POSITION_WARNING,
   planDicomCollections,
   validateCollections,
 } from '@/src/core/dicom/planDicomCollections';
@@ -430,22 +431,30 @@ describe('planDicomCollections', () => {
     expect(plan([b, a])).toEqual(forward);
   });
 
-  it('falls back to instance number when a position is unreadable', () => {
+  it('keeps an unreadable position out of the collection it cannot be placed in', () => {
     const blind = makeFacts('uid-a', {
       projectedPosition: null,
       instanceNumber: 3,
+    });
+    const alsoBlind = makeFacts('uid-c', {
+      projectedPosition: null,
+      instanceNumber: 1,
     });
     const seen = makeFacts('uid-b', {
       projectedPosition: 2,
       instanceNumber: 1,
     });
 
-    const { collections } = plan([blind, seen]);
+    const { collections } = plan([blind, seen, alsoBlind]);
 
-    expect(collections).toHaveLength(1);
-    expect(uidsOf(collections[0])).toEqual(['uid-b', 'uid-a']);
-    expect(collections[0].order).toBe('instance-number');
-    expect(mentions(collections[0].diagnostics, 'uid-a')).toBe(true);
+    expect(collections).toHaveLength(2);
+    expect(uidsOf(collectionWith(collections, 'uid-b'))).toEqual(['uid-b']);
+
+    const unknown = collectionWith(collections, 'uid-a');
+    expect(uidsOf(unknown)).toEqual(['uid-c', 'uid-a']);
+    expect(unknown.order).toBe('instance-number');
+    expect(mentions(unknown.diagnostics, 'uid-a')).toBe(true);
+    expect(unknown.warnings).toEqual([UNREADABLE_POSITION_WARNING]);
   });
 
   it('breaks a shared instance number on SOP Instance UID', () => {
@@ -601,6 +610,41 @@ describe('planDicomCollections semantic partition', () => {
 
     expect(collections).toHaveLength(1);
     expect(collections[0].warnings).toEqual([REPEATED_POSITIONS_WARNING]);
+  });
+
+  // A later import can bring a slice whose geometry cannot be read. Merging it
+  // back in would undo a separation the positions of the other members
+  // already earned.
+  it('keeps two separated acquisitions apart when a positionless member arrives', () => {
+    const first = pass('1', [0, 2, 4]);
+    const second = pass('2', [1, 3, 5]);
+    const before = plan([...first, ...second]);
+
+    const blind = makeFacts('blind', {
+      projectedPosition: null,
+      position: null,
+      instanceNumber: 7,
+    });
+    const after = plan([...first, ...second, blind]);
+
+    expect(before.collections).toHaveLength(2);
+    expect(after.collections).toHaveLength(3);
+
+    // The two evidence-backed collections survive unchanged, keys included.
+    before.collections.forEach((collection) => {
+      const kept = collectionWith(
+        after.collections,
+        collection.members[0].sopInstanceUid!
+      );
+      expect(kept.key).toEqual(collection.key);
+      expect(uidsOf(kept)).toEqual(uidsOf(collection));
+      expect(kept.warnings).toEqual([]);
+    });
+
+    const unknown = collectionWith(after.collections, 'blind');
+    expect(uidsOf(unknown)).toEqual(['blind']);
+    expect(unknown.warnings).toEqual([UNREADABLE_POSITION_WARNING]);
+    expect(unknown.key).not.toEqual(before.collections[0].key);
   });
 
   it('gives the two passes distinct, collision-free keys', () => {

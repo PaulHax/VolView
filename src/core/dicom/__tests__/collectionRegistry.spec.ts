@@ -5,6 +5,7 @@ import {
   createDicomCollectionRegistry,
   type CollectionUpdate,
 } from '@/src/core/dicom/collectionRegistry';
+import { UNREADABLE_POSITION_WARNING } from '@/src/core/dicom/planDicomCollections';
 import {
   mergingChunks,
   tilt,
@@ -274,6 +275,49 @@ describe('DICOM collection registry', () => {
     const relabelled = updates.find((update) => update.id === id)!;
     expect(sops(relabelled.members)).toEqual(['one-0', 'one-2']);
     expect(relabelled.collection.label).toBe('acquisition 1');
+  });
+
+  // The positions of the two passes already earned their separation; a later
+  // slice nothing spatial can be said about must not dissolve it.
+  it('keeps two separated acquisitions when a positionless chunk arrives later', async () => {
+    const registry = createDicomCollectionRegistry();
+    const first = [0, 2, 4].map((z) =>
+      chunkFor({ sop: `one-${z}`, z, tags: { [Tags.AcquisitionNumber]: '1' } })
+    );
+    const second = [1, 3, 5].map((z) =>
+      chunkFor({ sop: `two-${z}`, z, tags: { [Tags.AcquisitionNumber]: '2' } })
+    );
+
+    const separated = byId(
+      (await registry.register([...first, ...second])).updates
+    );
+    expect(separated).toHaveLength(2);
+
+    const blind = chunkFor({ sop: 'blind', z: null, instanceNumber: 9 });
+    const { updates, removed } = await registry.register([blind]);
+
+    // Neither committed collection dissolved, and neither was re-planned.
+    expect(removed).toEqual([]);
+    expect(updates).toHaveLength(1);
+    expect(updates[0].id).not.toBe(separated[0].id);
+    expect(updates[0].id).not.toBe(separated[1].id);
+    expect(sops(updates[0].members)).toEqual(['blind']);
+    expect(updates[0].collection.warnings).toEqual([
+      UNREADABLE_POSITION_WARNING,
+    ]);
+
+    // The two volumes still hold exactly the slices of their own pass.
+    const again = byId(
+      (await registry.register([...first, ...second])).updates
+    );
+    expect(again.map((update) => update.id)).toEqual(
+      separated.map((update) => update.id)
+    );
+    expect(again.map((update) => sops(update.members))).toEqual([
+      sops(separated[0].members),
+      sops(separated[1].members),
+    ]);
+    expect(again.flatMap((update) => update.collection.warnings)).toEqual([]);
   });
 
   it('reports a collection a later batch re-registers unchanged', async () => {
