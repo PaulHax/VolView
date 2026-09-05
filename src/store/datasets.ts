@@ -60,6 +60,12 @@ function sourceIdentity(dataSource: DataSource): string | undefined {
 const preferRemote = (incoming: DataSource, kept: DataSource) =>
   isRemoteDataSource(incoming) && !isRemoteDataSource(kept);
 
+/**
+ * The incoming collection names every member the dataset now covers, so it
+ * decides membership: a member the dataset no longer holds (moved to a sibling
+ * volume by a replan) is dropped. The existing collection only contributes a
+ * remote copy of a member the incoming batch supplies locally.
+ */
 function mergeCollectionSources(
   existing: DataSource,
   incoming: DataSource
@@ -68,11 +74,18 @@ function mergeCollectionSources(
     return preferRemote(incoming, existing) ? incoming : existing;
   }
 
+  const priorByIdentity = new Map<string, DataSource>();
+  existing.sources.forEach((source) => {
+    const identity = sourceIdentity(source);
+    if (identity !== undefined && !priorByIdentity.has(identity))
+      priorByIdentity.set(identity, source);
+  });
+
   const merged: DataSource[] = [];
   const indexByIdentity = new Map<string, number>();
   const seenByReference = new Set<DataSource>();
 
-  [...existing.sources, ...incoming.sources].forEach((source) => {
+  incoming.sources.forEach((source) => {
     const identity = sourceIdentity(source);
     if (identity === undefined) {
       if (!seenByReference.has(source)) {
@@ -83,15 +96,15 @@ function mergeCollectionSources(
     }
 
     const existingIndex = indexByIdentity.get(identity);
-    if (existingIndex === undefined) {
-      indexByIdentity.set(identity, merged.length);
-      merged.push(source);
+    if (existingIndex !== undefined) {
+      if (preferRemote(source, merged[existingIndex]))
+        merged[existingIndex] = source;
       return;
     }
 
-    if (preferRemote(source, merged[existingIndex])) {
-      merged[existingIndex] = source;
-    }
+    const prior = priorByIdentity.get(identity);
+    indexByIdentity.set(identity, merged.length);
+    merged.push(prior && preferRemote(prior, source) ? prior : source);
   });
 
   return { type: 'collection', sources: merged };
@@ -286,10 +299,10 @@ export const useDatasetStore = defineStore('dataset', () => {
 
   function addDataSources(sources: Array<LoadedData>) {
     // Re-importing the same data yields the same dataID (e.g. the same DICOM
-    // series dragged in twice). Keep one dataset entry while merging distinct
-    // collection members so incremental imports retain every slice. Duplicate
-    // DICOM instances are keyed by SOP Instance UID, preferring remote
-    // provenance when both local and remote forms are available.
+    // series dragged in twice). Keep one dataset entry and let the incoming
+    // collection, which names every member the volume now holds, decide its
+    // provenance. Duplicate DICOM instances are keyed by SOP Instance UID,
+    // preferring remote provenance when both local and remote forms exist.
     const byId = new Map(loadedData.value.map((d) => [d.dataID, d]));
     sources.forEach((d) => {
       const existing = byId.get(d.dataID);
@@ -305,69 +318,10 @@ export const useDatasetStore = defineStore('dataset', () => {
     loadedData.value = [...byId.values()];
   }
 
-  function replaceDicomDataSources(
-    staleIds: string[],
-    chunksByReplacement: Record<string, Chunk[]>
-  ) {
-    if (staleIds.length === 0) return;
-
-    // Preserve the serializable sources before remove() cascades through the
-    // old dataset IDs, then partition them by the replacement chunks.
-    const staleIdSet = new Set(staleIds);
-    const priorSources = loadedData.value
-      .filter(({ dataID }) => staleIdSet.has(dataID))
-      .flatMap(({ dataSource }) =>
-        dataSource.type === 'collection' ? dataSource.sources : []
-      );
-
-    const sourceByChunk = new Map<Chunk, DataSource>();
-    const sourceByIdentity = new Map<string, DataSource>();
-    priorSources.forEach((source) => {
-      if (source.type !== 'chunk') return;
-      sourceByChunk.set(source.chunk, source);
-
-      const identity = dicomChunkIdentity(source.chunk);
-      if (!identity) return;
-      const existing = sourceByIdentity.get(identity);
-      if (!existing || preferRemote(source, existing)) {
-        sourceByIdentity.set(identity, source);
-      }
-    });
-
-    const replacements = Object.entries(chunksByReplacement).flatMap(
-      ([dataID, chunks]) => {
-        const sources = [
-          ...new Set(
-            chunks
-              .map((chunk) => {
-                const identity = dicomChunkIdentity(chunk);
-                return (
-                  (identity && sourceByIdentity.get(identity)) ??
-                  sourceByChunk.get(chunk)
-                );
-              })
-              .filter((source): source is DataSource => source != null)
-          ),
-        ];
-        if (sources.length === 0) return [];
-        return [
-          {
-            dataID,
-            dataSource: { type: 'collection' as const, sources },
-          },
-        ];
-      }
-    );
-
-    staleIds.forEach(remove);
-    addDataSources(replacements);
-  }
-
   return {
     idsAsSelections,
     getDataSource,
     addDataSources,
-    replaceDicomDataSources,
     serialize,
     remove,
     removeAll,

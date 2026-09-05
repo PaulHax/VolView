@@ -77,6 +77,13 @@ export function readInstanceFacts(metadata: DicomTagValues): InstanceFacts {
     projectedPosition: projectOnNormal(orientation, position),
     pixelSpacing: vectorOf(metadata, Tags.PixelSpacing, 2),
     instanceNumber: numberOf(metadata, Tags.InstanceNumber),
+    acquisitionNumber: numericTextOf(metadata, Tags.AcquisitionNumber),
+    temporalPositionIdentifier: numericTextOf(
+      metadata,
+      Tags.TemporalPositionIdentifier
+    ),
+    echoNumbers: numericTextOf(metadata, Tags.EchoNumbers),
+    diffusionBValue: numericTextOf(metadata, Tags.DiffusionBValue),
   };
 }
 

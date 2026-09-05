@@ -1,3 +1,5 @@
+import { splitOverlappingAcquisitions } from '@/src/core/dicom/splitOverlappingAcquisitions';
+
 /**
  * Facts read once per instance from a chunk's metadata. Plain data: the planner
  * never sees a Chunk, a store, or an itk-wasm task.
@@ -25,6 +27,13 @@ export type InstanceFacts = {
 
   // Ordering fallback.
   instanceNumber: number | null;
+
+  // Semantic partition facts: what distinguishes one scan of a range from
+  // another within a series. Normalized for equality.
+  acquisitionNumber: string | null;
+  temporalPositionIdentifier: string | null;
+  echoNumbers: string | null;
+  diffusionBValue: string | null;
 };
 
 export type CollectionKey = {
@@ -38,7 +47,14 @@ export type DicomCollection = {
   key: CollectionKey;
   members: InstanceFacts[];
   order: MemberOrder;
+  // Names the scan the collection was separated out as ('acquisition 2',
+  // 'phase 3, echo 1'); null when nothing separated it from its series.
+  label: string | null;
+  // Per-member notes about how the plan was reached.
   diagnostics: string[];
+  // Conditions the user should hear about: the collection loads, but not as
+  // the sound volume its series promised.
+  warnings: string[];
 };
 
 export type DicomCollectionPlan = {
@@ -68,6 +84,10 @@ export const HARD_FACT_RULES = [
 ] as const;
 
 export const ORIENTATION_RULE = 'orientation';
+
+export const REPEATED_POSITIONS_WARNING =
+  'holds repeated slice positions that no tag separates. Its slice spacing ' +
+  'and measurements along the slice axis may be wrong.';
 
 const ANONYMOUS = 'an instance with no SOP Instance UID';
 
@@ -267,9 +287,27 @@ const compareInstanceNumber = (left: InstanceFacts, right: InstanceFacts) =>
   (left.instanceNumber as number) - (right.instanceNumber as number) ||
   compareWalkOrder(left, right);
 
+const positionsRepeat = (members: InstanceFacts[]) =>
+  new Set(members.map((m) => m.projectedPosition)).size !== members.length;
+
 /** Never inherits input order silently: the order actually used is recorded. */
 const orderMembers = (members: InstanceFacts[]) => {
-  if (members.every((m) => readableNumber(m.projectedPosition)))
+  const positioned = members.every((m) => readableNumber(m.projectedPosition));
+  const numbered = members.every((m) => readableNumber(m.instanceNumber));
+
+  // A stack that visits one position twice has no spatial order; GDCM falls
+  // back to the instance number here, keeping the scanner's own sequence
+  // instead of interleaving the passes.
+  if (positioned && numbered && positionsRepeat(members))
+    return {
+      members: [...members].sort(compareInstanceNumber),
+      order: 'instance-number' as MemberOrder,
+      diagnostics: [
+        'slice positions repeat, so members are ordered by instance number',
+      ],
+    };
+
+  if (positioned)
     return {
       members: [...members].sort(comparePosition),
       order: 'spatial' as MemberOrder,
@@ -281,7 +319,7 @@ const orderMembers = (members: InstanceFacts[]) => {
       .filter((m) => !readableNumber(m.projectedPosition))
       .map((m) => `${label(m)} has no readable position`);
 
-  if (members.every((m) => readableNumber(m.instanceNumber))) {
+  if (numbered) {
     const ordered = [...members].sort(compareInstanceNumber);
     return {
       members: ordered,
@@ -356,16 +394,28 @@ export function planDicomCollections(input: PlanInput) {
     .flatMap((group) =>
       bucketByOrientation(group).map((bucket) => ({ group, bucket }))
     )
-    .map(({ group, bucket }) => {
-      const ordered = orderMembers(bucket.members);
+    .flatMap(({ group, bucket }) =>
+      splitOverlappingAcquisitions(bucket.members).map((part) => ({
+        group,
+        bucket,
+        part,
+      }))
+    )
+    .map(({ group, bucket, part }) => {
+      const ordered = orderMembers(part.members);
       const key: CollectionKey = {
         seriesKey: input.seriesKey,
-        parts: [...hardFactParts(group[0]), [ORIENTATION_RULE, bucket.value]],
+        parts: [
+          ...hardFactParts(group[0]),
+          [ORIENTATION_RULE, bucket.value],
+          ...part.parts,
+        ],
       };
       return {
         key,
         members: ordered.members,
         order: ordered.order,
+        label: part.label,
         diagnostics: [
           ...ordered.members.flatMap((member) => {
             const dropped = dedupeDiagnostics.get(member);
@@ -378,6 +428,7 @@ export function planDicomCollections(input: PlanInput) {
             : []),
           ...ordered.diagnostics,
         ],
+        warnings: part.repeatedPositions ? [REPEATED_POSITIONS_WARNING] : [],
       };
     })
     .sort((left, right) =>

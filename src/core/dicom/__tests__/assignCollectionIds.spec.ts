@@ -40,7 +40,9 @@ const collectionOf = (
   key,
   members: uids.map((uid) => makeFacts(uid)),
   order: 'spatial',
+  label: null,
   diagnostics: [],
+  warnings: [],
 });
 
 const planOf = (...collections: DicomCollection[]) => ({ collections });

@@ -20,6 +20,8 @@ type SliceOptions = {
   rows?: string;
   orientation?: string;
   instanceNumber?: number | null;
+  // Extra tags, keyed 'gggg|eeee'.
+  tags?: Record<string, string>;
 };
 
 let sopCounter = 0;
@@ -32,6 +34,7 @@ function chunkFor(options: SliceOptions = {}) {
     rows = '4',
     orientation = '1\\0\\0\\0\\1\\0',
     instanceNumber = 1,
+    tags = {},
   } = options;
 
   const entries: Array<[string, string]> = [
@@ -49,6 +52,7 @@ function chunkFor(options: SliceOptions = {}) {
   if (z !== null) entries.push([Tags.ImagePositionPatient, `0\\0\\${z}`]);
   if (instanceNumber !== null)
     entries.push(['0020|0013', String(instanceNumber)]);
+  entries.push(...Object.entries(tags));
 
   return { metadata: entries } as unknown as Chunk;
 }
@@ -249,6 +253,27 @@ describe('DICOM collection registry', () => {
     expect(updates).toHaveLength(1);
     expect(sops(updates[0].members)).toEqual(['scout']);
     expect(updates[0].id).not.toBe(sliceUpdate.id);
+  });
+
+  it('reports a collection whose key changed without gaining a chunk', async () => {
+    const registry = createDicomCollectionRegistry();
+    const first = [0, 2].map((z) =>
+      chunkFor({ sop: `one-${z}`, z, tags: { [Tags.AcquisitionNumber]: '1' } })
+    );
+    const second = [1, 3].map((z) =>
+      chunkFor({ sop: `two-${z}`, z, tags: { [Tags.AcquisitionNumber]: '2' } })
+    );
+
+    const [{ id }] = (await registry.register(first)).updates;
+    const { updates, removed } = await registry.register(second);
+
+    // The first pass keeps its members and its id, but is now labelled as one
+    // acquisition of two, so the store must hear about it.
+    expect(removed).toEqual([]);
+    expect(updates.map((update) => update.id)).toContain(id);
+    const relabelled = updates.find((update) => update.id === id)!;
+    expect(sops(relabelled.members)).toEqual(['one-0', 'one-2']);
+    expect(relabelled.collection.label).toBe('acquisition 1');
   });
 
   it('reports a collection a later batch re-registers unchanged', async () => {

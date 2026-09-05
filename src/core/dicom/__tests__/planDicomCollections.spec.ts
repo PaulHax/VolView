@@ -3,9 +3,11 @@ import {
   HARD_FACT_RULES,
   ORIENTATION_RULE,
   ORIENTATION_TOLERANCE,
+  REPEATED_POSITIONS_WARNING,
   planDicomCollections,
   validateCollections,
 } from '@/src/core/dicom/planDicomCollections';
+import { SEMANTIC_AXES } from '@/src/core/dicom/splitOverlappingAcquisitions';
 import type {
   DicomCollection,
   InstanceFacts,
@@ -74,6 +76,7 @@ describe('planDicomCollections', () => {
     expect(collections[0].key.parts.map(([rule]) => rule)).toEqual([
       ...HARD_FACT_RULES,
       ORIENTATION_RULE,
+      ...SEMANTIC_AXES.map((axis) => axis.rule),
     ]);
     expect(collections[0].key.parts).toEqual([
       ['seriesNumber', '1'],
@@ -85,6 +88,10 @@ describe('planDicomCollections', () => {
       ['samplesPerPixel', '1'],
       ['numberOfFrames', null],
       ['orientation', orientationKeyValue(IDENTITY_ORIENTATION)],
+      ['acquisition', null],
+      ['phase', null],
+      ['echo', null],
+      ['b-value', null],
     ]);
   });
 
@@ -337,13 +344,49 @@ describe('planDicomCollections', () => {
     expect(collections[0].diagnostics).toEqual([]);
   });
 
-  it('breaks a shared projected position on SOP Instance UID', () => {
+  // GDCM refuses to order a stack by position once a position repeats and
+  // falls back to the instance number, so passes no tag separates keep the
+  // scanner's own sequence instead of interleaving.
+  it('orders a repeated projected position by instance number', () => {
+    const later = makeFacts('uid-a', {
+      projectedPosition: 3,
+      instanceNumber: 2,
+    });
+    const earlier = makeFacts('uid-b', {
+      projectedPosition: 3,
+      instanceNumber: 1,
+    });
+    const far = makeFacts('uid-c', { projectedPosition: 0, instanceNumber: 3 });
+
+    const { collections } = plan([later, earlier, far]);
+
+    expect(uidsOf(collections[0])).toEqual(['uid-b', 'uid-a', 'uid-c']);
+    expect(collections[0].order).toBe('instance-number');
+    expect(mentions(collections[0].diagnostics, 'positions repeat')).toBe(true);
+    expect(collections[0].warnings).toEqual([REPEATED_POSITIONS_WARNING]);
+  });
+
+  it('breaks a repeated position on SOP Instance UID when instance numbers tie', () => {
     const second = makeFacts('uid-b', { projectedPosition: 3 });
     const first = makeFacts('uid-a', { projectedPosition: 3 });
 
     const { collections } = plan([second, first]);
 
     expect(uidsOf(collections[0])).toEqual(['uid-a', 'uid-b']);
+    expect(collections[0].order).toBe('instance-number');
+  });
+
+  it('sorts a repeated position spatially when an instance number is unreadable', () => {
+    const numbered = makeFacts('uid-a', { projectedPosition: 3 });
+    const unnumbered = makeFacts('uid-b', {
+      projectedPosition: 3,
+      instanceNumber: null,
+    });
+    const low = makeFacts('uid-c', { projectedPosition: 0 });
+
+    const { collections } = plan([numbered, unnumbered, low]);
+
+    expect(uidsOf(collections[0])).toEqual(['uid-c', 'uid-a', 'uid-b']);
     expect(collections[0].order).toBe('spatial');
   });
 
@@ -495,6 +538,74 @@ describe('planDicomCollections', () => {
   });
 });
 
+describe('planDicomCollections semantic partition', () => {
+  const pass = (acquisition: string, zs: number[]) =>
+    zs.map((z, i) =>
+      makeFacts(`acq${acquisition}-${i}`, {
+        projectedPosition: z,
+        instanceNumber: i + 1,
+        acquisitionNumber: acquisition,
+      })
+    );
+
+  it('separates overlapping passes and labels each collection', () => {
+    const first = pass('1', [0, 2, 4]);
+    const second = pass('2', [1, 3, 5]);
+
+    const { collections } = plan([...first, ...second]);
+
+    expect(collections).toHaveLength(2);
+    const [one, two] = collections;
+    expect(one.label).toBe('acquisition 1');
+    expect(partValue(one, 'acquisition')).toBe('1');
+    expect(uidsOf(one)).toEqual(['acq1-0', 'acq1-1', 'acq1-2']);
+    expect(one.order).toBe('spatial');
+    expect(two.label).toBe('acquisition 2');
+    expect(partValue(two, 'acquisition')).toBe('2');
+    expect(collections.every((c) => c.warnings.length === 0)).toBe(true);
+  });
+
+  it('partitions each orientation bucket on its own', () => {
+    const stack = [...pass('1', [0, 2]), ...pass('2', [1, 3])];
+    const scout = makeFacts('scout', {
+      orientation: tiltedOrientation(BEYOND),
+      acquisitionNumber: '1',
+    });
+
+    const { collections } = plan([...stack, scout]);
+
+    expect(collections).toHaveLength(3);
+    expect(collectionWith(collections, 'scout').label).toBeNull();
+    expect(collectionWith(collections, 'acq1-0').label).toBe('acquisition 1');
+  });
+
+  it('leaves an unlabelled collection when nothing overlaps', () => {
+    const { collections } = plan(pass('1', [0, 2, 4]));
+
+    expect(collections[0].label).toBeNull();
+    expect(partValue(collections[0], 'acquisition')).toBeNull();
+    expect(collections[0].warnings).toEqual([]);
+  });
+
+  it('warns about a repeated position no axis separates', () => {
+    const { collections } = plan(pass('1', [0, 2, 2, 4]));
+
+    expect(collections).toHaveLength(1);
+    expect(collections[0].warnings).toEqual([REPEATED_POSITIONS_WARNING]);
+  });
+
+  it('gives the two passes distinct, collision-free keys', () => {
+    const { collections } = plan([...pass('1', [0, 2]), ...pass('2', [1, 3])]);
+
+    expect(() =>
+      validateCollections(
+        collections.flatMap((c) => c.members),
+        collections
+      )
+    ).not.toThrow();
+  });
+});
+
 describe('validateCollections', () => {
   const a = makeFacts('uid-a');
   const b = makeFacts('uid-b');
@@ -506,7 +617,9 @@ describe('validateCollections', () => {
     key: { seriesKey: SERIES_KEY, parts },
     members,
     order: 'input',
+    label: null,
     diagnostics: [],
+    warnings: [],
   });
 
   const partsOne: Array<[string, string | null]> = [['orientation', 'one']];

@@ -6,6 +6,7 @@ import {
 } from '@/src/core/dicom/planDicomCollections';
 import {
   assignIds,
+  encodeCollectionKey,
   type CommittedCollection,
 } from '@/src/core/dicom/assignCollectionIds';
 import { readInstanceFacts, seriesKeyOf } from '@/src/core/dicom/instanceFacts';
@@ -47,10 +48,17 @@ type RegisteredInstance = {
   facts: InstanceFacts;
 };
 
+type Committed = {
+  // The member keys the collection was last planned with, in order.
+  members: InstanceKey[];
+  // The encoded collection key, so a relabelled collection is reported even
+  // when its members did not move.
+  key: string;
+};
+
 type SeriesEntry = {
   instances: Map<InstanceKey, RegisteredInstance>;
-  // Committed collection ID to the member keys it was last planned with.
-  committed: Map<string, InstanceKey[]>;
+  committed: Map<string, Committed>;
   queue: Promise<unknown>;
 };
 
@@ -102,19 +110,20 @@ const firstByKey = (instances: RegisteredInstance[]) => {
 const claimable = (committed: SeriesEntry['committed']) =>
   [...committed]
     .map(
-      ([id, keys]): CommittedCollection => ({
+      ([id, { members }]): CommittedCollection => ({
         id,
-        sopInstanceUids: keys.filter(
+        sopInstanceUids: members.filter(
           (key): key is string => typeof key === 'string'
         ),
       })
     )
     .filter((collection) => collection.sopInstanceUids.length > 0);
 
-const sameMembers = (left: InstanceKey[] | undefined, right: InstanceKey[]) =>
-  left !== undefined &&
-  left.length === right.length &&
-  left.every((key, index) => key === right[index]);
+const unchanged = (before: Committed | undefined, after: Committed) =>
+  before !== undefined &&
+  before.key === after.key &&
+  before.members.length === after.members.length &&
+  before.members.every((key, index) => key === after.members[index]);
 
 function planSeries(
   entry: SeriesEntry,
@@ -142,25 +151,29 @@ function planSeries(
 
   const planned = assigned.collections.map(({ id, ...collection }) => {
     const instances = collection.members.map((facts) => instanceOf.get(facts)!);
-    const keys = instances.map((instance) => instance.key);
+    const committed: Committed = {
+      members: instances.map((instance) => instance.key),
+      key: encodeCollectionKey(collection.key),
+    };
     return {
       id,
       collection,
-      keys,
+      committed,
       members: instances.map((instance) => instance.chunk),
       provenance: instances.map(
         (instance) => batchChunks.get(instance.key) ?? instance.chunk
       ),
-      supplied: keys.some((key) => batchChunks.has(key)),
+      supplied: committed.members.some((key) => batchChunks.has(key)),
     };
   });
 
-  // A replan can move members between collections, so membership changes are
-  // reported even where the batch brought the collection nothing.
+  // A replan can move members between collections or split a collection out
+  // under a new key, so such changes are reported even where the batch brought
+  // the collection nothing.
   const updates = planned
     .filter(
-      ({ id, keys, supplied }) =>
-        supplied || !sameMembers(entry.committed.get(id), keys)
+      ({ id, committed, supplied }) =>
+        supplied || !unchanged(entry.committed.get(id), committed)
     )
     .map(
       ({ id, collection, members, provenance }): CollectionUpdate => ({
@@ -176,7 +189,9 @@ function planSeries(
     (id) => !planned.some((collection) => collection.id === id)
   );
 
-  entry.committed = new Map(planned.map(({ id, keys }) => [id, keys]));
+  entry.committed = new Map(
+    planned.map(({ id, committed }) => [id, committed])
+  );
 
   return { updates, removed };
 }
@@ -245,9 +260,9 @@ export function createDicomCollectionRegistry(): DicomCollectionRegistry {
   // the members it handed to another collection stay registered.
   const forget = (collectionId: string) => {
     series.forEach((entry, seriesKey) => {
-      const members = entry.committed.get(collectionId);
-      if (!members) return;
-      members.forEach((key) => entry.instances.delete(key));
+      const forgotten = entry.committed.get(collectionId);
+      if (!forgotten) return;
+      forgotten.members.forEach((key) => entry.instances.delete(key));
       entry.committed.delete(collectionId);
       if (entry.instances.size === 0) series.delete(seriesKey);
     });
