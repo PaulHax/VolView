@@ -145,9 +145,41 @@ export const rawElement = (
 export const attributeTagValue = (group: number, element: number) =>
   tagBytes(group, element);
 
+const ITEM_TAG = 0xe000;
+const UNDEFINED_LENGTH = 0xffffffff;
+
+// Items and delimiters carry no VR in either syntax, so only the elements
+// inside each item change shape. Item lengths must be defined.
+const itemsToImplicitVr = (value: Uint8Array): Uint8Array => {
+  const view = new DataView(value.buffer, value.byteOffset, value.length);
+  const out: Uint8Array[] = [];
+  let offset = 0;
+  while (offset < value.length) {
+    const group = view.getUint16(offset, true);
+    const element = view.getUint16(offset + 2, true);
+    const length = view.getUint32(offset + 4, true);
+    const contentStart = offset + 8;
+    if (group !== 0xfffe)
+      throw new Error(`Expected an item tag, got ${group.toString(16)}`);
+    if (element !== ITEM_TAG) {
+      out.push(value.subarray(offset, contentStart));
+      offset = contentStart;
+      continue;
+    }
+    if (length === UNDEFINED_LENGTH)
+      throw new Error('Undefined-length items are not supported');
+    const content = toImplicitVr(
+      value.subarray(contentStart, contentStart + length)
+    );
+    out.push(tagBytes(group, element), writeLong(content.length), content);
+    offset = contentStart + length;
+  }
+  return combine(...out);
+};
+
 // Re-encodes an Explicit VR LE dataset as Implicit VR LE: tag, 4-byte length,
 // value, with the VR carried only by the reader's dictionary.
-const toImplicitVr = (dataset: Uint8Array) => {
+const toImplicitVr = (dataset: Uint8Array): Uint8Array => {
   const view = new DataView(dataset.buffer, dataset.byteOffset, dataset.length);
   const out: Uint8Array[] = [];
   let offset = 0;
@@ -160,13 +192,10 @@ const toImplicitVr = (dataset: Uint8Array) => {
       ? view.getUint32(offset + 8, true)
       : view.getUint16(offset + 6, true);
     const valueStart = offset + (longForm ? 12 : 8);
-    out.push(
-      combine(
-        tagBytes(group, element),
-        writeLong(length),
-        dataset.subarray(valueStart, valueStart + length)
-      )
-    );
+    const explicitValue = dataset.subarray(valueStart, valueStart + length);
+    const value =
+      vr === 'SQ' ? itemsToImplicitVr(explicitValue) : explicitValue;
+    out.push(combine(tagBytes(group, element), writeLong(value.length), value));
     offset = valueStart + length;
   }
   return combine(...out);

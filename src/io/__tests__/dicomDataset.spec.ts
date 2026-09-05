@@ -131,40 +131,48 @@ describe('readDicomDataset', () => {
     });
   });
 
-  it('reads the elements of an ultrasound region item', () => {
-    const dataset = readDicomDataset(
-      buildSlice({
-        ultrasoundRegion: { physicalDeltaX: 0.1, physicalDeltaY: 0.2 },
-      })
-    );
-    const values = valuesOf(dataset, ULTRASOUND_REGIONS);
-    if (values?.kind !== 'sequence') throw new Error('not a sequence');
+  it.each([
+    ['explicit', false],
+    ['implicit', true],
+  ])(
+    'reads the elements of an %s VR ultrasound region item',
+    (_, implicitVr) => {
+      const dataset = readDicomDataset(
+        buildSlice({
+          implicitVr,
+          ultrasoundRegion: { physicalDeltaX: 0.1, physicalDeltaY: 0.2 },
+        })
+      );
+      const values = valuesOf(dataset, ULTRASOUND_REGIONS);
+      if (values?.kind !== 'sequence') throw new Error('not a sequence');
 
-    expect(values.items[0].elements.map(({ tag }) => tag)).toEqual([
-      '00186024',
-      '00186026',
-      '0018602C',
-      '0018602E',
-    ]);
-    expect(valuesOf(values.items[0], PHYSICAL_DELTA_X)).toEqual({
-      kind: 'number',
-      values: [0.1],
-    });
-  });
+      expect(values.items[0].elements.map(({ tag }) => tag)).toEqual([
+        '00186024',
+        '00186026',
+        '0018602C',
+        '0018602E',
+      ]);
+      expect(valuesOf(values.items[0], PHYSICAL_DELTA_X)).toEqual({
+        kind: 'number',
+        values: [0.1],
+      });
+    }
+  );
 
   it('keeps the bytes of a sequence whose items it cannot read', () => {
-    // The implicit VR fixture re-encodes the top level only, so the item's
-    // elements still carry an explicit VR the transfer syntax denies.
+    // An item that claims more bytes than the sequence holds.
+    const truncatedItem = new Uint8Array([
+      0xfe, 0xff, 0x00, 0xe0, 0x40, 0x00, 0x00, 0x00, 0x18, 0x00, 0x24, 0x60,
+    ]);
     const dataset = readDicomDataset(
       buildSlice({
-        implicitVr: true,
-        ultrasoundRegion: { physicalDeltaX: 0.1, physicalDeltaY: 0.2 },
+        extraElements: [rawElement(0x0018, 0x6011, 'SQ', truncatedItem)],
       })
     );
     const values = valuesOf(dataset, ULTRASOUND_REGIONS);
     if (values?.kind !== 'unread') throw new Error('unexpectedly read');
 
-    expect(values.bytes).toHaveLength(60);
+    expect(values.bytes).toEqual(truncatedItem);
     expect(values.reason.length).toBeGreaterThan(0);
   });
 
