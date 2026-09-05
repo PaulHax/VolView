@@ -99,6 +99,7 @@ export default class DicomChunkImage
   private chunkStatus: ChunkStatus[];
   private allocationGeneration: number;
   private chunkUpdateQueue: Promise<void>;
+  private disposed: boolean;
 
   public segBuildInfo:
     | (JsonCompatible & ReadOverlappingSegmentationMeta)
@@ -122,6 +123,7 @@ export default class DicomChunkImage
     this.events = mitt();
     this.allocationGeneration = 0;
     this.chunkUpdateQueue = Promise.resolve();
+    this.disposed = false;
     this.segBuildInfo = null;
 
     this.addEventListener('loading', (loading) => {
@@ -167,6 +169,7 @@ export default class DicomChunkImage
   }
 
   dispose() {
+    this.disposed = true;
     this.allocationGeneration += 1;
     super.dispose();
     this.unregisterChunkListeners();
@@ -180,7 +183,9 @@ export default class DicomChunkImage
     this.chunks.forEach((chunk) => {
       chunk.loadData();
     });
-    this.events.emit('loading', true);
+    // An image whose every slot is already settled has nothing to load, and
+    // nothing later would report it done.
+    this.events.emit('loading', !this.isSettled());
   }
 
   stopLoad() {
@@ -210,8 +215,11 @@ export default class DicomChunkImage
     )
       return;
 
-    // Nothing changes while the metadata the allocation needs is still coming.
+    // Nothing changes while the metadata the allocation needs is still coming,
+    // and a disposed image must not come back to life afterwards.
+    if (this.disposed) return;
     await Promise.all(chunks.map((chunk) => chunk.loadMeta()));
+    if (this.disposed) return;
 
     // Everything that can throw runs before the first mutation, so a
     // membership this image cannot hold leaves it exactly as it was.
