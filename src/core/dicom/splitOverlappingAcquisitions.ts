@@ -7,12 +7,17 @@ import type { InstanceFacts } from '@/src/core/dicom/planDicomCollections';
  * separates on both. Every entry traces to an IDC series in
  * __tests__/idcSeriesFixtures.ts. Stack ID is absent on purpose: bilateral
  * slab series put two stacks in one sound volume.
+ *
+ * A counter axis numbers passes over time. Scanners sometimes stamp it per
+ * slice, and a repeated plane under it is a time series, so it earns two
+ * guards a contrast axis (echo, b-value) does not: it never fans out a single
+ * plane, and it splits only on groups that hold more than one slice.
  */
 export const SEMANTIC_AXES = [
-  { rule: 'acquisition', fact: 'acquisitionNumber' },
-  { rule: 'phase', fact: 'temporalPositionIdentifier' },
-  { rule: 'echo', fact: 'echoNumbers' },
-  { rule: 'b-value', fact: 'diffusionBValue' },
+  { rule: 'acquisition', fact: 'acquisitionNumber', counter: true },
+  { rule: 'phase', fact: 'temporalPositionIdentifier', counter: true },
+  { rule: 'echo', fact: 'echoNumbers', counter: false },
+  { rule: 'b-value', fact: 'diffusionBValue', counter: false },
 ] as const;
 
 type SemanticAxis = (typeof SEMANTIC_AXES)[number];
@@ -42,13 +47,17 @@ const hasRepeatedPositions = (members: InstanceFacts[]) =>
  * Bounds are closed, so scans sharing a boundary slice count as overlapping:
  * that shared position is a duplicate either way.
  */
+const spanOf = (group: InstanceFacts[]) =>
+  group.reduce(
+    (span, member) => ({
+      min: Math.min(span.min, positionOf(member)),
+      max: Math.max(span.max, positionOf(member)),
+    }),
+    { min: Infinity, max: -Infinity }
+  );
+
 const anySpansOverlap = (groups: InstanceFacts[][]) => {
-  const spans = groups
-    .map((group) => ({
-      min: Math.min(...group.map(positionOf)),
-      max: Math.max(...group.map(positionOf)),
-    }))
-    .sort((a, b) => a.min - b.min);
+  const spans = groups.map(spanOf).sort((a, b) => a.min - b.min);
   let reach = -Infinity;
   return spans.some((span) => {
     if (span.min <= reach) return true;
@@ -74,6 +83,11 @@ const groupByAxis = (members: InstanceFacts[], axis: SemanticAxis) => {
 
 type Split = { value: string | null; members: InstanceFacts[] };
 
+// A counter stamped per slice yields one group per slice; a single repeated
+// position among them must not become one dataset per slice.
+const splittingGroups = (axis: SemanticAxis, tagged: InstanceFacts[][]) =>
+  axis.counter ? tagged.filter((group) => group.length > 1) : tagged;
+
 /**
  * The first axis whose tagged groups cover overlapping stretches of the slice
  * axis, with the members that carry no value for it as their own part. Scans
@@ -82,10 +96,11 @@ type Split = { value: string | null; members: InstanceFacts[] };
  */
 const firstSplittingAxis = (members: InstanceFacts[], axes: SemanticAxis[]) =>
   axes
-    .map((axis, index) => ({ axis, index, ...groupByAxis(members, axis) }))
-    .find(
-      ({ tagged }) => tagged.size >= 2 && anySpansOverlap([...tagged.values()])
-    );
+    .map((axis) => ({ axis, ...groupByAxis(members, axis) }))
+    .find(({ axis, tagged }) => {
+      const groups = splittingGroups(axis, [...tagged.values()]);
+      return groups.length >= 2 && anySpansOverlap(groups);
+    });
 
 const unsplit = (
   members: InstanceFacts[],
@@ -101,16 +116,23 @@ const unsplit = (
 ];
 
 const labelFor = (axis: SemanticAxis, value: string | null) =>
-  value === null ? `no ${axis.rule}` : `${axis.rule} ${value}`;
+  value === null ? `${axis.rule} unknown` : `${axis.rule} ${value}`;
 
 function splitByAxes(
   members: InstanceFacts[],
   axes: SemanticAxis[]
 ): SemanticPart[] {
-  const found = firstSplittingAxis(members, axes);
+  // One plane scanned repeatedly is a time series, not a stack of volumes;
+  // only a contrast axis may still tell its frames apart.
+  const singlePlane = countDistinctPositions(members) === 1;
+  const found = firstSplittingAxis(
+    members,
+    singlePlane ? axes.filter((axis) => !axis.counter) : axes
+  );
   if (!found) return unsplit(members, axes, hasRepeatedPositions(members));
 
-  const { axis, index, tagged, untagged } = found;
+  const { axis, tagged, untagged } = found;
+  const index = axes.indexOf(axis);
   const skipped = axes.slice(0, index);
   const rest = axes.slice(index + 1);
   const splits: Split[] = [
@@ -145,10 +167,10 @@ function splitByAxes(
  *
  * Deliberately conservative: members whose position cannot be read are never
  * split, one overlapping pair separates every group at that level, and a
- * repeated single plane is left whole. Such a plane is a temporal series, not
- * a stack of volumes, and fanning it out would make one dataset per frame.
- * Members that lack the value the level splits on form their own part rather
- * than blocking the split, so the result depends only on the members given.
+ * counter axis neither fans out a repeated single plane nor splits on groups
+ * of one slice. Members that lack the value the level splits on form their
+ * own part rather than blocking the split, so the result depends only on the
+ * members given.
  */
 export function splitOverlappingAcquisitions(
   members: InstanceFacts[]
@@ -156,7 +178,5 @@ export function splitOverlappingAcquisitions(
   const axes = [...SEMANTIC_AXES];
   if (!members.every((member) => Number.isFinite(member.projectedPosition)))
     return unsplit(members, axes, false);
-  if (countDistinctPositions(members) === 1)
-    return unsplit(members, axes, members.length > 1);
   return splitByAxes(members, axes);
 }
