@@ -3,6 +3,7 @@ import {
   HARD_FACT_RULES,
   ORIENTATION_RULE,
   ORIENTATION_TOLERANCE,
+  IRREGULAR_VOLUME_WARNING,
   REPEATED_POSITIONS_WARNING,
   UNREADABLE_POSITION_WARNING,
   planDicomCollections,
@@ -622,6 +623,21 @@ describe('planDicomCollections semantic partition', () => {
 
     expect(collections[0].label).toBeNull();
     expect(partValue(collections[0], 'acquisition')).toBeNull();
+    expect(collections[0].warnings).toEqual([]);
+  });
+
+  it('warns that an unevenly spaced collection is not one regular volume', () => {
+    // Two 4mm runs with a gap between them, as the bilateral sagittal slabs
+    // of idcSeriesFixtures.ts are. One collection, but no single lattice.
+    const { collections } = plan(pass('1', [0, 4, 8, 50, 54, 58]));
+
+    expect(collections).toHaveLength(1);
+    expect(collections[0].warnings).toEqual([IRREGULAR_VOLUME_WARNING]);
+  });
+
+  it('leaves an evenly spaced collection unwarned', () => {
+    const { collections } = plan(pass('1', [0, 4, 8, 12]));
+
     expect(collections[0].warnings).toEqual([]);
   });
 

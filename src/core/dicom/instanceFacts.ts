@@ -110,10 +110,22 @@ const pixelSpacingOf = (metadata: DicomTagValues) => {
     : null;
 };
 
+/**
+ * Where an instance places its samples, for callers that need nothing else.
+ * Reading it costs three tag lookups rather than the twenty a full fact read
+ * takes, which a volume of two thousand slices notices.
+ */
+export function readGeometryFacts(metadata: DicomTagValues) {
+  return {
+    orientation: orientationOf(metadata),
+    position: vectorOf(metadata, Tags.ImagePositionPatient, 3),
+    pixelSpacing: pixelSpacingOf(metadata),
+  };
+}
+
 /** Reads the planner's plain facts out of one instance's tag values. */
 export function readInstanceFacts(metadata: DicomTagValues): InstanceFacts {
-  const orientation = orientationOf(metadata);
-  const position = vectorOf(metadata, Tags.ImagePositionPatient, 3);
+  const { orientation, position, pixelSpacing } = readGeometryFacts(metadata);
 
   return {
     sopInstanceUid: textOf(metadata, Tags.SOPInstanceUID),
@@ -129,7 +141,7 @@ export function readInstanceFacts(metadata: DicomTagValues): InstanceFacts {
     orientation,
     position,
     projectedPosition: projectOnNormal(sliceNormalOf(orientation), position),
-    pixelSpacing: pixelSpacingOf(metadata),
+    pixelSpacing,
     instanceNumber: numberOf(metadata, Tags.InstanceNumber),
     acquisitionNumber: numericTextOf(metadata, Tags.AcquisitionNumber),
     temporalPositionIdentifier: numericTextOf(

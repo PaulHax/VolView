@@ -1,6 +1,8 @@
 import { Chunk } from '@/src/core/streaming/chunk';
 import { Maybe } from '@/src/types';
 import { NAME_TO_TAG } from '@/src/core/dicomTags';
+import { readGeometryFacts } from '@/src/core/dicom/instanceFacts';
+import { reconstructVolume } from '@/src/core/dicom/reconstructVolume';
 import {
   getChunkMetadata,
   getSliceNormal,
@@ -8,7 +10,7 @@ import {
 } from '@/src/utils/dicom/dicomChunks';
 import vtkImageData from '@kitware/vtk.js/Common/DataModel/ImageData';
 import { Vector3 } from '@kitware/vtk.js/types';
-import { mat3, vec3 } from 'gl-matrix';
+import { mat3 } from 'gl-matrix';
 import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';
 
 const ImagePositionPatientTag = NAME_TO_TAG.get('ImagePositionPatient')!;
@@ -245,6 +247,10 @@ export function allocateImageFromChunks(sortedChunks: Chunk[]) {
     rows * columns * slices * samplesPerPixel
   );
 
+  const reconstruction = reconstructVolume(
+    sortedChunks.map((chunk) => readGeometryFacts(chunk.metadata ?? []))
+  );
+
   const image = vtkImageData.newInstance();
   image.setExtent([0, columns - 1, 0, rows - 1, 0, slices - 1]);
 
@@ -263,15 +269,11 @@ export function allocateImageFromChunks(sortedChunks: Chunk[]) {
     spacing[1] = pixelSpacing[0];
   }
 
-  if (imagePositionPatient && sortedChunks.length > 1) {
-    const lastMeta = getChunkMetadata(sortedChunks[sortedChunks.length - 1]);
-    const lastIPP = toVec(lastMeta.get(ImagePositionPatientTag));
-    if (lastIPP) {
-      // assumption: uniform Z spacing
-      const zVec = vec3.create();
-      vec3.sub(zVec, lastIPP as vec3, imagePositionPatient as vec3);
-      spacing[2] = vec3.len(zVec) / (slices - 1) || 1;
-    }
+  // An irregular stack has no lattice of its own, so it falls back to a step
+  // the series does hold and the planner warns about the collection.
+  const sliceSpacing = reconstruction.sliceSpacing ?? 0;
+  if (sortedChunks.length > 1 && isPositiveFiniteNumber(sliceSpacing)) {
+    spacing[2] = sliceSpacing;
   } else if (slices === 1 && isPositiveFiniteNumber(spacingBetweenSlices)) {
     spacing[2] = spacingBetweenSlices;
   }

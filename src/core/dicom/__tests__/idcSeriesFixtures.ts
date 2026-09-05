@@ -133,9 +133,12 @@ export const bilateralSagittalSlabs: IdcSeriesFixture = {
   why:
     'Bilateral sagittal breast slabs: StackID 1 and 2 cover two 4mm stacks ' +
     'with a 42mm gap, one orientation, one acquisition, all positions ' +
-    'distinct. This series is why StackID is NOT a split discriminator: the ' +
-    'slabs form one sound volume, and only the overlap gate keeps a ' +
-    'StackID-like tag from tearing it apart.',
+    'distinct. This series is why StackID is NOT a split discriminator: ' +
+    'nothing overlaps, so the overlap gate keeps a StackID-like tag from ' +
+    'tearing it apart. One collection is not one regular volume, though: no ' +
+    'even lattice holds both slabs, so the reconstruction reports an ' +
+    'irregular stack and warns, rather than fitting the endpoints to a ' +
+    'fabricated 4.59mm spacing.',
   groups: [
     {
       tags: { [Tags.AcquisitionNumber]: '1', '0020|9056': '1' },

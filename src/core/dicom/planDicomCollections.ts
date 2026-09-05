@@ -3,6 +3,10 @@ import {
   type PositionOf,
 } from '@/src/core/dicom/splitOverlappingAcquisitions';
 import { projectOnNormal, sliceNormalOf } from '@/src/core/dicom/instanceFacts';
+import {
+  reconstructVolume,
+  type IrregularReason,
+} from '@/src/core/dicom/reconstructVolume';
 
 /**
  * Facts read once per instance from a chunk's metadata. Plain data: the planner
@@ -93,9 +97,34 @@ export const REPEATED_POSITIONS_WARNING =
   'holds repeated slice positions that no tag separates. Its slice spacing ' +
   'and measurements along the slice axis may be wrong.';
 
+export const IRREGULAR_VOLUME_WARNING =
+  'does not sample one regular volume: its slices are not evenly spaced on ' +
+  'one grid. They were placed one slot apart in the order shown, so ' +
+  'positions and measurements along the slice axis may be wrong.';
+
 export const UNREADABLE_POSITION_WARNING =
   'holds slices whose position could not be read. They were kept out of the ' +
   'volumes of their series, and their order and spacing may be wrong.';
+
+// A repeated or unreadable position makes a stack irregular too, and already
+// carries a warning of its own.
+const RECONSTRUCTION_WARNINGS: Record<IrregularReason, string[]> = {
+  'unreadable-geometry': [],
+  'repeated-position': [],
+  'uneven-slice-spacing': [IRREGULAR_VOLUME_WARNING],
+  'in-plane-shift': [IRREGULAR_VOLUME_WARNING],
+  'mixed-pixel-spacing': [IRREGULAR_VOLUME_WARNING],
+};
+
+const reconstructionWarnings = (
+  members: InstanceFacts[],
+  normal: number[] | null
+) => {
+  const reconstruction = reconstructVolume(members, normal);
+  return reconstruction.kind === 'regular'
+    ? []
+    : RECONSTRUCTION_WARNINGS[reconstruction.reason];
+};
 
 const ANONYMOUS = 'an instance with no SOP Instance UID';
 
@@ -442,6 +471,7 @@ export function planDicomCollections(input: PlanInput) {
         warnings: [
           ...(part.repeatedPositions ? [REPEATED_POSITIONS_WARNING] : []),
           ...(part.unreadablePositions ? [UNREADABLE_POSITION_WARNING] : []),
+          ...reconstructionWarnings(ordered.members, bucket.normal),
         ],
       };
     })

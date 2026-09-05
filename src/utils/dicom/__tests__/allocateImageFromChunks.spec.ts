@@ -369,7 +369,7 @@ describe('allocateImageFromChunks', () => {
     expect(Array.from(image.getSpacing())).toEqual([0.75, 2.5, 7.25]);
   });
 
-  it('keeps deriving multi-slice Z spacing from ImagePositionPatient distance', () => {
+  it('takes the multi-slice Z spacing from an even stack of positions', () => {
     const image = allocateImageFromChunks([
       positionedChunk(0, {
         [Tags.PixelSpacing]: '2.5\\0.75',
@@ -380,5 +380,25 @@ describe('allocateImageFromChunks', () => {
     ]);
 
     expect(Array.from(image.getSpacing())).toEqual([0.75, 2.5, 9]);
+  });
+
+  // Two 4mm runs with a hole between them, as the bilateral sagittal slabs of
+  // idcSeriesFixtures.ts are. Endpoint distance over slice count would call
+  // that a 17.33mm lattice, which describes neither run.
+  it('does not fit an irregular stack to a lattice its slices never sit on', () => {
+    const image = allocateImageFromChunks(
+      [0, 4, 8, 48, 52].map((z) => positionedChunk(z))
+    );
+
+    expect(image.getSpacing()[2]).toBeCloseTo(4, 12);
+  });
+
+  it('leaves the Z spacing alone when no position can be read', () => {
+    const image = allocateImageFromChunks([
+      chunk({ [Tags.ImagePositionPatient]: '' }),
+      chunk({ [Tags.ImagePositionPatient]: '' }),
+    ]);
+
+    expect(image.getSpacing()[2]).toBe(1);
   });
 });
