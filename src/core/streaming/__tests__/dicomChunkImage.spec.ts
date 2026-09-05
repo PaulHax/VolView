@@ -326,6 +326,58 @@ describe('DicomChunkImage', () => {
     image.dispose();
   });
 
+  it('reports nothing loading when started with every slot already settled', async () => {
+    const image = new DicomChunkImage({ readDicomImage });
+    const [first, second] = await threeChunks();
+
+    await image.setChunks([first, second]);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(2))
+    );
+    expect(image.loading.value).toBe(false);
+
+    // The store commits by starting the load after preparation, whether the
+    // image is new or was handed the members it already holds.
+    await image.setChunks([first, second]);
+    image.startLoad();
+
+    expect(image.loading.value).toBe(false);
+    expect(image.loaded.value).toBe(true);
+
+    image.dispose();
+  });
+
+  it('reports loading when started with slots still to decode', async () => {
+    const reader = deferredReader();
+    const image = new DicomChunkImage({ readDicomImage: reader.read });
+    const [first] = await threeChunks();
+
+    await image.setChunks([first]);
+    image.startLoad();
+    expect(image.loading.value).toBe(true);
+
+    reader.settleAll(1);
+    await vi.waitFor(() => expect(image.loading.value).toBe(false));
+    expect(image.loaded.value).toBe(true);
+
+    image.dispose();
+  });
+
+  it('stays disposed when a membership change was still reading metadata', async () => {
+    const reader = deferredReader();
+    const image = new DicomChunkImage({ readDicomImage: reader.read });
+    const { chunk: gated, release } = makeGatedChunk(1);
+
+    const pending = image.setChunks([gated]);
+    image.dispose();
+    release();
+    await pending;
+
+    expect(image.getChunks()).toEqual([]);
+    expect(image.getChunkStatuses()).toEqual([]);
+    expect(reader.total()).toBe(0);
+  });
+
   it('replaces its membership, dropping a chunk the new order omits', async () => {
     const reader = deferredReader();
     const image = new DicomChunkImage({ readDicomImage: reader.read });
