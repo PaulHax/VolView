@@ -344,10 +344,10 @@ describe('planDicomCollections', () => {
     expect(collections[0].diagnostics).toEqual([]);
   });
 
-  // GDCM refuses to order a stack by position once a position repeats and
-  // falls back to the instance number, so passes no tag separates keep the
-  // scanner's own sequence instead of interleaving.
-  it('orders a repeated projected position by instance number', () => {
+  // The tied members keep the scanner's own sequence, but position stays the
+  // primary key: slot i lands at origin + i * spacing along the normal, so an
+  // order that ran against position would mirror the volume.
+  it('breaks a repeated projected position on instance number, keeping spatial order', () => {
     const later = makeFacts('uid-a', {
       projectedPosition: 3,
       instanceNumber: 2,
@@ -356,13 +356,22 @@ describe('planDicomCollections', () => {
       projectedPosition: 3,
       instanceNumber: 1,
     });
-    const far = makeFacts('uid-c', { projectedPosition: 0, instanceNumber: 3 });
+    // Numbered before the tied pair yet positioned after it.
+    const far = makeFacts('uid-c', { projectedPosition: 5, instanceNumber: 0 });
+    const near = makeFacts('uid-d', {
+      projectedPosition: 0,
+      instanceNumber: 9,
+    });
 
-    const { collections } = plan([later, earlier, far]);
+    const { collections } = plan([later, far, earlier, near]);
 
-    expect(uidsOf(collections[0])).toEqual(['uid-b', 'uid-a', 'uid-c']);
-    expect(collections[0].order).toBe('instance-number');
-    expect(mentions(collections[0].diagnostics, 'positions repeat')).toBe(true);
+    expect(uidsOf(collections[0])).toEqual([
+      'uid-d',
+      'uid-b',
+      'uid-a',
+      'uid-c',
+    ]);
+    expect(collections[0].order).toBe('spatial');
     expect(collections[0].warnings).toEqual([REPEATED_POSITIONS_WARNING]);
   });
 
@@ -373,20 +382,20 @@ describe('planDicomCollections', () => {
     const { collections } = plan([second, first]);
 
     expect(uidsOf(collections[0])).toEqual(['uid-a', 'uid-b']);
-    expect(collections[0].order).toBe('instance-number');
+    expect(collections[0].order).toBe('spatial');
   });
 
-  it('sorts a repeated position spatially when an instance number is unreadable', () => {
-    const numbered = makeFacts('uid-a', { projectedPosition: 3 });
-    const unnumbered = makeFacts('uid-b', {
+  it('orders an unnumbered member after a numbered one at the same position', () => {
+    const numbered = makeFacts('uid-b', { projectedPosition: 3 });
+    const unnumbered = makeFacts('uid-a', {
       projectedPosition: 3,
       instanceNumber: null,
     });
     const low = makeFacts('uid-c', { projectedPosition: 0 });
 
-    const { collections } = plan([numbered, unnumbered, low]);
+    const { collections } = plan([unnumbered, numbered, low]);
 
-    expect(uidsOf(collections[0])).toEqual(['uid-c', 'uid-a', 'uid-b']);
+    expect(uidsOf(collections[0])).toEqual(['uid-c', 'uid-b', 'uid-a']);
     expect(collections[0].order).toBe('spatial');
   });
 
