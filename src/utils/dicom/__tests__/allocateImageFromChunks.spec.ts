@@ -393,6 +393,26 @@ describe('allocateImageFromChunks', () => {
     expect(image.getSpacing()[2]).toBeCloseTo(4, 12);
   });
 
+  it('orients the image along the validated slice normal', () => {
+    const image = allocateImageFromChunks([
+      chunk({ [Tags.ImageOrientationPatient]: '0\\1\\0\\0\\0\\-1' }),
+    ]);
+
+    expect(Array.from(image.getDirection())).toEqual([
+      0, 1, 0, 0, 0, -1, -1, 0, 0,
+    ]);
+  });
+
+  it('keeps the identity direction for an orientation that spans no plane', () => {
+    const image = allocateImageFromChunks([
+      chunk({ [Tags.ImageOrientationPatient]: '1\\0\\0\\1\\0\\0' }),
+    ]);
+
+    expect(Array.from(image.getDirection())).toEqual([
+      1, 0, 0, 0, 1, 0, 0, 0, 1,
+    ]);
+  });
+
   it('leaves the Z spacing alone when no position can be read', () => {
     const image = allocateImageFromChunks([
       chunk({ [Tags.ImagePositionPatient]: '' }),
