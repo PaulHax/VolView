@@ -3,7 +3,10 @@ import { Tags } from '@/src/core/dicomTags';
 import { readInstanceFacts } from '@/src/core/dicom/instanceFacts';
 import type { InstanceFacts } from '@/src/core/dicom/planDicomCollections';
 import {
+  GEOMETRY_RULE,
   SEMANTIC_AXES,
+  UNREADABLE_GEOMETRY,
+  UNREADABLE_GEOMETRY_LABEL,
   splitOverlappingAcquisitions,
   type SemanticPart,
 } from '@/src/core/dicom/splitOverlappingAcquisitions';
@@ -73,7 +76,13 @@ describe('splitOverlappingAcquisitions', () => {
     const parts = splitOverlappingAcquisitions(members);
 
     expect(parts).toEqual([
-      { parts: unsplitParts, members, label: null, repeatedPositions: false },
+      {
+        parts: unsplitParts,
+        members,
+        label: null,
+        repeatedPositions: false,
+        unreadablePositions: false,
+      },
     ]);
   });
 
@@ -133,7 +142,7 @@ describe('splitOverlappingAcquisitions', () => {
     const parts = splitOverlappingAcquisitions(merged);
 
     expect(parts).toHaveLength(1);
-    expect(parts[0].members).toBe(merged);
+    expect(parts[0].members).toEqual(merged);
     expect(parts[0].label).toBeNull();
     expect(parts[0].repeatedPositions).toBe(false);
   });
@@ -180,7 +189,13 @@ describe('splitOverlappingAcquisitions', () => {
     const parts = splitOverlappingAcquisitions(members);
 
     expect(parts).toEqual([
-      { parts: unsplitParts, members, label: null, repeatedPositions: true },
+      {
+        parts: unsplitParts,
+        members,
+        label: null,
+        repeatedPositions: true,
+        unreadablePositions: false,
+      },
     ]);
   });
 
@@ -266,23 +281,48 @@ describe('splitOverlappingAcquisitions', () => {
     expect(parts[0].repeatedPositions).toBe(false);
   });
 
-  it('never splits members whose position cannot be read', () => {
+  it('holds members whose position cannot be read in a part of their own', () => {
+    const blind = makeFacts('uid-a', {
+      projectedPosition: null,
+      acquisitionNumber: '1',
+    });
+    const first = stack('2', 0, 3);
+    const second = stack('3', 1, 3);
+
+    const parts = splitOverlappingAcquisitions([blind, ...first, ...second]);
+
+    // The two overlapping acquisitions stay separated, and the member nothing
+    // spatial can be said about is diagnosed rather than merged into them.
+    expect(labels(parts)).toEqual([
+      'acquisition 2',
+      'acquisition 3',
+      UNREADABLE_GEOMETRY_LABEL,
+    ]);
+    const unknown = partLabelled(parts, UNREADABLE_GEOMETRY_LABEL);
+    expect(unknown.members).toEqual([blind]);
+    expect(partLabelled(parts, 'acquisition 2').members).toEqual(first);
+    expect(partLabelled(parts, 'acquisition 3').members).toEqual(second);
+    expect(unknown.unreadablePositions).toBe(true);
+    expect(partValue(unknown, GEOMETRY_RULE)).toBe(UNREADABLE_GEOMETRY);
+    parts
+      .filter((part) => part !== unknown)
+      .forEach((part) => {
+        expect(part.unreadablePositions).toBe(false);
+        expect(part.parts.some(([rule]) => rule === GEOMETRY_RULE)).toBe(false);
+      });
+  });
+
+  it('keeps members whose positions are all unreadable in one diagnosed part', () => {
     const blind = [
-      makeFacts('uid-a', { projectedPosition: null, acquisitionNumber: '1' }),
-      makeFacts('uid-b', { projectedPosition: 0, acquisitionNumber: '2' }),
-      makeFacts('uid-c', { projectedPosition: 0, acquisitionNumber: '3' }),
+      makeFacts('uid-a', { projectedPosition: null }),
+      makeFacts('uid-b', { projectedPosition: null }),
     ];
 
     const parts = splitOverlappingAcquisitions(blind);
 
-    expect(parts).toEqual([
-      {
-        parts: unsplitParts,
-        members: blind,
-        label: null,
-        repeatedPositions: false,
-      },
-    ]);
+    expect(parts).toHaveLength(1);
+    expect(parts[0].members).toEqual(blind);
+    expect(parts[0].unreadablePositions).toBe(true);
   });
 
   it('keeps each part in the member order it was given', () => {

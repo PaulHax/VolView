@@ -89,6 +89,10 @@ export const REPEATED_POSITIONS_WARNING =
   'holds repeated slice positions that no tag separates. Its slice spacing ' +
   'and measurements along the slice axis may be wrong.';
 
+export const UNREADABLE_POSITION_WARNING =
+  'holds slices whose position could not be read. They were kept out of the ' +
+  'volumes of their series, and their order and spacing may be wrong.';
+
 const ANONYMOUS = 'an instance with no SOP Instance UID';
 
 const label = (instance: InstanceFacts) =>
@@ -416,7 +420,10 @@ export function planDicomCollections(input: PlanInput) {
             : []),
           ...ordered.diagnostics,
         ],
-        warnings: part.repeatedPositions ? [REPEATED_POSITIONS_WARNING] : [],
+        warnings: [
+          ...(part.repeatedPositions ? [REPEATED_POSITIONS_WARNING] : []),
+          ...(part.unreadablePositions ? [UNREADABLE_POSITION_WARNING] : []),
+        ],
       };
     })
     .sort((left, right) =>

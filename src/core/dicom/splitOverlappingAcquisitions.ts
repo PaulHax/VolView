@@ -31,7 +31,16 @@ export type SemanticPart = {
   label: string | null;
   // Two members share a slice position and no axis separates them.
   repeatedPositions: boolean;
+  // No member of this part carries a readable slice position, so nothing
+  // spatial was judged about it.
+  unreadablePositions: boolean;
 };
+
+// The key part that keeps the members of unreadable geometry apart from the
+// judged parts of the same series.
+export const GEOMETRY_RULE = 'geometry';
+export const UNREADABLE_GEOMETRY = 'unreadable';
+export const UNREADABLE_GEOMETRY_LABEL = 'position unknown';
 
 const positionOf = (member: InstanceFacts) =>
   member.projectedPosition as number;
@@ -112,8 +121,24 @@ const unsplit = (
     members,
     label: null,
     repeatedPositions,
+    unreadablePositions: false,
   },
 ];
+
+/** Members no axis can judge, held apart under a key part of their own. */
+const unreadableGeometry = (
+  members: InstanceFacts[],
+  axes: SemanticAxis[]
+): SemanticPart => ({
+  parts: [
+    ...axes.map((axis): [string, null] => [axis.rule, null]),
+    [GEOMETRY_RULE, UNREADABLE_GEOMETRY],
+  ],
+  members,
+  label: UNREADABLE_GEOMETRY_LABEL,
+  repeatedPositions: false,
+  unreadablePositions: true,
+});
 
 const labelFor = (axis: SemanticAxis, value: string | null) =>
   value === null ? `${axis.rule} unknown` : `${axis.rule} ${value}`;
@@ -165,18 +190,29 @@ function splitByAxes(
  * overlapping stretches of the slice axis, decided by comparing positions
  * rather than by measuring how even the spacing looks.
  *
- * Deliberately conservative: members whose position cannot be read are never
- * split, one overlapping pair separates every group at that level, and a
- * counter axis neither fans out a repeated single plane nor splits on groups
- * of one slice. Members that lack the value the level splits on form their
- * own part rather than blocking the split, so the result depends only on the
- * members given.
+ * Members whose position cannot be read are judged by nothing here, so they
+ * are held in a part of their own instead of suppressing the split of the
+ * members that can be judged.
+ *
+ * Conservative on the members it does judge: one overlapping pair separates
+ * every group at that level, and a counter axis neither fans out a repeated
+ * single plane nor splits on groups of one slice. Members that lack the value
+ * the level splits on form their own part rather than blocking the split, so
+ * the result depends only on the members given.
  */
 export function splitOverlappingAcquisitions(
   members: InstanceFacts[]
 ): SemanticPart[] {
   const axes = [...SEMANTIC_AXES];
-  if (!members.every((member) => Number.isFinite(member.projectedPosition)))
-    return unsplit(members, axes, false);
-  return splitByAxes(members, axes);
+  const judgeable = members.filter((member) =>
+    Number.isFinite(member.projectedPosition)
+  );
+  const unreadable = members.filter(
+    (member) => !Number.isFinite(member.projectedPosition)
+  );
+
+  return [
+    ...(judgeable.length > 0 ? splitByAxes(judgeable, axes) : []),
+    ...(unreadable.length > 0 ? [unreadableGeometry(unreadable, axes)] : []),
+  ];
 }
