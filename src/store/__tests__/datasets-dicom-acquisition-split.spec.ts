@@ -150,28 +150,56 @@ describe('DICOM store acquisition split across imports', () => {
     expect(labelsOf(store)).toEqual([
       'acquisition 1',
       'acquisition 2',
-      'no acquisition',
+      'acquisition unknown',
     ]);
   });
 
   it('warns once per volume whose repeated positions no tag separates', async () => {
     const { createChunkImage } = imageFactory();
     const store = useDICOMStore();
-    const doubled = [0, 2.5, 2.5, 5].map((z, i) =>
-      chunkFor({
-        sop: `dup-${i}`,
-        z,
-        tags: { [Tags.AcquisitionNumber]: '1' },
-      })
-    );
+    const doubled = () =>
+      [0, 2.5, 2.5, 5].map((z, i) =>
+        chunkFor({
+          sop: `dup-${i}`,
+          z,
+          tags: { [Tags.AcquisitionNumber]: '1' },
+        })
+      );
 
-    await store.importChunks(doubled, { createChunkImage });
+    await store.importChunks(doubled(), { createChunkImage });
+    // Dropping the same folder again changes nothing worth repeating.
+    await store.importChunks(doubled(), { createChunkImage });
 
     const { messages } = useMessageStore();
     expect(messages).toHaveLength(1);
     expect(messages[0].title).toMatch(/did not load as one sound volume/);
     expect(messages[0].options.details).toMatch(
       /^Imported series holds repeated/
+    );
+  });
+
+  it('tells the user when a later import regroups a dataset away', async () => {
+    const { createChunkImage } = imageFactory();
+    const store = useDICOMStore();
+    const tagged = (sop: string, z: number, number: string) =>
+      chunkFor({ sop, z, tags: { [Tags.AcquisitionNumber]: number } });
+    // Two slices of two passes load as one volume; the second batch completes
+    // both passes and splits the pair so evenly that neither keeps the id.
+    const first = [tagged('a', 0, '1'), tagged('b', 2, '2')];
+    const second = [tagged('c', 2, '1'), tagged('d', 0, '2')];
+
+    const [id] = volumeIds(
+      await store.importChunks(first, { createChunkImage })
+    );
+    const result = await store.importChunks(second, { createChunkImage });
+
+    expect(result.dissolved).toEqual([id]);
+    const regrouped = useMessageStore().messages.filter((message) =>
+      /regrouped/.test(message.title)
+    );
+    expect(regrouped).toHaveLength(1);
+    expect(regrouped[0].options.details).toMatch(
+      /^Imported series was regrouped/
     );
   });
 

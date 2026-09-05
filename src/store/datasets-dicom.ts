@@ -256,6 +256,9 @@ type Candidate =
       // The membership held before this batch grew the image, so a sibling's
       // failure can put it back.
       previous: Chunk[];
+      // Whether the batch changed the membership at all; a relabel or a
+      // second drop of the same folder does not.
+      changed: boolean;
       record: DatabaseRecord;
     };
 
@@ -418,7 +421,10 @@ async function prepareVolume(
   if (cachedImage) {
     const previous = cachedImage.getChunks();
     await cachedImage.setChunks(members);
-    return { kind: 'grow', id, image: cachedImage, previous, record };
+    const changed =
+      previous.length !== members.length ||
+      previous.some((chunk, index) => chunk !== members[index]);
+    return { kind: 'grow', id, image: cachedImage, previous, changed, record };
   }
 
   const image = deps.track(deps.createChunkImage());
@@ -461,6 +467,7 @@ function commitPlan(
   dissolved: string[]
 ) {
   const imageCacheStore = useImageCacheStore();
+  const messageStore = useMessageStore();
 
   candidates.forEach((candidate) => {
     if (candidate.kind === 'none') return;
@@ -478,17 +485,27 @@ function commitPlan(
     const { patient, study, volume, warnings } = candidate.record;
     store._updateDatabase(patient, study, volume);
     candidate.image.setName(getDisplayName(volume));
-    warnings.forEach((warning) =>
-      useMessageStore().addWarning(
-        'A DICOM series did not load as one sound volume',
-        `${getDisplayName(volume)} ${warning}`
-      )
-    );
+    // A membership that did not change was already warned about.
+    if (candidate.kind === 'add' || candidate.changed)
+      warnings.forEach((warning) =>
+        messageStore.addWarning(
+          'A DICOM series did not load as one sound volume',
+          `${getDisplayName(volume)} ${warning}`
+        )
+      );
   });
 
   dissolved.forEach((id) => {
+    const previous = store.volumeInfo[id];
     imageCacheStore.removeImage(id);
     store.deleteVolume(id);
+    // Whatever the user attached to the dissolved dataset went with it.
+    if (previous)
+      messageStore.addWarning(
+        'A DICOM volume was regrouped',
+        `${getDisplayName(previous)} was regrouped into other volumes of its ` +
+          'series. Annotations and view settings made on it were removed.'
+      );
   });
 }
 
