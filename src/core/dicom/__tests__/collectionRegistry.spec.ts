@@ -368,6 +368,25 @@ describe('DICOM collection registry', () => {
     expect(changedSince(OTHER_SERIES_UID)).toBe(false);
   });
 
+  it('reports a forget of a collection the pending plan dissolves', async () => {
+    const registry = createDicomCollectionRegistry();
+    const { between, straight, tilted } = merging();
+    const first = await registry.register([straight]);
+    const second = await registry.register([tilted]);
+    const [straightId] = first.updates.map((update) => update.id);
+    const [tiltedId] = second.updates.map((update) => update.id);
+
+    // The between instance merges both into one; the store still shows the
+    // dissolved one until this plan commits.
+    const { removed, changedSince } = await registry.register([between]);
+    expect(removed).toHaveLength(1);
+    const dissolved = removed[0] === straightId ? straightId : tiltedId;
+
+    registry.forget(dissolved);
+
+    expect(changedSince(SERIES_UID)).toBe(true);
+  });
+
   it('keeps a collection forgotten across the rollback of the batch that saw it', async () => {
     const registry = createDicomCollectionRegistry();
     const slice = chunkFor({ sop: 'a', z: 0 });

@@ -63,6 +63,10 @@ type Committed = {
 type SeriesEntry = {
   instances: Map<InstanceKey, RegisteredInstance>;
   committed: Map<string, Committed>;
+  // IDs the latest plan dissolved. They own nothing here any more, but the
+  // store still shows them until that plan commits, so forgetting one is a
+  // change the plan must hear about.
+  dissolving: Set<string>;
   // Every collection ID forgotten from this series, in order.
   forgotten: string[];
   queue: Promise<unknown>;
@@ -205,6 +209,7 @@ function planSeries(
   entry.committed = new Map(
     planned.map(({ id, committed }) => [id, committed])
   );
+  entry.dissolving = new Set(removed);
 
   return { updates, removed };
 }
@@ -222,6 +227,7 @@ export function createDicomCollectionRegistry(): DicomCollectionRegistry {
     const created: SeriesEntry = {
       instances: new Map(),
       committed: new Map(),
+      dissolving: new Set(),
       forgotten: [],
       queue: Promise.resolve(),
     };
@@ -238,7 +244,11 @@ export function createDicomCollectionRegistry(): DicomCollectionRegistry {
     collectionId: string
   ) => {
     const forgotten = entry.committed.get(collectionId);
-    if (!forgotten) return;
+    if (!forgotten) {
+      if (entry.dissolving.has(collectionId))
+        entry.forgotten.push(collectionId);
+      return;
+    }
     forgotten.members.forEach((key) => entry.instances.delete(key));
     entry.committed.delete(collectionId);
     entry.forgotten.push(collectionId);
