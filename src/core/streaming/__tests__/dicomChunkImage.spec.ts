@@ -5,6 +5,10 @@ import { Tags } from '@/src/core/dicomTags';
 import DicomChunkImage, {
   DicomChunkImageInit,
 } from '@/src/core/streaming/dicomChunkImage';
+import {
+  sliceToThumbnail,
+  type ThumbnailSlice,
+} from '@/src/core/streaming/dicomThumbnail';
 import { ChunkStatus } from '@/src/core/streaming/chunkImage';
 
 const ROWS = 2;
@@ -58,16 +62,44 @@ async function makeLoadedChunk(
   return chunk;
 }
 
+// A chunk whose metadata only arrives when the test releases it.
+function makeGatedChunk(z: number) {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const metaLoader = {
+    meta: null as ReturnType<typeof metadataFor> | null,
+    metaBlob: new Blob([`meta-${z}`]),
+    load: () =>
+      gate.then(() => {
+        metaLoader.meta = metadataFor(z);
+      }),
+    stop: () => {},
+  };
+  const chunk = new Chunk({
+    metaLoader,
+    dataLoader: {
+      data: new Blob([String(z)]),
+      load: () => {},
+      stop: () => {},
+    },
+  });
+  return { chunk, release };
+}
+
 function zOf(chunk: Chunk) {
   const meta = Object.fromEntries(chunk.metadata!);
   return Number(meta[Tags.ImagePositionPatient].split('\\')[2]);
 }
 
-function splitAndSortByPosition(chunks: Chunk[]) {
-  return Promise.resolve({
-    volume: [...chunks].sort((a, b) => zOf(a) - zOf(b)),
-  });
-}
+const frameOf = (value: number) => ({
+  image: {
+    size: [COLUMNS, ROWS, 1],
+    data: new Uint16Array(PIXELS_PER_SLICE).fill(value),
+    imageType: { components: 1 },
+  },
+});
 
 // Decodes a chunk to a constant frame, letting the test choose the array type.
 function decodeTo(dataFor: (value: number) => ArrayLike<number>) {
@@ -88,6 +120,54 @@ const readDicomImage = decodeTo((value) =>
   new Uint16Array(PIXELS_PER_SLICE).fill(value)
 );
 
+// Records the files handed to a reader without changing what it returns.
+function countingReader(read: DicomChunkImageInit['readDicomImage']) {
+  const files: File[] = [];
+  const counted: DicomChunkImageInit['readDicomImage'] = (file) => {
+    files.push(file);
+    return read(file);
+  };
+  return { files, read: counted };
+}
+
+// Holds every decode until the test settles it, indexed by its pixel value so
+// each attempt at one chunk can be settled on its own.
+function deferredReader() {
+  const files: File[] = [];
+  const attempts = new Map<number, Array<(error?: Error) => void>>();
+
+  const read: DicomChunkImageInit['readDicomImage'] = async (file) => {
+    files.push(file);
+    const value = Number(await file.text());
+    return new Promise((resolve, reject) => {
+      const settlers = attempts.get(value) ?? [];
+      settlers.push((error) =>
+        error ? reject(error) : resolve(frameOf(value))
+      );
+      attempts.set(value, settlers);
+    });
+  };
+
+  const countFor = (value: number) => attempts.get(value)?.length ?? 0;
+  const total = () =>
+    [...attempts.values()].reduce((sum, list) => sum + list.length, 0);
+  const settle = (value: number, attempt: number, error?: Error) =>
+    attempts.get(value)![attempt](error);
+  const settleAll = (value: number) =>
+    attempts.get(value)!.forEach((settler) => settler());
+
+  return { files, read, countFor, total, settle, settleAll };
+}
+
+function capturingEncoder() {
+  const slices: ThumbnailSlice[] = [];
+  const encodeThumbnail = (slice: ThumbnailSlice) => {
+    slices.push(slice);
+    return `uri:${Array.from(slice.data).join(',')}`;
+  };
+  return { slices, encodeThumbnail };
+}
+
 function sliceOf(image: DicomChunkImage, index: number) {
   const scalars = image.getVtkImageData().getPointData().getScalars();
   const data = scalars.getData();
@@ -96,13 +176,21 @@ function sliceOf(image: DicomChunkImage, index: number) {
   );
 }
 
+function scalarRange(image: DicomChunkImage) {
+  const [min, max] = image
+    .getVtkImageData()
+    .getPointData()
+    .getScalars()
+    .getRange();
+  return [min, max] as [number, number];
+}
+
+const filledWith = (value: number) => Array(PIXELS_PER_SLICE).fill(value);
+
 async function loadRejectingSeries(
   read: DicomChunkImageInit['readDicomImage']
 ) {
-  const image = new DicomChunkImage({
-    splitAndSort: splitAndSortByPosition,
-    readDicomImage: read,
-  });
+  const image = new DicomChunkImage({ readDicomImage: read });
   const errors: unknown[] = [];
   image.addEventListener('chunkError', ({ error }) => {
     errors.push(error);
@@ -112,7 +200,7 @@ async function loadRejectingSeries(
     makeLoadedChunk(2, { [Tags.BitsStored]: '8' }),
   ]);
 
-  await image.addChunks([valid, invalid]);
+  await image.setChunks([valid, invalid]);
   await vi.waitFor(() =>
     expect(image.getChunkStatuses()).toEqual([
       ChunkStatus.Loaded,
@@ -122,11 +210,23 @@ async function loadRejectingSeries(
 
   expect(image.status.value).toBe('complete');
   expect(errors).toHaveLength(1);
-  expect(sliceOf(image, 0)).toEqual(Array(PIXELS_PER_SLICE).fill(1));
-  expect(sliceOf(image, 1)).toEqual(Array(PIXELS_PER_SLICE).fill(0));
+  expect(sliceOf(image, 0)).toEqual(filledWith(1));
+  expect(sliceOf(image, 1)).toEqual(filledWith(0));
   image.dispose();
   return String(errors[0]);
 }
+
+// The three slices of the reordering and race cases, in decode order 1, 2, 3.
+function threeChunks() {
+  return Promise.all([
+    makeLoadedChunk(1),
+    makeLoadedChunk(2),
+    makeLoadedChunk(3),
+  ]);
+}
+
+const allLoaded = (count: number) =>
+  Array(count).fill(ChunkStatus.Loaded) as ChunkStatus[];
 
 describe('DicomChunkImage', () => {
   it('preserves exact modality-rescaled pixels from the public DSC series', async () => {
@@ -139,7 +239,6 @@ describe('DicomChunkImage', () => {
       65131 * PUBLIC_DSC_SLOPE,
     ]);
     const image = new DicomChunkImage({
-      splitAndSort: splitAndSortByPosition,
       readDicomImage: decodeTo(() => decoded),
     });
     const frame = await makeLoadedChunk(1, {
@@ -149,9 +248,9 @@ describe('DicomChunkImage', () => {
       [Tags.RescaleIntercept]: '0',
     });
 
-    await image.addChunks([frame]);
+    await image.setChunks([frame]);
     await vi.waitFor(() =>
-      expect(image.getChunkStatuses()).toEqual([ChunkStatus.Loaded])
+      expect(image.getChunkStatuses()).toEqual(allLoaded(1))
     );
 
     const data = image.getVtkImageData().getPointData().getScalars().getData();
@@ -185,220 +284,165 @@ describe('DicomChunkImage', () => {
     expect(message).toContain('Uint8Array');
   });
 
-  it('serializes concurrent additions so an older sort cannot drop newer chunks', async () => {
-    const pendingSorts: Array<{
-      chunks: Chunk[];
-      resolve: (volumes: Record<string, Chunk[]>) => void;
-    }> = [];
-    const deferredSplitAndSort: DicomChunkImageInit['splitAndSort'] = (
-      chunks
-    ) =>
-      new Promise((resolve) => {
-        pendingSorts.push({ chunks: [...chunks], resolve });
-      });
-    const finishSort = (index: number) => {
-      pendingSorts[index].resolve({
-        volume: [...pendingSorts[index].chunks].sort((a, b) => zOf(a) - zOf(b)),
-      });
-    };
-    const image = new DicomChunkImage({
-      splitAndSort: deferredSplitAndSort,
-      readDicomImage,
-    });
-    const [first, second] = await Promise.all([
-      makeLoadedChunk(1),
-      makeLoadedChunk(2),
-    ]);
+  // Grouping and ordering belong to the collection planner, so the image keeps
+  // the order it is handed even when it disagrees with the slice positions.
+  it('keeps the given order instead of regrouping its chunks', async () => {
+    const image = new DicomChunkImage({ readDicomImage });
+    const [first, second, third] = await threeChunks();
 
-    const olderAddition = image.addChunks([second]);
-    await vi.waitFor(() => expect(pendingSorts).toHaveLength(1));
-
-    const newerAddition = image.addChunks([first]);
-    await Promise.resolve();
-    expect(pendingSorts).toHaveLength(1);
-
-    finishSort(0);
-    await olderAddition;
-    await vi.waitFor(() => expect(pendingSorts).toHaveLength(2));
-    expect(pendingSorts[1].chunks.map(zOf)).toEqual([2, 1]);
-
-    finishSort(1);
-    await newerAddition;
+    await image.setChunks([third, first, second]);
     await vi.waitFor(() =>
-      expect(image.getChunkStatuses()).toEqual([
-        ChunkStatus.Loaded,
-        ChunkStatus.Loaded,
-      ])
+      expect(image.getChunkStatuses()).toEqual(allLoaded(3))
     );
 
-    expect(image.getChunks().map(zOf)).toEqual([1, 2]);
-    expect(sliceOf(image, 0)).toEqual(Array(PIXELS_PER_SLICE).fill(1));
-    expect(sliceOf(image, 1)).toEqual(Array(PIXELS_PER_SLICE).fill(2));
+    expect(image.getChunks().map(zOf)).toEqual([3, 1, 2]);
+    expect(sliceOf(image, 0)).toEqual(filledWith(3));
+    expect(sliceOf(image, 1)).toEqual(filledWith(1));
+    expect(sliceOf(image, 2)).toEqual(filledWith(2));
 
     image.dispose();
   });
 
-  it('decodes every loaded chunk into its sorted slice position', async () => {
-    const image = new DicomChunkImage({
-      splitAndSort: splitAndSortByPosition,
-      readDicomImage,
+  it('replaces its membership, dropping a chunk the new order omits', async () => {
+    const reader = deferredReader();
+    const image = new DicomChunkImage({ readDicomImage: reader.read });
+    const errors: unknown[] = [];
+    image.addEventListener('chunkError', ({ error }) => {
+      errors.push(error);
     });
 
-    const loads: Array<{ z: number; zRange: number[] }> = [];
-    image.addEventListener('chunkLoad', ({ chunk, updatedExtent }) => {
-      loads.push({ z: zOf(chunk), zRange: updatedExtent.slice(4) });
-    });
+    const [first, second] = await threeChunks();
 
-    const [first, second, third] = await Promise.all([
-      makeLoadedChunk(1),
-      makeLoadedChunk(2),
-      makeLoadedChunk(3),
-    ]);
+    await image.setChunks([first, second]);
+    await vi.waitFor(() => expect(reader.countFor(1)).toBe(1));
 
-    await image.addChunks([first]);
-    await vi.waitFor(() => expect(loads.length).toBe(1));
+    await image.setChunks([second]);
+    expect(image.getChunks()).toEqual([second]);
+    expect(image.getChunkStatuses()).toHaveLength(1);
 
-    // Arrival order deliberately differs from slice order.
-    await image.addChunks([third, second]);
-    await vi.waitFor(() => expect(loads.length).toBe(4));
+    // The dropped chunk's decode must not write into the smaller buffer.
+    reader.settle(1, 0);
+    reader.settleAll(2);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(1))
+    );
 
-    expect(image.getChunks().map(zOf)).toEqual([1, 2, 3]);
-    // The first slice is redecoded because reallocation cleared its pixels.
-    expect(loads).toEqual([
-      { z: 1, zRange: [0, 0] },
-      { z: 1, zRange: [0, 0] },
-      { z: 2, zRange: [1, 1] },
-      { z: 3, zRange: [2, 2] },
-    ]);
-    expect(sliceOf(image, 0)).toEqual(Array(PIXELS_PER_SLICE).fill(1));
-    expect(sliceOf(image, 1)).toEqual(Array(PIXELS_PER_SLICE).fill(2));
-    expect(sliceOf(image, 2)).toEqual(Array(PIXELS_PER_SLICE).fill(3));
+    expect(errors).toEqual([]);
+    expect(sliceOf(image, 0)).toEqual(filledWith(2));
 
     image.dispose();
   });
 
-  it('keeps a stale in-flight decode from clobbering the re-sorted volume', async () => {
-    // Hold each decode independently by its pixel value.
-    const pending = new Map<number, Array<() => void>>();
-    const deferredRead: DicomChunkImageInit['readDicomImage'] = async (
-      file
-    ) => {
-      const value = Number(await file.text());
-      return new Promise((resolve) => {
-        const resolvers = pending.get(value) ?? [];
-        resolvers.push(() =>
-          resolve({
-            image: {
-              size: [COLUMNS, ROWS, 1],
-              data: new Uint16Array(PIXELS_PER_SLICE).fill(value),
-              imageType: { components: 1 },
-            },
-          })
-        );
-        pending.set(value, resolvers);
-      });
-    };
+  it('keeps the volume it has when a new membership cannot be allocated', async () => {
+    const image = new DicomChunkImage({ readDicomImage });
+    const [first, second] = await threeChunks();
 
-    const image = new DicomChunkImage({
-      splitAndSort: splitAndSortByPosition,
-      readDicomImage: deferredRead,
-    });
+    await image.setChunks([first]);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(1))
+    );
+    const allocated = image.getVtkImageData();
+
+    // A multi-frame instance cannot lead a multi-chunk volume, so allocation
+    // rejects this membership.
+    const multiFrame = await makeLoadedChunk(4, { [Tags.NumberOfFrames]: '2' });
+    await expect(image.setChunks([multiFrame, second])).rejects.toThrow(
+      /multi-frame/
+    );
+
+    expect(image.getChunks()).toEqual([first]);
+    expect(image.getChunkStatuses()).toEqual(allLoaded(1));
+    expect(image.getVtkImageData()).toBe(allocated);
+    expect(sliceOf(image, 0)).toEqual(filledWith(1));
+
+    image.dispose();
+  });
+
+  it('serializes overlapping calls so the last order wins', async () => {
+    const image = new DicomChunkImage({ readDicomImage });
+    const { chunk: gated, release } = makeGatedChunk(1);
+    const loaded = await makeLoadedChunk(2);
+
+    const first = image.setChunks([gated]);
+    const second = image.setChunks([loaded]);
+
+    // The first call is still waiting on its chunk's metadata.
+    expect(image.getChunks()).toEqual([]);
+
+    release();
+    await Promise.all([first, second]);
+
+    expect(image.getChunks()).toEqual([loaded]);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(1))
+    );
+    expect(sliceOf(image, 0)).toEqual(filledWith(2));
+
+    image.dispose();
+  });
+
+  it('keeps a stale in-flight decode from clobbering the reordered volume', async () => {
+    const reader = deferredReader();
+    const image = new DicomChunkImage({ readDicomImage: reader.read });
 
     let loads = 0;
     image.addEventListener('chunkLoad', () => {
       loads += 1;
     });
 
-    const [first, second, third] = await Promise.all([
-      makeLoadedChunk(1),
-      makeLoadedChunk(2),
-      makeLoadedChunk(3),
-    ]);
+    const [first, second, third] = await threeChunks();
 
     // Start chunk 3 in slot 0, then move it to slot 2 while decoding.
-    await image.addChunks([third]);
-    await vi.waitFor(() => expect(pending.get(3)).toHaveLength(1));
+    await image.setChunks([third]);
+    await vi.waitFor(() => expect(reader.countFor(3)).toBe(1));
 
-    await image.addChunks([first, second]);
-    await vi.waitFor(() => {
-      expect(pending.get(1)).toHaveLength(1);
-      expect(pending.get(2)).toHaveLength(1);
-      expect(pending.get(3)).toHaveLength(2);
-    });
+    await image.setChunks([first, second, third]);
+    await vi.waitFor(() => expect(reader.total()).toBe(4));
 
     // Complete the current decodes before the stale attempt.
-    pending.get(1)![0]();
-    pending.get(2)![0]();
-    pending.get(3)![1]();
+    reader.settle(1, 0);
+    reader.settle(2, 0);
+    reader.settle(3, 1);
     await vi.waitFor(() => expect(loads).toBe(3));
 
-    pending.get(3)![0]();
+    reader.settle(3, 0);
     await Promise.resolve();
     await Promise.resolve();
     expect(loads).toBe(3);
 
-    expect(sliceOf(image, 0)).toEqual(Array(PIXELS_PER_SLICE).fill(1));
-    expect(sliceOf(image, 1)).toEqual(Array(PIXELS_PER_SLICE).fill(2));
-    expect(sliceOf(image, 2)).toEqual(Array(PIXELS_PER_SLICE).fill(3));
+    expect(sliceOf(image, 0)).toEqual(filledWith(1));
+    expect(sliceOf(image, 1)).toEqual(filledWith(2));
+    expect(sliceOf(image, 2)).toEqual(filledWith(3));
 
     image.dispose();
   });
 
   it('does not let a stale success overwrite a replacement failure', async () => {
-    // Hold each decode independently by its pixel value.
-    const pending = new Map<number, Array<(err?: Error) => void>>();
-    const deferredRead: DicomChunkImageInit['readDicomImage'] = async (
-      file
-    ) => {
-      const value = Number(await file.text());
-      return new Promise((resolve, reject) => {
-        const settlers = pending.get(value) ?? [];
-        settlers.push((err) => {
-          if (err) reject(err);
-          else
-            resolve({
-              image: {
-                size: [COLUMNS, ROWS, 1],
-                data: new Uint16Array(PIXELS_PER_SLICE).fill(value),
-                imageType: { components: 1 },
-              },
-            });
-        });
-        pending.set(value, settlers);
-      });
-    };
-
-    const image = new DicomChunkImage({
-      splitAndSort: splitAndSortByPosition,
-      readDicomImage: deferredRead,
-    });
+    const reader = deferredReader();
+    const image = new DicomChunkImage({ readDicomImage: reader.read });
 
     const errors: number[] = [];
     image.addEventListener('chunkError', ({ chunk }) => {
       errors.push(zOf(chunk));
     });
 
-    const [first, second, third] = await Promise.all([
-      makeLoadedChunk(1),
-      makeLoadedChunk(2),
-      makeLoadedChunk(3),
-    ]);
+    const [first, second, third] = await threeChunks();
 
     // Start chunk 3 in slot 0, then move it to slot 2 while decoding.
-    await image.addChunks([third]);
-    await vi.waitFor(() => expect(pending.get(3)).toHaveLength(1));
+    await image.setChunks([third]);
+    await vi.waitFor(() => expect(reader.countFor(3)).toBe(1));
 
-    await image.addChunks([first, second]);
-    await vi.waitFor(() => expect(pending.get(3)).toHaveLength(2));
+    await image.setChunks([first, second, third]);
+    await vi.waitFor(() => expect(reader.countFor(3)).toBe(2));
 
-    pending.get(1)![0]();
-    pending.get(2)![0]();
+    reader.settle(1, 0);
+    reader.settle(2, 0);
     await vi.waitFor(() =>
       expect(image.getChunkStatuses()[1]).toBe(ChunkStatus.Loaded)
     );
 
     // Fail the attempt for the current allocation.
-    pending.get(3)![1](new Error('replacement decode failed'));
+    reader.settle(3, 1, new Error('replacement decode failed'));
     await vi.waitFor(() => expect(errors).toEqual([3]));
 
     expect(image.getChunkStatuses()).toEqual([
@@ -406,134 +450,216 @@ describe('DicomChunkImage', () => {
       ChunkStatus.Loaded,
       ChunkStatus.Errored,
     ]);
-    expect(sliceOf(image, 0)).toEqual(Array(PIXELS_PER_SLICE).fill(1));
+    expect(sliceOf(image, 0)).toEqual(filledWith(1));
 
     // A late success from the previous allocation must be ignored.
-    pending.get(3)![0]();
+    reader.settle(3, 0);
     await Promise.resolve();
     await Promise.resolve();
     expect(image.getChunkStatuses()[2]).toBe(ChunkStatus.Errored);
-    expect(sliceOf(image, 2)).toEqual(Array(PIXELS_PER_SLICE).fill(0));
+    expect(sliceOf(image, 2)).toEqual(filledWith(0));
 
     image.dispose();
   });
 
   it('does not let a stale failure overwrite a replacement success', async () => {
-    const pending = new Map<number, Array<(err?: Error) => void>>();
-    const deferredRead: DicomChunkImageInit['readDicomImage'] = async (
-      file
-    ) => {
-      const value = Number(await file.text());
-      return new Promise((resolve, reject) => {
-        const settlers = pending.get(value) ?? [];
-        settlers.push((err) => {
-          if (err) reject(err);
-          else
-            resolve({
-              image: {
-                size: [COLUMNS, ROWS, 1],
-                data: new Uint16Array(PIXELS_PER_SLICE).fill(value),
-                imageType: { components: 1 },
-              },
-            });
-        });
-        pending.set(value, settlers);
-      });
-    };
-
-    const image = new DicomChunkImage({
-      splitAndSort: splitAndSortByPosition,
-      readDicomImage: deferredRead,
-    });
+    const reader = deferredReader();
+    const image = new DicomChunkImage({ readDicomImage: reader.read });
 
     const errors: number[] = [];
     image.addEventListener('chunkError', ({ chunk }) => {
       errors.push(zOf(chunk));
     });
 
-    const [first, second, third] = await Promise.all([
-      makeLoadedChunk(1),
-      makeLoadedChunk(2),
-      makeLoadedChunk(3),
-    ]);
+    const [first, second, third] = await threeChunks();
 
-    await image.addChunks([third]);
-    await vi.waitFor(() => expect(pending.get(3)).toHaveLength(1));
+    await image.setChunks([third]);
+    await vi.waitFor(() => expect(reader.countFor(3)).toBe(1));
 
-    await image.addChunks([first, second]);
-    await vi.waitFor(() => expect(pending.get(3)).toHaveLength(2));
+    await image.setChunks([first, second, third]);
+    await vi.waitFor(() => expect(reader.countFor(3)).toBe(2));
 
-    pending.get(1)![0]();
-    pending.get(2)![0]();
-    pending.get(3)![1]();
+    reader.settle(1, 0);
+    reader.settle(2, 0);
+    reader.settle(3, 1);
     await vi.waitFor(() =>
-      expect(image.getChunkStatuses()).toEqual([
-        ChunkStatus.Loaded,
-        ChunkStatus.Loaded,
-        ChunkStatus.Loaded,
-      ])
+      expect(image.getChunkStatuses()).toEqual(allLoaded(3))
     );
 
     // A late failure from the previous allocation must be ignored.
-    pending.get(3)![0](new Error('stale decode failed'));
+    reader.settle(3, 0, new Error('stale decode failed'));
     await Promise.resolve();
     await Promise.resolve();
     expect(errors).toEqual([]);
     expect(image.getChunkStatuses()[2]).toBe(ChunkStatus.Loaded);
-    expect(sliceOf(image, 2)).toEqual(Array(PIXELS_PER_SLICE).fill(3));
+    expect(sliceOf(image, 2)).toEqual(filledWith(3));
 
     image.dispose();
   });
 
   it('reports a reallocated chunk as loading until its slice is rewritten', async () => {
-    const pending: Array<() => void> = [];
-    const deferredRead: DicomChunkImageInit['readDicomImage'] = async (
-      file
-    ) => {
-      const value = Number(await file.text());
-      return new Promise((resolve) => {
-        pending.push(() =>
-          resolve({
-            image: {
-              size: [COLUMNS, ROWS, 1],
-              data: new Uint16Array(PIXELS_PER_SLICE).fill(value),
-              imageType: { components: 1 },
-            },
-          })
-        );
-      });
-    };
+    const reader = deferredReader();
+    const image = new DicomChunkImage({ readDicomImage: reader.read });
 
-    const image = new DicomChunkImage({
-      splitAndSort: splitAndSortByPosition,
-      readDicomImage: deferredRead,
-    });
+    const [first, second] = await threeChunks();
 
-    const [first, second] = await Promise.all([
-      makeLoadedChunk(1),
-      makeLoadedChunk(2),
-    ]);
-
-    await image.addChunks([first]);
-    await vi.waitFor(() => expect(pending).toHaveLength(1));
-    pending[0]();
+    await image.setChunks([first]);
+    await vi.waitFor(() => expect(reader.total()).toBe(1));
+    reader.settle(1, 0);
     await vi.waitFor(() => expect(image.status.value).toBe('complete'));
 
     // Reallocation cleared chunk 1, and neither replacement decode has run.
-    await image.addChunks([second]);
+    await image.setChunks([first, second]);
 
     expect(image.getChunkStatuses()).toEqual([
       ChunkStatus.Loading,
       ChunkStatus.Loading,
     ]);
     expect(image.status.value).toBe('incomplete');
-    expect(sliceOf(image, 0)).toEqual(Array(PIXELS_PER_SLICE).fill(0));
+    expect(sliceOf(image, 0)).toEqual(filledWith(0));
 
-    await vi.waitFor(() => expect(pending).toHaveLength(3));
-    pending.slice(1).forEach((settle) => settle());
+    await vi.waitFor(() => expect(reader.total()).toBe(3));
+    reader.settle(1, 1);
+    reader.settleAll(2);
     await vi.waitFor(() => expect(image.status.value).toBe('complete'));
-    expect(sliceOf(image, 0)).toEqual(Array(PIXELS_PER_SLICE).fill(1));
-    expect(sliceOf(image, 1)).toEqual(Array(PIXELS_PER_SLICE).fill(2));
+    expect(sliceOf(image, 0)).toEqual(filledWith(1));
+    expect(sliceOf(image, 1)).toEqual(filledWith(2));
+
+    image.dispose();
+  });
+
+  it('thumbnails the middle slice out of the volume buffer', async () => {
+    const reader = countingReader(readDicomImage);
+    const encoder = capturingEncoder();
+    const image = new DicomChunkImage({
+      readDicomImage: reader.read,
+      encodeThumbnail: encoder.encodeThumbnail,
+    });
+    const chunks = await threeChunks();
+
+    await image.setChunks(chunks);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(3))
+    );
+    const decodes = reader.files.length;
+
+    const uri = await image.getThumbnail();
+
+    // Reading the buffer means no second decode of the middle chunk.
+    expect(reader.files).toHaveLength(decodes);
+    expect(encoder.slices).toHaveLength(1);
+    expect(encoder.slices[0]).toEqual(
+      sliceToThumbnail({
+        data: sliceOf(image, 1),
+        width: COLUMNS,
+        height: ROWS,
+        range: scalarRange(image),
+      })
+    );
+    expect(uri).toBe(`uri:${Array.from(encoder.slices[0].data).join(',')}`);
+
+    image.dispose();
+  });
+
+  it('windows a multi component thumbnail on the component it reads', async () => {
+    const OTHER_COMPONENT = 1000;
+    const readRgbImage: DicomChunkImageInit['readDicomImage'] = async (
+      file
+    ) => {
+      const value = Number(await file.text()) * 100;
+      return {
+        image: {
+          size: [COLUMNS, ROWS, 1],
+          data: Uint16Array.from(
+            { length: PIXELS_PER_SLICE * 3 },
+            (_, index) => (index % 3 === 0 ? value : OTHER_COMPONENT)
+          ),
+          imageType: { components: 3 },
+        },
+      };
+    };
+
+    const encoder = capturingEncoder();
+    const image = new DicomChunkImage({
+      readDicomImage: readRgbImage,
+      encodeThumbnail: encoder.encodeThumbnail,
+    });
+    const chunks = await Promise.all(
+      [1, 2, 3].map((z) => makeLoadedChunk(z, { [Tags.SamplesPerPixel]: '3' }))
+    );
+
+    await image.setChunks(chunks);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(3))
+    );
+
+    await image.getThumbnail();
+
+    // Component 0 runs 100 to 300 across the volume, so the middle slice's 200
+    // is mid grey. The vector magnitude range would clamp it to black.
+    expect(Array.from(encoder.slices[0].data)).toEqual([128, 128, 128, 128]);
+
+    image.dispose();
+  });
+
+  it('thumbnails the new middle slice after its membership changes', async () => {
+    const encoder = capturingEncoder();
+    const image = new DicomChunkImage({
+      readDicomImage,
+      encodeThumbnail: encoder.encodeThumbnail,
+    });
+    const [first, second, third] = await threeChunks();
+
+    await image.setChunks([first, second, third]);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(3))
+    );
+    await image.getThumbnail();
+
+    await image.setChunks([first, third]);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(2))
+    );
+    await image.getThumbnail();
+
+    expect(encoder.slices).toHaveLength(2);
+    expect(encoder.slices[1]).toEqual(
+      sliceToThumbnail({
+        data: sliceOf(image, 1),
+        width: COLUMNS,
+        height: ROWS,
+        range: scalarRange(image),
+      })
+    );
+
+    image.dispose();
+  });
+
+  it('thumbnails from the chunk itself before its slice is decoded', async () => {
+    const reader = deferredReader();
+    const encoder = capturingEncoder();
+    const image = new DicomChunkImage({
+      readDicomImage: reader.read,
+      encodeThumbnail: encoder.encodeThumbnail,
+    });
+    const chunks = await threeChunks();
+
+    await image.setChunks(chunks);
+    await vi.waitFor(() => expect(reader.countFor(2)).toBe(1));
+    expect(image.getChunkStatuses()[1]).not.toBe(ChunkStatus.Loaded);
+
+    const thumbnail = image.getThumbnail();
+    // The middle chunk's own bytes are decoded for the thumbnail.
+    await vi.waitFor(() => expect(reader.countFor(2)).toBe(2));
+    reader.settleAll(2);
+
+    expect(await thumbnail).toBe(
+      `uri:${Array.from(encoder.slices[0].data).join(',')}`
+    );
+    expect(encoder.slices[0].width).toBe(COLUMNS);
+    expect(encoder.slices[0].height).toBe(ROWS);
+    const decoded = await Promise.all(reader.files.map((f) => f.text()));
+    expect(decoded.sort()).toEqual(['1', '2', '2', '3']);
 
     image.dispose();
   });

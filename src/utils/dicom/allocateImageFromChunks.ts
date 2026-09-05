@@ -1,4 +1,5 @@
 import { Chunk } from '@/src/core/streaming/chunk';
+import { Maybe } from '@/src/types';
 import { NAME_TO_TAG } from '@/src/core/dicomTags';
 import {
   getChunkMetadata,

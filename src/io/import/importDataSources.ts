@@ -42,10 +42,14 @@ import handleDicomStream from '@/src/io/import/processors/handleDicomStream';
 import { FILE_EXT_TO_MIME } from '@/src/io/mimeTypes';
 import { asyncSelect } from '@/src/utils/asyncSelect';
 import { evaluateChain, Skip } from '@/src/utils/evaluateChain';
-import { ensureError, nonNullable, partition } from '@/src/utils';
+import { ensureError, partition } from '@/src/utils';
 import { Chunk } from '@/src/core/streaming/chunk';
 import { useDatasetStore } from '@/src/store/datasets';
-import { useDICOMStore } from '@/src/store/datasets-dicom';
+import {
+  PartialImportError,
+  useDICOMStore,
+  type ImportChunksResult,
+} from '@/src/store/datasets-dicom';
 import { useMessageStore } from '@/src/store/messages';
 
 const unhandledResource: ImportHandler = (dataSource) => {
@@ -105,35 +109,109 @@ export function buildStateIDToStoreID(
   );
 }
 
-async function importDicomChunkSources(sources: ChunkSource[]) {
+// A chunk outlives the batch that brought it: a replan can move a member into
+// another collection, whose provenance must still name where that byte came
+// from. Weak keys let a released chunk take its entry with it.
+const chunkToDataSource = new WeakMap<Chunk, ChunkSource>();
+
+/**
+ * A DICOM import where at least one series failed. The loadables the series
+ * that did commit produced ride along, because their datasets exist whether or
+ * not a sibling series threw.
+ */
+export class PartialDicomImportError extends Error {
+  readonly loadables: LoadableResult[];
+
+  // Only the sources of the series that failed, so a committed series is not
+  // reported as loaded and failed at once.
+  readonly failedSources: ChunkSource[];
+
+  constructor(
+    cause: Error,
+    loadables: LoadableResult[],
+    failedSources: ChunkSource[]
+  ) {
+    super(cause.message);
+    this.name = 'PartialDicomImportError';
+    this.cause = cause;
+    this.loadables = loadables;
+    this.failedSources = failedSources;
+  }
+}
+
+const reconcileImportedChunks = ({
+  volumes,
+  dissolved,
+}: ImportChunksResult) => {
+  // A replan folded these collections into others, so the datasets an earlier
+  // import created for them no longer describe anything loaded.
+  const datasetStore = useDatasetStore();
+  dissolved.forEach((id) => datasetStore.remove(id));
+
+  // Every member reports back, so a collection that gained a member from a
+  // dissolved one carries its provenance too.
+  return Object.entries(volumes).map(([id, chunks]) =>
+    asLoadableResult(
+      id,
+      {
+        type: 'collection',
+        sources: chunks
+          .map((chunk) => chunkToDataSource.get(chunk))
+          .filter((src): src is ChunkSource => src !== undefined),
+      },
+      'image'
+    )
+  );
+};
+
+export async function importDicomChunkSources(
+  sources: ChunkSource[],
+  importChunks = (chunks: Chunk[]) => useDICOMStore().importChunks(chunks)
+) {
   if (sources.length === 0) return [];
 
-  const volumeChunks = await useDICOMStore().importChunks(
-    sources.map((src) => src.chunk)
+  sources.forEach((src) => chunkToDataSource.set(src.chunk, src));
+
+  const imported = await importChunks(sources.map((src) => src.chunk)).catch(
+    (err) => {
+      if (!(err instanceof PartialImportError)) throw err;
+      throw new PartialDicomImportError(
+        ensureError(err.cause),
+        reconcileImportedChunks(err.committed),
+        err.failed
+          .map((chunk) => chunkToDataSource.get(chunk))
+          .filter((src): src is ChunkSource => src !== undefined)
+      );
+    }
   );
 
-  // this is used to reconstruct the ChunkSource list
-  const chunkToDataSource = new Map<Chunk, ChunkSource>();
-  sources.forEach((src) => {
-    chunkToDataSource.set(src.chunk, src);
-  });
+  return reconcileImportedChunks(imported);
+}
 
-  // A volume can hold chunks imported by an earlier call (the store re-splits
-  // a series over everything imported so far); this call's loadables cover
-  // only the chunks it carried in.
-  return Object.entries(volumeChunks).flatMap(([id, chunks]) => {
-    const volumeSources = chunks
-      .map((chunk) => chunkToDataSource.get(chunk))
-      .filter(nonNullable);
-    if (volumeSources.length === 0) return [];
+/**
+ * Imports a drained queue's DICOM chunks. The series that committed are loaded,
+ * so their datasets are reported beside a failure rather than lost with it, and
+ * only the sources of the series that failed are blamed for it.
+ */
+async function importDicomResults(
+  sources: ChunkSource[]
+): Promise<ImportDataSourcesResult[]> {
+  try {
+    return await importDicomChunkSources(sources);
+  } catch (err) {
+    const partial = err instanceof PartialDicomImportError ? err : null;
+    const failed = partial?.failedSources.length
+      ? partial.failedSources
+      : sources;
+    const errorSource =
+      failed.length === 1
+        ? failed[0]
+        : ({ type: 'collection', sources: failed } as DataSource);
     return [
-      asLoadableResult(
-        id,
-        { type: 'collection', sources: volumeSources },
-        'image'
-      ),
+      ...(partial?.loadables ?? []),
+      asErrorResult(ensureError(err), errorSource),
     ];
-  });
+  }
 }
 
 type ImportPolicy = 'application' | 'volume-data';
@@ -266,16 +344,7 @@ async function importDataSourcesWithPolicy(
       src.type === 'chunk' && src.mime === FILE_EXT_TO_MIME.dcm
   );
 
-  try {
-    const dicomResults = await importDicomChunkSources(dicomChunkSources);
-    results.push(...dicomResults);
-  } catch (err) {
-    const errorSource =
-      dicomChunkSources.length === 1
-        ? dicomChunkSources[0]
-        : ({ type: 'collection', sources: dicomChunkSources } as DataSource);
-    results.push(asErrorResult(ensureError(err), errorSource));
-  }
+  results.push(...(await importDicomResults(dicomChunkSources)));
 
   const loadableResults = results.filter(
     (r): r is LoadableResult => r.type === 'data'

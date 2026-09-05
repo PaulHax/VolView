@@ -1,0 +1,390 @@
+/**
+ * Facts read once per instance from a chunk's metadata. Plain data: the planner
+ * never sees a Chunk, a store, or an itk-wasm task.
+ */
+export type InstanceFacts = {
+  // Identity. Instances without a SOP Instance UID are never deduplicated.
+  sopInstanceUid: string | null;
+  seriesInstanceUid: string | null;
+
+  // Hard partition facts, compared for equality.
+  seriesNumber: string | null;
+  sequenceName: string | null;
+  sliceThickness: string | null;
+  seriesDate: string | null;
+  rows: string | null;
+  columns: string | null;
+  samplesPerPixel: string | null;
+  numberOfFrames: string | null;
+
+  // Geometry. Any of these may be unreadable.
+  orientation: number[] | null;
+  position: number[] | null;
+  projectedPosition: number | null;
+  pixelSpacing: number[] | null;
+
+  // Ordering fallback.
+  instanceNumber: number | null;
+};
+
+export type CollectionKey = {
+  seriesKey: string;
+  parts: Array<[string, string | null]>;
+};
+
+export type MemberOrder = 'spatial' | 'instance-number' | 'input';
+
+export type DicomCollection = {
+  key: CollectionKey;
+  members: InstanceFacts[];
+  order: MemberOrder;
+  diagnostics: string[];
+};
+
+export type DicomCollectionPlan = {
+  collections: DicomCollection[];
+};
+
+export type PlanInput = {
+  seriesKey: string;
+  instances: InstanceFacts[];
+};
+
+// Matches dicom.cpp's EPSILON: two orientation rows agree when their dot
+// product is at least 1 minus this. One sided, as dicom.cpp is, so cosines
+// that are slightly over normalized still agree with themselves.
+export const ORIENTATION_TOLERANCE = 1e-4;
+
+// The hard facts, in the order they appear in a collection key.
+export const HARD_FACT_RULES = [
+  'seriesNumber',
+  'sequenceName',
+  'sliceThickness',
+  'seriesDate',
+  'rows',
+  'columns',
+  'samplesPerPixel',
+  'numberOfFrames',
+] as const;
+
+export const ORIENTATION_RULE = 'orientation';
+
+const ANONYMOUS = 'an instance with no SOP Instance UID';
+
+const label = (instance: InstanceFacts) =>
+  instance.sopInstanceUid === null
+    ? ANONYMOUS
+    : `instance ${instance.sopInstanceUid}`;
+
+// Nulls sort last so a missing identity never becomes a bucket representative.
+const compareUid = (left: string | null, right: string | null) => {
+  if (left === right) return 0;
+  if (left === null) return 1;
+  if (right === null) return -1;
+  return left < right ? -1 : 1;
+};
+
+const compareBySopUid = (left: InstanceFacts, right: InstanceFacts) =>
+  compareUid(left.sopInstanceUid, right.sopInstanceUid);
+
+const readableNumber = (value: number | null): value is number =>
+  value !== null && Number.isFinite(value);
+
+const compareText = (left: string, right: string) => {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+};
+
+// Unreadable numbers sort last so they never win a tie-break.
+const compareNumber = (left: number | null, right: number | null) => {
+  if (!readableNumber(left)) return readableNumber(right) ? 1 : 0;
+  if (!readableNumber(right)) return -1;
+  return left === right ? 0 : left - right;
+};
+
+// JSON collapses NaN and Infinity onto null; keep them apart so the signature
+// below separates every pair of unequal instances.
+const encodeFact = (_key: string, value: unknown) =>
+  typeof value === 'number' && !Number.isFinite(value) ? String(value) : value;
+
+const contentSignature = (instance: InstanceFacts) =>
+  JSON.stringify(
+    [
+      instance.sopInstanceUid,
+      instance.seriesInstanceUid,
+      ...HARD_FACT_RULES.map((rule) => instance[rule]),
+      instance.orientation,
+      instance.position,
+      instance.projectedPosition,
+      instance.pixelSpacing,
+      instance.instanceNumber,
+    ],
+    encodeFact
+  );
+
+/**
+ * Total order over instances that share a SOP Instance UID comparison, which
+ * happens whenever two instances both lack one.
+ */
+const compareByContent = (left: InstanceFacts, right: InstanceFacts) =>
+  compareText(
+    JSON.stringify(left.orientation),
+    JSON.stringify(right.orientation)
+  ) ||
+  compareNumber(left.projectedPosition, right.projectedPosition) ||
+  compareNumber(left.instanceNumber, right.instanceNumber) ||
+  compareText(contentSignature(left), contentSignature(right));
+
+// Sorting on the UID alone ties every anonymous instance, leaving the greedy
+// orientation walk at the mercy of input order.
+const compareWalkOrder = (left: InstanceFacts, right: InstanceFacts) =>
+  compareBySopUid(left, right) || compareByContent(left, right);
+
+const readableOrientation = (value: number[] | null): value is number[] =>
+  value !== null &&
+  value.length === 6 &&
+  value.every((v) => Number.isFinite(v));
+
+const dot = (left: number[], right: number[], offset: number) =>
+  left[offset] * right[offset] +
+  left[offset + 1] * right[offset + 1] +
+  left[offset + 2] * right[offset + 2];
+
+const orientationsAgree = (left: number[], right: number[]) =>
+  dot(left, right, 0) >= 1 - ORIENTATION_TOLERANCE &&
+  dot(left, right, 3) >= 1 - ORIENTATION_TOLERANCE;
+
+const orientationValue = (orientation: number[]) =>
+  orientation.map(String).join(',');
+
+const canonicalKey = (key: CollectionKey) =>
+  JSON.stringify([key.seriesKey, key.parts]);
+
+/** Last occurrence of a SOP Instance UID wins, so the newest batch survives. */
+const dedupe = (instances: InstanceFacts[]) => {
+  const lastIndex = new Map<string, number>();
+  instances.forEach((instance, index) => {
+    if (instance.sopInstanceUid !== null)
+      lastIndex.set(instance.sopInstanceUid, index);
+  });
+
+  const kept = instances.filter(
+    (instance, index) =>
+      instance.sopInstanceUid === null ||
+      lastIndex.get(instance.sopInstanceUid) === index
+  );
+
+  const droppedCounts = new Map<string, number>();
+  instances.forEach((instance, index) => {
+    const uid = instance.sopInstanceUid;
+    if (uid === null || lastIndex.get(uid) === index) return;
+    droppedCounts.set(uid, (droppedCounts.get(uid) ?? 0) + 1);
+  });
+
+  const diagnostics = new Map<InstanceFacts, string>();
+  kept.forEach((instance) => {
+    const uid = instance.sopInstanceUid;
+    const dropped = uid === null ? 0 : (droppedCounts.get(uid) ?? 0);
+    if (dropped > 0)
+      diagnostics.set(
+        instance,
+        `dropped ${dropped} earlier copy of instance ${uid}`
+      );
+  });
+
+  return { kept, diagnostics };
+};
+
+const hardFactSignature = (instance: InstanceFacts) =>
+  JSON.stringify(HARD_FACT_RULES.map((rule) => instance[rule]));
+
+const hardFactParts = (instance: InstanceFacts) =>
+  HARD_FACT_RULES.map(
+    (rule) => [rule, instance[rule]] as [string, string | null]
+  );
+
+/** Groups preserve input order, both of the groups and of their members. */
+const groupBy = (
+  instances: InstanceFacts[],
+  signature: (instance: InstanceFacts) => string
+) => {
+  const groups = new Map<string, InstanceFacts[]>();
+  instances.forEach((instance) => {
+    const id = signature(instance);
+    const existing = groups.get(id);
+    if (existing) existing.push(instance);
+    else groups.set(id, [instance]);
+  });
+  return [...groups.values()];
+};
+
+/**
+ * Greedy bucketing walked in SOP Instance UID then content order, so the
+ * representative whose cosines become the key, and the membership the greedy
+ * walk produces, do not depend on input order.
+ */
+const bucketByOrientation = (instances: InstanceFacts[]) => {
+  const references: number[][] = [];
+  const bucketOf = new Map<InstanceFacts, number>();
+
+  [...instances].sort(compareWalkOrder).forEach((instance) => {
+    const { orientation } = instance;
+    if (!readableOrientation(orientation)) {
+      bucketOf.set(instance, -1);
+      return;
+    }
+    const found = references.findIndex((reference) =>
+      orientationsAgree(reference, orientation)
+    );
+    bucketOf.set(
+      instance,
+      found >= 0 ? found : references.push(orientation) - 1
+    );
+  });
+
+  const buckets = references.map((reference) => ({
+    value: orientationValue(reference) as string | null,
+    members: [] as InstanceFacts[],
+  }));
+  const unreadable = { value: null, members: [] as InstanceFacts[] };
+
+  instances.forEach((instance) => {
+    const index = bucketOf.get(instance) ?? -1;
+    const bucket = index === -1 ? unreadable : buckets[index];
+    bucket.members.push(instance);
+  });
+
+  return unreadable.members.length > 0 ? [...buckets, unreadable] : buckets;
+};
+
+// Tie-breaks on content as well as on the UID, so anonymous members that tie
+// on the primary key still order by value rather than by input position.
+const comparePosition = (left: InstanceFacts, right: InstanceFacts) =>
+  (left.projectedPosition as number) - (right.projectedPosition as number) ||
+  compareWalkOrder(left, right);
+
+const compareInstanceNumber = (left: InstanceFacts, right: InstanceFacts) =>
+  (left.instanceNumber as number) - (right.instanceNumber as number) ||
+  compareWalkOrder(left, right);
+
+/** Never inherits input order silently: the order actually used is recorded. */
+const orderMembers = (members: InstanceFacts[]) => {
+  if (members.every((m) => readableNumber(m.projectedPosition)))
+    return {
+      members: [...members].sort(comparePosition),
+      order: 'spatial' as MemberOrder,
+      diagnostics: [] as string[],
+    };
+
+  const positionless = (ordered: InstanceFacts[]) =>
+    ordered
+      .filter((m) => !readableNumber(m.projectedPosition))
+      .map((m) => `${label(m)} has no readable position`);
+
+  if (members.every((m) => readableNumber(m.instanceNumber))) {
+    const ordered = [...members].sort(compareInstanceNumber);
+    return {
+      members: ordered,
+      order: 'instance-number' as MemberOrder,
+      diagnostics: positionless(ordered),
+    };
+  }
+
+  return {
+    members: [...members],
+    order: 'input' as MemberOrder,
+    diagnostics: [
+      ...positionless(members),
+      ...members
+        .filter((m) => !readableNumber(m.instanceNumber))
+        .map((m) => `${label(m)} has no readable instance number`),
+    ],
+  };
+};
+
+/** Occurrences per instance, so an input holding one object twice needs two. */
+const tally = (instances: InstanceFacts[]) => {
+  const counts = new Map<InstanceFacts, number>();
+  instances.forEach((instance) =>
+    counts.set(instance, (counts.get(instance) ?? 0) + 1)
+  );
+  return counts;
+};
+
+/**
+ * Throws when the collections do not hold every instance as many times as the
+ * input does, when they hold one the input never gave, or when two collections
+ * share a key.
+ */
+export function validateCollections(
+  instances: InstanceFacts[],
+  collections: DicomCollection[]
+) {
+  const expected = tally(instances);
+  const placed = tally(collections.flatMap((collection) => collection.members));
+
+  expected.forEach((count, instance) => {
+    const found = placed.get(instance) ?? 0;
+    if (found === count) return;
+    if (found === 0)
+      throw new Error(`${label(instance)} landed in no collection`);
+    throw new Error(
+      `${label(instance)} landed in ${found} collections, expected ${count}`
+    );
+  });
+
+  placed.forEach((_count, instance) => {
+    if (!expected.has(instance))
+      throw new Error(
+        `${label(instance)} landed in a collection without being an input`
+      );
+  });
+
+  const seen = new Set<string>();
+  collections.forEach((collection) => {
+    const encoded = canonicalKey(collection.key);
+    if (seen.has(encoded))
+      throw new Error(`two collections share the key ${encoded}`);
+    seen.add(encoded);
+  });
+}
+
+export function planDicomCollections(input: PlanInput) {
+  const { kept, diagnostics: dedupeDiagnostics } = dedupe(input.instances);
+
+  const collections = groupBy(kept, hardFactSignature)
+    .flatMap((group) =>
+      bucketByOrientation(group).map((bucket) => ({ group, bucket }))
+    )
+    .map(({ group, bucket }) => {
+      const ordered = orderMembers(bucket.members);
+      const key: CollectionKey = {
+        seriesKey: input.seriesKey,
+        parts: [...hardFactParts(group[0]), [ORIENTATION_RULE, bucket.value]],
+      };
+      return {
+        key,
+        members: ordered.members,
+        order: ordered.order,
+        diagnostics: [
+          ...ordered.members.flatMap((member) => {
+            const dropped = dedupeDiagnostics.get(member);
+            return dropped ? [dropped] : [];
+          }),
+          ...(bucket.value === null
+            ? ordered.members.map(
+                (member) => `${label(member)} has no readable orientation`
+              )
+            : []),
+          ...ordered.diagnostics,
+        ],
+      };
+    })
+    .sort((left, right) =>
+      canonicalKey(left.key) < canonicalKey(right.key) ? -1 : 1
+    );
+
+  validateCollections(kept, collections);
+
+  return { collections };
+}
