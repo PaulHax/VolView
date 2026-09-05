@@ -1,4 +1,8 @@
-import { splitOverlappingAcquisitions } from '@/src/core/dicom/splitOverlappingAcquisitions';
+import {
+  splitOverlappingAcquisitions,
+  type PositionOf,
+} from '@/src/core/dicom/splitOverlappingAcquisitions';
+import { projectOnNormal, sliceNormalOf } from '@/src/core/dicom/instanceFacts';
 
 /**
  * Facts read once per instance from a chunk's metadata. Plain data: the planner
@@ -266,11 +270,19 @@ const bucketByOrientation = (instances: InstanceFacts[]) => {
     );
   });
 
+  // One normal for the whole bucket: two members agree within the tolerance,
+  // so projecting each on its own cosines would spread one slice plane over
+  // several positions.
   const buckets = references.map((reference) => ({
     value: orientationValue(reference) as string | null,
+    normal: sliceNormalOf(reference) as number[] | null,
     members: [] as InstanceFacts[],
   }));
-  const unreadable = { value: null, members: [] as InstanceFacts[] };
+  const unreadable = {
+    value: null,
+    normal: null,
+    members: [] as InstanceFacts[],
+  };
 
   instances.forEach((instance) => {
     const index = bucketOf.get(instance) ?? -1;
@@ -286,29 +298,30 @@ const bucketByOrientation = (instances: InstanceFacts[]) => {
 // places slot i at origin + i * spacing along the normal, so any order that
 // is not monotone in position mirrors or scrambles the volume. Anonymous
 // members that still tie order by content rather than by input position.
-const comparePosition = (left: InstanceFacts, right: InstanceFacts) =>
-  (left.projectedPosition as number) - (right.projectedPosition as number) ||
-  compareNumber(left.instanceNumber, right.instanceNumber) ||
-  compareWalkOrder(left, right);
+const comparePosition =
+  (positionOf: PositionOf) => (left: InstanceFacts, right: InstanceFacts) =>
+    (positionOf(left) as number) - (positionOf(right) as number) ||
+    compareNumber(left.instanceNumber, right.instanceNumber) ||
+    compareWalkOrder(left, right);
 
 const compareInstanceNumber = (left: InstanceFacts, right: InstanceFacts) =>
   (left.instanceNumber as number) - (right.instanceNumber as number) ||
   compareWalkOrder(left, right);
 
 /** Never inherits input order silently: the order actually used is recorded. */
-const orderMembers = (members: InstanceFacts[]) => {
+const orderMembers = (members: InstanceFacts[], positionOf: PositionOf) => {
   const numbered = members.every((m) => readableNumber(m.instanceNumber));
 
-  if (members.every((m) => readableNumber(m.projectedPosition)))
+  if (members.every((m) => readableNumber(positionOf(m))))
     return {
-      members: [...members].sort(comparePosition),
+      members: [...members].sort(comparePosition(positionOf)),
       order: 'spatial' as MemberOrder,
       diagnostics: [] as string[],
     };
 
   const positionless = (ordered: InstanceFacts[]) =>
     ordered
-      .filter((m) => !readableNumber(m.projectedPosition))
+      .filter((m) => !readableNumber(positionOf(m)))
       .map((m) => `${label(m)} has no readable position`);
 
   if (numbered) {
@@ -384,17 +397,23 @@ export function planDicomCollections(input: PlanInput) {
 
   const collections = groupBy(kept, hardFactSignature)
     .flatMap((group) =>
-      bucketByOrientation(group).map((bucket) => ({ group, bucket }))
-    )
-    .flatMap(({ group, bucket }) =>
-      splitOverlappingAcquisitions(bucket.members).map((part) => ({
+      bucketByOrientation(group).map((bucket) => ({
         group,
         bucket,
+        positionOf: ((member) =>
+          projectOnNormal(bucket.normal, member.position)) as PositionOf,
+      }))
+    )
+    .flatMap(({ group, bucket, positionOf }) =>
+      splitOverlappingAcquisitions(bucket.members, positionOf).map((part) => ({
+        group,
+        bucket,
+        positionOf,
         part,
       }))
     )
-    .map(({ group, bucket, part }) => {
-      const ordered = orderMembers(part.members);
+    .map(({ group, bucket, positionOf, part }) => {
+      const ordered = orderMembers(part.members, positionOf);
       const key: CollectionKey = {
         seriesKey: input.seriesKey,
         parts: [

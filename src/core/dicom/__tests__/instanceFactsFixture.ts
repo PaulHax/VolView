@@ -15,10 +15,18 @@ export const tiltedOrientation = (theta: number) => [
 export const orientationKeyValue = (orientation: number[]) =>
   orientation.map(String).join(',');
 
-export const makeFacts = (
-  sopInstanceUid: string | null,
-  overrides: Partial<InstanceFacts> = {}
-): InstanceFacts => ({
+// The position and its projection are one fact, so a fixture naming only the
+// projection gets the axial position that produces it.
+const positionFor = (overrides: Partial<InstanceFacts>) => {
+  if ('position' in overrides) return overrides.position ?? null;
+  const projected =
+    'projectedPosition' in overrides ? overrides.projectedPosition : 0;
+  return projected === null || projected === undefined
+    ? null
+    : [0, 0, projected];
+};
+
+const defaults = (sopInstanceUid: string | null): InstanceFacts => ({
   sopInstanceUid,
   seriesInstanceUid: 'series-1',
   seriesNumber: '1',
@@ -38,7 +46,15 @@ export const makeFacts = (
   temporalPositionIdentifier: null,
   echoNumbers: null,
   diffusionBValue: null,
+});
+
+export const makeFacts = (
+  sopInstanceUid: string | null,
+  overrides: Partial<InstanceFacts> = {}
+): InstanceFacts => ({
+  ...defaults(sopInstanceUid),
   ...overrides,
+  position: positionFor(overrides),
 });
 
 export const clone = (value: unknown) => JSON.parse(JSON.stringify(value));

@@ -28,12 +28,17 @@ const numberOf = (metadata: DicomTagValues, tag: string) => {
   return Number.isFinite(value) ? value : null;
 };
 
+// A blank component is absent, not zero: Number('') is 0, which would turn
+// '1\\3' into the readable position [1, 0, 3].
 const vectorOf = (metadata: DicomTagValues, tag: string, length: number) => {
   const text = textOf(metadata, tag);
   if (text === null) return null;
-  const parts = text.split('\\').map((part) => Number(part.trim()));
-  return parts.length === length && parts.every((part) => Number.isFinite(part))
-    ? parts
+  const parts = text.split('\\').map((part) => part.trim());
+  const values = parts.map(Number);
+  return parts.length === length &&
+    parts.every((part) => part.length > 0) &&
+    values.every((value) => Number.isFinite(value))
+    ? values
     : null;
 };
 
@@ -46,19 +51,68 @@ const cross = (left: number[], right: number[]) => [
 const dot = (left: number[], right: number[]) =>
   left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
 
-// The slice normal is the row cosines crossed with the column cosines, which
-// is only the z axis for an axial acquisition.
-const projectOnNormal = (
-  orientation: number[] | null,
-  position: number[] | null
-) =>
-  orientation === null || position === null
+/**
+ * How far a direction cosine may sit from unit length, and a pair of them from
+ * square, before the basis is invalid rather than the printing precision of a
+ * DS value. One part in ten thousand is coarser than the six significant
+ * digits scanners print and finer than any basis worth projecting on.
+ */
+export const DIRECTION_TOLERANCE = 1e-4;
+
+const magnitude = (axis: number[]) => Math.sqrt(dot(axis, axis));
+
+/** Null unless the axis is unit length to within the tolerance. */
+const unitize = (axis: number[]) => {
+  const size = magnitude(axis);
+  return Math.abs(size - 1) > DIRECTION_TOLERANCE
     ? null
-    : dot(cross(orientation.slice(0, 3), orientation.slice(3, 6)), position);
+    : axis.map((component) => component / size);
+};
+
+/**
+ * Row and column cosines, normalized, or null when they are not two unit axes
+ * spanning a plane. A degenerate or skewed basis has no slice normal, so
+ * nothing can be projected on it.
+ */
+const orientationOf = (metadata: DicomTagValues) => {
+  const cosines = vectorOf(metadata, Tags.ImageOrientationPatient, 6);
+  if (cosines === null) return null;
+
+  const row = unitize(cosines.slice(0, 3));
+  const column = unitize(cosines.slice(3, 6));
+  if (row === null || column === null) return null;
+  if (Math.abs(dot(row, column)) > DIRECTION_TOLERANCE) return null;
+
+  return [...row, ...column];
+};
+
+/**
+ * The slice normal of a validated orientation: the row cosines crossed with
+ * the column cosines, which is only the z axis for an axial acquisition.
+ * Already unit length, since the two axes are unit and square.
+ */
+export const sliceNormalOf = (orientation: number[] | null) =>
+  orientation === null
+    ? null
+    : cross(orientation.slice(0, 3), orientation.slice(3, 6));
+
+/** Where a position sits along a slice normal, in mm. */
+export const projectOnNormal = (
+  normal: number[] | null,
+  position: number[] | null
+) => (normal === null || position === null ? null : dot(normal, position));
+
+// A pixel spacing of zero or less places no sample anywhere.
+const pixelSpacingOf = (metadata: DicomTagValues) => {
+  const spacing = vectorOf(metadata, Tags.PixelSpacing, 2);
+  return spacing !== null && spacing.every((value) => value > 0)
+    ? spacing
+    : null;
+};
 
 /** Reads the planner's plain facts out of one instance's tag values. */
 export function readInstanceFacts(metadata: DicomTagValues): InstanceFacts {
-  const orientation = vectorOf(metadata, Tags.ImageOrientationPatient, 6);
+  const orientation = orientationOf(metadata);
   const position = vectorOf(metadata, Tags.ImagePositionPatient, 3);
 
   return {
@@ -74,8 +128,8 @@ export function readInstanceFacts(metadata: DicomTagValues): InstanceFacts {
     numberOfFrames: numericTextOf(metadata, Tags.NumberOfFrames),
     orientation,
     position,
-    projectedPosition: projectOnNormal(orientation, position),
-    pixelSpacing: vectorOf(metadata, Tags.PixelSpacing, 2),
+    projectedPosition: projectOnNormal(sliceNormalOf(orientation), position),
+    pixelSpacing: pixelSpacingOf(metadata),
     instanceNumber: numberOf(metadata, Tags.InstanceNumber),
     acquisitionNumber: numericTextOf(metadata, Tags.AcquisitionNumber),
     temporalPositionIdentifier: numericTextOf(

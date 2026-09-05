@@ -176,6 +176,57 @@ describe('readInstanceFacts', () => {
     expect(facts.projectedPosition).toBeNull();
   });
 
+  it.each([
+    ['a blank component', '1\\\\3'],
+    ['a trailing blank component', '1\\2\\'],
+    ['a whitespace component', '1\\ \\3'],
+  ])('reads a position with %s as unknown, not as a zero', (_case, value) => {
+    const facts = readInstanceFacts(
+      metadata({ [Tags.ImagePositionPatient]: value })
+    );
+    expect(facts.position).toBeNull();
+    expect(facts.projectedPosition).toBeNull();
+  });
+
+  it.each([
+    ['an all zero basis', '0\\0\\0\\0\\0\\0'],
+    ['a zero length row', '0\\0\\0\\0\\1\\0'],
+    ['a row twice unit length', '2\\0\\0\\0\\1\\0'],
+    ['a row and column that are the same axis', '1\\0\\0\\1\\0\\0'],
+    ['a row and column 45 degrees apart', '1\\0\\0\\0.7071\\0.7071\\0'],
+    ['a blank cosine', '1\\0\\0\\0\\\\0'],
+  ])('reads %s as no orientation at all', (_case, value) => {
+    const facts = readInstanceFacts(
+      metadata({ [Tags.ImageOrientationPatient]: value })
+    );
+    expect(facts.orientation).toBeNull();
+    expect(facts.projectedPosition).toBeNull();
+  });
+
+  // A DS value carries a printed decimal, so exact unit length is not on offer.
+  it('normalizes cosines that are within the tolerance of unit length', () => {
+    const facts = readInstanceFacts(
+      metadata({
+        [Tags.ImageOrientationPatient]: '0.99998\\0\\0\\0\\1.00002\\0',
+      })
+    );
+
+    expect(facts.orientation).not.toBeNull();
+    expect(facts.orientation![0]).toBeCloseTo(1, 12);
+    expect(facts.orientation![4]).toBeCloseTo(1, 12);
+    expect(facts.projectedPosition).toBeCloseTo(30, 12);
+  });
+
+  it.each([
+    ['zero', '0\\0.5'],
+    ['negative', '-1\\0.5'],
+    ['blank', '\\0.5'],
+  ])('reads a %s pixel spacing as unknown', (_case, value) => {
+    expect(
+      readInstanceFacts(metadata({ [Tags.PixelSpacing]: value })).pixelSpacing
+    ).toBeNull();
+  });
+
   it('projects the position onto the slice normal, not onto z', () => {
     // Rows run along +y and columns along +z, so the normal is +x.
     const facts = readInstanceFacts(
