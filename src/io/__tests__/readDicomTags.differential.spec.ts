@@ -32,11 +32,19 @@ const itkTags = async (name: string, bytes: Uint8Array) => {
 describe('readDicomTags against the itk-wasm reader', () => {
   it.each(tagReaderCorpus())(
     'reads $name the same way',
-    async ({ name, bytes }) => {
+    async ({ name, bytes, itkDivergence = {} }) => {
       const expected = await itkTags(name, bytes);
       expect(expected.length).toBeGreaterThan(0);
+      // A divergence that no longer holds would silently weaken the comparison.
+      const stale = Object.keys(itkDivergence).filter((tag) => {
+        const itkValue = expected.find(([key]) => key === tag)?.[1];
+        return itkValue === undefined || itkValue === itkDivergence[tag];
+      });
+      expect(stale).toEqual([]);
 
-      expect(await readDicomTags(bytes)).toEqual(expected);
+      expect(await readDicomTags(bytes)).toEqual(
+        expected.map(([tag, value]) => [tag, itkDivergence[tag] ?? value])
+      );
     },
     60000
   );

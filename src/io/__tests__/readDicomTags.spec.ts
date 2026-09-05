@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Tags } from '@/src/core/dicomTags';
+import { readInstanceFacts } from '@/src/core/dicom/instanceFacts';
 import { readDicomTags } from '@/src/io/readDicomTags';
 import {
   buildSlice,
@@ -21,7 +22,10 @@ import {
   UTF8_NAME,
   UTF8_NAME_BYTES,
 } from './readDicomTagsFixtures';
-import { buildSyntheticCineDicom } from '@/tests/specs/syntheticDicom';
+import {
+  buildSyntheticCineDicom,
+  rawElement,
+} from '@/tests/specs/syntheticDicom';
 
 type TagPairs = ReadonlyArray<readonly [string, string]>;
 
@@ -39,6 +43,21 @@ const DIFFUSION_GRADIENT_ORIENTATION = '0018|9089';
 const LUT_FRAME_RANGE = '0028|9459';
 const PIXEL_DATA = '7fe0|0010';
 const SEQUENCE_ITEM = 'fffe|e000';
+const CURRENT_PATIENT_LOCATION = '0038|0300';
+const STUDY_COMMENTS = '0032|4000';
+
+const encodeUtf8 = (text: string) => new TextEncoder().encode(text);
+
+const bytes = (...values: number[]) => new Uint8Array(values);
+
+// A backslash inside an LT is a literal character, not a value delimiter, so it
+// is the one place a JIS X 0201 file can show the yen sign.
+const studyComments = (value: Uint8Array) =>
+  rawElement(0x0032, 0x4000, 'LT', value);
+
+// (0038,0300) is LO, whose value multiplicity is 1-n.
+const patientLocation = (value: Uint8Array) =>
+  rawElement(0x0038, 0x0300, 'LO', value);
 
 const nameFromCharacterSet = async (
   specificCharacterSet: string,
@@ -314,15 +333,86 @@ describe('readDicomTags specific character set', () => {
     ).toBe(MIXED_JIS_NAME);
   });
 
-  it('renders 0x5c as a yen sign when JIS X 0201 is declared', async () => {
+  it('renders 0x5c as a yen sign inside an LT when JIS X 0201 is declared', async () => {
     const tags = await readDicomTags(
       buildSlice({
         specificCharacterSet: 'ISO 2022 IR 13\\ISO 2022 IR 87',
-        patientNameBytes: KATAKANA_NAME_BYTES,
+        extraElements: [studyComments(encodeUtf8('C:\\DICOM'))],
       })
     );
 
-    expect(valueOf(tags, Tags.ImagePositionPatient)).toBe('0\u00a50\u00a50 ');
+    expect(valueOf(tags, STUDY_COMMENTS)).toBe('C:\u00a5DICOM');
+  });
+
+  it('keeps a numeric VR out of the character set conversion', async () => {
+    const tags = await readDicomTags(
+      buildSlice({
+        specificCharacterSet: 'ISO 2022 IR 13\\ISO 2022 IR 87',
+        patientNameBytes: MIXED_JIS_NAME_BYTES,
+        imageOrientationPatient: [1, 0, 0, 0, -1, 0],
+        imagePositionPatient: [1.5, -2, 3],
+        pixelSpacing: [0.5, 0.75],
+      })
+    );
+
+    expect(valueOf(tags, Tags.PatientName)).toBe(MIXED_JIS_NAME);
+    expect(valueOf(tags, Tags.ImageOrientationPatient)).toBe(
+      '1\\0\\0\\0\\-1\\0'
+    );
+    expect(valueOf(tags, Tags.ImagePositionPatient)).toBe('1.5\\-2\\3');
+    expect(valueOf(tags, Tags.PixelSpacing)).toBe('0.5\\0.75');
+    expect(readInstanceFacts(tags)).toMatchObject({
+      orientation: [1, 0, 0, 0, -1, 0],
+      position: [1.5, -2, 3],
+      pixelSpacing: [0.5, 0.75],
+    });
+  });
+
+  it('decodes each value of a multi valued LO on its own', async () => {
+    const latin1 = await readDicomTags(
+      buildSlice({
+        specificCharacterSet: 'ISO_IR 100',
+        extraElements: [
+          patientLocation(
+            bytes(
+              0x42,
+              0xe4,
+              0x63,
+              0x6b,
+              0x65,
+              0x72,
+              0x5c,
+              0x4a,
+              0xf6,
+              0x72,
+              0x67,
+              0x20
+            )
+          ),
+        ],
+      })
+    );
+    const utf8 = await readDicomTags(
+      buildSlice({
+        specificCharacterSet: 'ISO_IR 192',
+        extraElements: [patientLocation(encodeUtf8('\u738b\\\u5c0f\u660e'))],
+      })
+    );
+
+    expect(valueOf(latin1, CURRENT_PATIENT_LOCATION)).toBe(
+      'B\u00e4cker\\J\u00f6rg '
+    );
+    expect(valueOf(latin1, CURRENT_PATIENT_LOCATION)?.split('\\')).toEqual([
+      'B\u00e4cker',
+      'J\u00f6rg ',
+    ]);
+    expect(valueOf(utf8, CURRENT_PATIENT_LOCATION)).toBe(
+      '\u738b\\\u5c0f\u660e'
+    );
+    expect(valueOf(utf8, CURRENT_PATIENT_LOCATION)?.split('\\')).toEqual([
+      '\u738b',
+      '\u5c0f\u660e',
+    ]);
   });
 
   it('decodes ISO_IR 100', async () => {

@@ -354,11 +354,43 @@ const peekSequenceEnd = (dataSet: DicomReadStream, syntax: string) => {
 
 /**
  * dcmjs drops the trailing pad byte that made an element's value length even,
- * which ITK kept. An odd length after rejoining is exactly that dropped pad.
- * UI pads with a null byte, which ITK stripped as well.
+ * which ITK kept. An odd total byte length, delimiters included, is exactly that
+ * dropped pad. UI pads with a null byte, which ITK stripped as well.
  */
-const restorePadByte = (vr: string, raw: string) =>
-  vr !== 'UI' && raw.length % 2 === 1 ? `${raw} ` : raw;
+const restorePadByte = (vr: string, values: string[]) => {
+  const byteLength = values.reduce(
+    (total, value) => total + value.length,
+    values.length - 1
+  );
+  return vr !== 'UI' && byteLength % 2 === 1
+    ? values.map((value, index) =>
+        index === values.length - 1 ? `${value} ` : value
+      )
+    : values;
+};
+
+/** Bytes of a VR the Specific Character Set does not reach are code points. */
+const defaultRepertoire = (raw: string) => raw;
+
+/**
+ * The VRs a Specific Character Set applies to, from PS3.5 6.1.2 and PS3.3
+ * C.12.1.1.2. Every other string VR, DS and IS included, stays in the default
+ * repertoire, so no charset transform can reach a numeric value.
+ */
+const CHARSET_VRS = new Set(['SH', 'LO', 'ST', 'PN', 'LT', 'UC', 'UT']);
+
+/**
+ * Decodes each value on its own and joins afterwards, so the backslash that
+ * separates them is never part of a decoded run.
+ */
+const textValue = (
+  vr: string,
+  values: string[],
+  decode: (raw: string) => string
+) =>
+  restorePadByte(vr, values)
+    .map(CHARSET_VRS.has(vr) ? decode : defaultRepertoire)
+    .join(VALUE_DELIMITER);
 
 const rawValuesOf = (rawValues: unknown) => {
   if (rawValues == null) return [];
@@ -416,12 +448,10 @@ export function readDicomTags(bytes: Uint8Array): Array<[string, string]> {
     charset?.values.map(String).join(VALUE_DELIMITER) ?? ''
   );
 
-  // GDCM converted a value's bytes as one run, delimiters included, so the
-  // values are rejoined before decoding rather than after.
   const pairs = elements.map(({ tag, vr, values }): [string, string] => [
     itkTag(tag),
     values.every((value) => typeof value === 'string')
-      ? decoder(restorePadByte(vr, values.join(VALUE_DELIMITER)))
+      ? textValue(vr, values as string[], decoder)
       : values.map((value) => nonTextValue(vr, value)).join(VALUE_DELIMITER),
   ]);
 

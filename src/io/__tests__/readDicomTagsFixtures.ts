@@ -161,9 +161,15 @@ export const buildSlice = (overrides: Partial<SyntheticSliceOptions> = {}) =>
 
 /**
  * Every shape `tests/specs/syntheticDicom.ts` can emit, one entry per encoding
- * or value-formatting concern the tag reader has to get right.
+ * or value-formatting concern the tag reader has to get right. `itkDivergence`
+ * names the tags where the itk-wasm reader is known to depart from the
+ * standard, with the value this reader returns instead.
  */
-export const tagReaderCorpus = () => [
+export const tagReaderCorpus = (): Array<{
+  name: string;
+  bytes: Uint8Array;
+  itkDivergence?: Record<string, string>;
+}> => [
   { name: 'explicit VR little endian', bytes: buildSlice() },
   {
     name: 'implicit VR little endian',
@@ -284,6 +290,16 @@ export const tagReaderCorpus = () => [
       specificCharacterSet: 'ISO 2022 IR 13\\ISO 2022 IR 87',
       patientNameBytes: KATAKANA_NAME_BYTES,
     }),
+    // GDCM converted every string VR under the declared character set, so its
+    // CS and DS values carry the JIS X 0201 yen sign where the file wrote the
+    // 0x5c value delimiter. PS3.5 6.1.2 limits that conversion to SH, LO, ST,
+    // PN, LT, UC and UT, and the delimiter is never part of a value.
+    itkDivergence: {
+      '0008|0005': 'ISO 2022 IR 13\\ISO 2022 IR 87 ',
+      '0020|0032': '0\\0\\0 ',
+      '0020|0037': '1\\0\\0\\0\\1\\0 ',
+      '0028|0030': '1\\1 ',
+    },
   },
   {
     name: 'multi frame cine',
