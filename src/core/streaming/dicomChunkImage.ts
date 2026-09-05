@@ -197,6 +197,14 @@ export default class DicomChunkImage
   }
 
   private async applyChunks(chunks: Chunk[]) {
+    // A replan that only relabels the collection re-supplies the same
+    // members; reallocating would blank every loaded slice for nothing.
+    if (
+      chunks.length === this.chunks.length &&
+      chunks.every((chunk, index) => chunk === this.chunks[index])
+    )
+      return;
+
     // Nothing changes while the metadata the allocation needs is still coming.
     await Promise.all(chunks.map((chunk) => chunk.loadMeta()));
 

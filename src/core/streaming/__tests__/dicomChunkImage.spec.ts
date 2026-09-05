@@ -303,6 +303,29 @@ describe('DicomChunkImage', () => {
     image.dispose();
   });
 
+  it('leaves the volume alone when given the membership it already holds', async () => {
+    const reader = deferredReader();
+    const image = new DicomChunkImage({ readDicomImage: reader.read });
+    const [first, second] = await threeChunks();
+
+    await image.setChunks([first, second]);
+    reader.settleAll(1);
+    reader.settleAll(2);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(2))
+    );
+    const buffer = image.getVtkImageData();
+
+    await image.setChunks([first, second]);
+
+    expect(image.getVtkImageData()).toBe(buffer);
+    expect(image.getChunkStatuses()).toEqual(allLoaded(2));
+    expect(reader.countFor(1)).toBe(1);
+    expect(reader.countFor(2)).toBe(1);
+
+    image.dispose();
+  });
+
   it('replaces its membership, dropping a chunk the new order omits', async () => {
     const reader = deferredReader();
     const image = new DicomChunkImage({ readDicomImage: reader.read });
