@@ -29,8 +29,12 @@ export type RegistrationResult = {
   // Committed IDs the replan dissolved, whose members moved elsewhere.
   removed: string[];
   // Undoes this batch's registration for the named series, so a failed import
-  // does not pin its chunks. Assumes the caller registered nothing since.
+  // does not pin its chunks. Collections forgotten since the batch was planned
+  // stay forgotten. Assumes the caller registered nothing since.
   rollback: (seriesKeys: Iterable<string>) => void;
+  // Whether a collection of the series was forgotten since the batch was
+  // planned, so a commit would bring back what the user removed.
+  changedSince: (seriesKey: string) => boolean;
 };
 
 export type DicomCollectionRegistry = {
@@ -59,7 +63,16 @@ type Committed = {
 type SeriesEntry = {
   instances: Map<InstanceKey, RegisteredInstance>;
   committed: Map<string, Committed>;
+  // Every collection ID forgotten from this series, in order.
+  forgotten: string[];
   queue: Promise<unknown>;
+};
+
+type Snapshot = {
+  entry: SeriesEntry;
+  instances: SeriesEntry['instances'];
+  committed: SeriesEntry['committed'];
+  forgotten: number;
 };
 
 const readChunk = (chunk: Chunk) => {
@@ -209,27 +222,43 @@ export function createDicomCollectionRegistry(): DicomCollectionRegistry {
     const created: SeriesEntry = {
       instances: new Map(),
       committed: new Map(),
+      forgotten: [],
       queue: Promise.resolve(),
     };
     series.set(seriesKey, created);
     return created;
   };
 
+  // Releasing the instances releases the chunk bytes they hold. An ID a
+  // replan already dissolved owns nothing, so forgetting it is a no-op and
+  // the members it handed to another collection stay registered.
+  const forgetFrom = (
+    entry: SeriesEntry,
+    seriesKey: string,
+    collectionId: string
+  ) => {
+    const forgotten = entry.committed.get(collectionId);
+    if (!forgotten) return;
+    forgotten.members.forEach((key) => entry.instances.delete(key));
+    entry.committed.delete(collectionId);
+    entry.forgotten.push(collectionId);
+    if (entry.instances.size === 0) series.delete(seriesKey);
+  };
+
   const register = async (chunks: Chunk[]) => {
     // Reading every chunk before touching a queue keeps a batch that names an
     // unread chunk from half registering.
     const batches = groupBySeries(chunks);
-    const snapshots = new Map<
-      string,
-      Pick<SeriesEntry, 'instances' | 'committed'>
-    >();
+    const snapshots = new Map<string, Snapshot>();
 
     const planned = [...batches].map(([seriesKey, batch]) => {
       const entry = entryFor(seriesKey);
       const update = entry.queue.then(() => {
         snapshots.set(seriesKey, {
+          entry,
           instances: new Map(entry.instances),
           committed: new Map(entry.committed),
+          forgotten: entry.forgotten.length,
         });
         return planSeries(entry, seriesKey, batch);
       });
@@ -238,13 +267,30 @@ export function createDicomCollectionRegistry(): DicomCollectionRegistry {
       return update;
     });
 
+    // A forget empties and drops an entry once nothing is left in it, so the
+    // series may now be missing or be a fresh entry.
+    const changedSince = (seriesKey: string) => {
+      const snapshot = snapshots.get(seriesKey);
+      if (!snapshot) return false;
+      const entry = series.get(seriesKey);
+      return (
+        entry !== snapshot.entry ||
+        entry.forgotten.length !== snapshot.forgotten
+      );
+    };
+
     const rollback = (seriesKeys: Iterable<string>) =>
       [...new Set(seriesKeys)].forEach((seriesKey) => {
         const snapshot = snapshots.get(seriesKey);
-        const entry = series.get(seriesKey);
-        if (!snapshot || !entry) return;
+        if (!snapshot) return;
+        const { entry } = snapshot;
         entry.instances = snapshot.instances;
         entry.committed = snapshot.committed;
+        // What the user removed while the batch was in flight stays removed.
+        const forgotten = entry.forgotten.slice(snapshot.forgotten);
+        entry.forgotten.length = snapshot.forgotten;
+        series.set(seriesKey, entry);
+        forgotten.forEach((id) => forgetFrom(entry, seriesKey, id));
       });
 
     const results = await Promise.all(planned);
@@ -252,20 +298,14 @@ export function createDicomCollectionRegistry(): DicomCollectionRegistry {
       updates: results.flatMap((result) => result.updates),
       removed: results.flatMap((result) => result.removed),
       rollback,
+      changedSince,
     };
   };
 
-  // Releasing the instances releases the chunk bytes they hold. An ID a
-  // replan already dissolved owns nothing, so forgetting it is a no-op and
-  // the members it handed to another collection stay registered.
   const forget = (collectionId: string) => {
-    series.forEach((entry, seriesKey) => {
-      const forgotten = entry.committed.get(collectionId);
-      if (!forgotten) return;
-      forgotten.members.forEach((key) => entry.instances.delete(key));
-      entry.committed.delete(collectionId);
-      if (entry.instances.size === 0) series.delete(seriesKey);
-    });
+    series.forEach((entry, seriesKey) =>
+      forgetFrom(entry, seriesKey, collectionId)
+    );
   };
 
   return { register, forget };

@@ -274,18 +274,21 @@ const candidateTracker = () => {
 
 /**
  * Puts the images a failed batch already grew back to the membership they held,
- * so an abandoned plan leaves no image holding members no record names.
+ * so an abandoned plan leaves no image holding members no record names. An
+ * image the user removed meanwhile is disposed and left alone.
  */
-const undoGrowth = (candidates: Candidate[]) =>
-  Promise.all(
+const undoGrowth = (candidates: Candidate[]) => {
+  const { imageById } = useImageCacheStore();
+  return Promise.all(
     candidates.map((candidate) =>
-      candidate.kind === 'grow'
+      candidate.kind === 'grow' && imageById[candidate.id] === candidate.image
         ? candidate.image.setChunks(candidate.previous).catch((err) => {
             console.error('Failed to restore DICOM volume membership', err);
           })
         : null
     )
   );
+};
 
 type PrepareDeps = {
   createChunkImage: () => DicomChunkImage;
@@ -514,7 +517,8 @@ export const useDICOMStore = defineStore('dicom', {
       const batches = [...groupChunksBySeries(chunks)];
       const perSeries = batches.map(([seriesKey, batch]) =>
         inSeriesTransaction(this, seriesKey, async () => {
-          const { updates, removed, rollback } = await registry.register(batch);
+          const { updates, removed, rollback, changedSince } =
+            await registry.register(batch);
 
           const { track, release } = candidateTracker();
           const prepared = await Promise.allSettled(
@@ -534,7 +538,10 @@ export const useDICOMStore = defineStore('dicom', {
             (result): result is PromiseRejectedResult =>
               result.status === 'rejected'
           );
-          if (failure) {
+          // A volume removed while its batch was preparing must not come back
+          // at commit, so the batch is abandoned the way a failed one is.
+          const removedMeanwhile = changedSince(seriesKey);
+          if (failure || removedMeanwhile) {
             // Every candidate has settled, so nothing is still writing to the
             // images this puts back before the lane releases.
             await undoGrowth(candidates);
@@ -542,7 +549,11 @@ export const useDICOMStore = defineStore('dicom', {
             // A failure must not pin its chunks, or a corrected re-import
             // keeps receiving the one that failed.
             rollback([seriesKey]);
-            throw failure.reason;
+            throw failure
+              ? failure.reason
+              : new Error(
+                  'A DICOM volume was removed while its series was importing; import the series again.'
+                );
           }
 
           commitPlan(this, candidates, removed);

@@ -83,22 +83,27 @@ const failsFirstGrowth = () => {
   };
 };
 
-/** Loads one slice, then fails the batch that grows the volume with a second. */
-const failGrowth = async () => {
-  const { created, createChunkImage } = imageFactory({
-    onPrepare: failsFirstGrowth(),
-  });
+/** Loads one slice of a series and readies a second for the next batch. */
+const loadOneSlice = async (hooks: Parameters<typeof imageFactory>[0]) => {
+  const { created, createChunkImage } = imageFactory(hooks);
   const store = useDICOMStore();
   const first = chunkFor({ sop: 'a', z: 0 });
   const second = chunkFor({ sop: 'b', z: 1 });
 
   const id = onlyId(await store.importChunks([first], { createChunkImage }));
+  return { store, id, first, second, created, createChunkImage };
+};
+
+/** Loads one slice, then fails the batch that grows the volume with a second. */
+const failGrowth = async () => {
+  const loaded = await loadOneSlice({ onPrepare: failsFirstGrowth() });
+  const { store, second, createChunkImage } = loaded;
   await expect(
     store.importChunks([second], { createChunkImage })
   ).rejects.toThrow(/buffer/);
   await flush();
 
-  return { store, id, first, second, created, createChunkImage };
+  return loaded;
 };
 
 /** Loads one slice, then fails a batch that grows it and adds a scout. */
@@ -385,6 +390,38 @@ describe('DICOM store transactional commit', () => {
     expect(Object.values(result.volumes)).toContainEqual([zero, one]);
     expect(Object.values(result.volumes)).toContainEqual([two, three]);
     expect(loaded.created[0].disposeCount).toBe(1);
+  });
+
+  it('does not bring back a volume removed while its series was importing', async () => {
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // The growth to two members waits until the test lets it settle.
+    const { store, id, first, second, created, createChunkImage } =
+      await loadOneSlice({
+        onPrepare: (_index, chunks) =>
+          chunks.length === 2 ? held : Promise.resolve(),
+      });
+    const growing = store.importChunks([second], { createChunkImage });
+    await flush();
+    useDatasetStore().remove(id);
+    expect(cachedIds()).toEqual([]);
+    release();
+
+    await expect(growing).rejects.toThrow(/removed while its series/);
+    expect(cachedIds()).toEqual([]);
+    expect(store.volumeInfo[id]).toBeUndefined();
+    expect(store.studyVolumes[STUDY_UID]).toBeUndefined();
+    // The removed image is not asked to hold anything again.
+    expect(created[0].setChunksCalls).toHaveLength(2);
+
+    // The lane and registry stay usable: the series rebuilds from what a new
+    // import brings, including the slice the abandoned batch carried.
+    const again = await store.importChunks([first, second], {
+      createChunkImage,
+    });
+    expect(store.volumeInfo[onlyId(again)].NumberOfSlices).toBe(2);
   });
 
   it('converges on the one-shot plan when one series is imported concurrently', async () => {
