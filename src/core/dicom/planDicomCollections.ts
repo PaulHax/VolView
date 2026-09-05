@@ -277,37 +277,25 @@ const bucketByOrientation = (instances: InstanceFacts[]) => {
   return unreadable.members.length > 0 ? [...buckets, unreadable] : buckets;
 };
 
-// Tie-breaks on content as well as on the UID, so anonymous members that tie
-// on the primary key still order by value rather than by input position.
+// A repeated position breaks on the instance number, keeping the scanner's
+// own sequence for the tied members. Position stays primary: the allocator
+// places slot i at origin + i * spacing along the normal, so any order that
+// is not monotone in position mirrors or scrambles the volume. Anonymous
+// members that still tie order by content rather than by input position.
 const comparePosition = (left: InstanceFacts, right: InstanceFacts) =>
   (left.projectedPosition as number) - (right.projectedPosition as number) ||
+  compareNumber(left.instanceNumber, right.instanceNumber) ||
   compareWalkOrder(left, right);
 
 const compareInstanceNumber = (left: InstanceFacts, right: InstanceFacts) =>
   (left.instanceNumber as number) - (right.instanceNumber as number) ||
   compareWalkOrder(left, right);
 
-const positionsRepeat = (members: InstanceFacts[]) =>
-  new Set(members.map((m) => m.projectedPosition)).size !== members.length;
-
 /** Never inherits input order silently: the order actually used is recorded. */
 const orderMembers = (members: InstanceFacts[]) => {
-  const positioned = members.every((m) => readableNumber(m.projectedPosition));
   const numbered = members.every((m) => readableNumber(m.instanceNumber));
 
-  // A stack that visits one position twice has no spatial order; GDCM falls
-  // back to the instance number here, keeping the scanner's own sequence
-  // instead of interleaving the passes.
-  if (positioned && numbered && positionsRepeat(members))
-    return {
-      members: [...members].sort(compareInstanceNumber),
-      order: 'instance-number' as MemberOrder,
-      diagnostics: [
-        'slice positions repeat, so members are ordered by instance number',
-      ],
-    };
-
-  if (positioned)
+  if (members.every((m) => readableNumber(m.projectedPosition)))
     return {
       members: [...members].sort(comparePosition),
       order: 'spatial' as MemberOrder,
