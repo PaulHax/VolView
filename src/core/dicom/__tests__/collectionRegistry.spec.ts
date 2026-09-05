@@ -352,6 +352,45 @@ describe('DICOM collection registry', () => {
     expect(second.updates[0].id).toBe(first.updates[0].id);
   });
 
+  it('reports a collection forgotten after the batch was planned', async () => {
+    const registry = createDicomCollectionRegistry();
+    const slice = chunkFor({ sop: 'a', z: 0 });
+    const [{ id }] = (await registry.register([slice])).updates;
+
+    const { changedSince } = await registry.register([
+      chunkFor({ sop: 'b', z: 1 }),
+    ]);
+    expect(changedSince(SERIES_UID)).toBe(false);
+
+    registry.forget(id);
+
+    expect(changedSince(SERIES_UID)).toBe(true);
+    expect(changedSince(OTHER_SERIES_UID)).toBe(false);
+  });
+
+  it('keeps a collection forgotten across the rollback of the batch that saw it', async () => {
+    const registry = createDicomCollectionRegistry();
+    const slice = chunkFor({ sop: 'a', z: 0 });
+    const [{ id }] = (await registry.register([slice])).updates;
+
+    const { rollback } = await registry.register([
+      chunkFor({ sop: 'b', z: 1 }),
+    ]);
+    registry.forget(id);
+    rollback([SERIES_UID]);
+
+    // Neither the removed volume's member nor the abandoned batch's is held,
+    // so the next import plans both afresh.
+    const { updates, removed } = await registry.register([
+      slice,
+      chunkFor({ sop: 'b', z: 1 }),
+    ]);
+    expect(removed).toEqual([]);
+    expect(updates).toHaveLength(1);
+    expect(sops(updates[0].members)).toEqual(['a', 'b']);
+    expect(sops(updates[0].provenance)).toEqual(['a', 'b']);
+  });
+
   it('rolls back only the series it is given', async () => {
     const registry = createDicomCollectionRegistry();
     const kept = chunkFor({ sop: 'a', series: SERIES_UID });
