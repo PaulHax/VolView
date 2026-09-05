@@ -72,6 +72,38 @@ class VolViewPage extends Page {
     );
   }
 
+  get volumeCards() {
+    return $$('.volume-card');
+  }
+
+  /** Slice counts of the volume cards, ascending. Each label carries "[N]". */
+  async getVolumeCardSliceCounts() {
+    const cards = [...(await this.volumeCards)];
+    const labels = await Promise.all(cards.map((card) => card.getText()));
+    return labels
+      .map((label) => Number(label.match(/\[(\d+)\]/)?.[1]))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+  }
+
+  async waitForVolumeCardSliceCounts(expected: number[], timeout = 30000) {
+    await browser.waitUntil(
+      async () => {
+        const counts = await this.getVolumeCardSliceCounts();
+        return (
+          counts.length === expected.length &&
+          counts.every((count, index) => count === expected[index])
+        );
+      },
+      {
+        timeout,
+        timeoutMsg: `expected volume cards holding ${expected.join(
+          ', '
+        )} slices`,
+      }
+    );
+  }
+
   get notifications() {
     return $('#notifications');
   }
