@@ -69,6 +69,9 @@ const NESTED_SEQUENCE = sequence(
   )
 );
 
+// A code meaning whose UTF-8 bytes no single byte character set survives.
+const UTF8_ITEM_TEXT = '\u738b ';
+
 const valuesOf = (dataset: DicomDataset, tag: string) =>
   findElement(dataset, tag)?.values;
 
@@ -130,6 +133,39 @@ describe('readDicomDataset', () => {
       values: ['MEANING '],
     });
   });
+
+  it.each([
+    ['inherits the enclosing', []],
+    ['declares its own', [rawElement(0x0008, 0x0005, 'CS', ascii('ISO_IR 192'))]],
+  ])(
+    'decodes an item that %s character set once',
+    (_, localCharacterSet) => {
+      const dataset = readDicomDataset(
+        buildSlice({
+          specificCharacterSet: 'ISO_IR 192',
+          extraElements: [
+            sequence(
+              0x0040,
+              0x0275,
+              item(
+                concat(
+                  ...localCharacterSet,
+                  rawElement(0x0008, 0x0104, 'LO', ascii(UTF8_ITEM_TEXT))
+                )
+              )
+            ),
+          ],
+        })
+      );
+      const values = valuesOf(dataset, REQUEST_ATTRIBUTES);
+      if (values?.kind !== 'sequence') throw new Error('not a sequence');
+
+      expect(valuesOf(values.items[0], CODE_MEANING)).toEqual({
+        kind: 'text',
+        values: [UTF8_ITEM_TEXT],
+      });
+    }
+  );
 
   it.each([
     ['explicit', false],
