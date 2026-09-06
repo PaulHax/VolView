@@ -281,6 +281,27 @@ const readSequence = (
   }
 };
 
+/**
+ * dcmjs reads every sequence item through `DicomMessage._read`, which it calls
+ * with no options of its own, and which throws on an item declaring a Specific
+ * Character Set of more than one value, as a Japanese or Korean data set does.
+ * An undefined length sequence has no length to step over, so that throw would
+ * escape past the whole file. Reading items leniently keeps them; `_rawValue`
+ * still carries what the item declared, so its character set is applied later.
+ */
+const LENIENT_ITEM_OPTIONS = { ignoreErrors: true };
+
+const withLenientItems = <T>(read: () => T) => {
+  const readDataSet = DicomMessage._read;
+  DicomMessage._read = (stream, syntax, options = LENIENT_ITEM_OPTIONS) =>
+    readDataSet.call(DicomMessage, stream, syntax, options);
+  try {
+    return read();
+  } finally {
+    DicomMessage._read = readDataSet;
+  }
+};
+
 const readElements = (dataSet: DicomReadStream, syntax: string) => {
   const elements: ParsedElement[] = [];
   let done = false;
@@ -300,5 +321,5 @@ const readElements = (dataSet: DicomReadStream, syntax: string) => {
 /** Reads a Part 10 file's data set elements, stopping before Pixel Data. */
 export const parseDicomElements = (bytes: Uint8Array) => {
   const { dataSet, syntax } = openFile(bytes);
-  return readElements(dataSet, syntax);
+  return withLenientItems(() => readElements(dataSet, syntax));
 };

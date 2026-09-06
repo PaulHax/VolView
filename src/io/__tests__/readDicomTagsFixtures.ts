@@ -4,6 +4,8 @@ import {
   buildSyntheticDicom,
   rawElement,
   SyntheticSliceOptions,
+  undefinedLengthItem,
+  undefinedLengthSequence,
 } from '@/tests/specs/syntheticDicom';
 
 const concat = (...parts: Uint8Array[]) => {
@@ -22,6 +24,8 @@ const ascii = (text: string) => new TextEncoder().encode(text);
 // requires around every run of ideographic or phonetic characters.
 const jisX0208 = (...codes: number[]) =>
   bytes(0x1b, 0x24, 0x42, ...codes, 0x1b, 0x28, 0x42);
+
+const JAPANESE_CHARACTER_SET = 'ISO 2022 IR 6\\ISO 2022 IR 87';
 
 export const JAPANESE_NAME = 'Yamada^Tarou=山田^太郎=やまだ^たろう';
 export const JAPANESE_NAME_BYTES = concat(
@@ -237,8 +241,29 @@ export const tagReaderCorpus = (): Array<{
   {
     name: 'ISO 2022 IR 87 japanese name',
     bytes: buildSlice({
-      specificCharacterSet: 'ISO 2022 IR 6\\ISO 2022 IR 87',
+      specificCharacterSet: JAPANESE_CHARACTER_SET,
       patientNameBytes: JAPANESE_NAME_BYTES,
+    }),
+  },
+  {
+    // A sequence item may declare a character set of its own, which every
+    // Japanese and Korean study writes as a default plus an extension.
+    name: 'ISO 2022 IR 87 japanese name with a sequence item character set',
+    bytes: buildSlice({
+      specificCharacterSet: JAPANESE_CHARACTER_SET,
+      patientNameBytes: JAPANESE_NAME_BYTES,
+      extraElements: [
+        undefinedLengthSequence(
+          0x0040,
+          0x0275,
+          undefinedLengthItem(
+            concat(
+              rawElement(0x0008, 0x0005, 'CS', ascii(JAPANESE_CHARACTER_SET)),
+              rawElement(0x0010, 0x0010, 'PN', JAPANESE_NAME_BYTES)
+            )
+          )
+        ),
+      ],
     }),
   },
   {

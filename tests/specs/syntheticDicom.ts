@@ -145,8 +145,45 @@ export const rawElement = (
 export const attributeTagValue = (group: number, element: number) =>
   tagBytes(group, element);
 
+const ITEM_GROUP = 0xfffe;
 const ITEM_TAG = 0xe000;
+const ITEM_DELIMITER_TAG = 0xe00d;
+const SEQUENCE_DELIMITER_TAG = 0xe0dd;
 const UNDEFINED_LENGTH = 0xffffffff;
+
+// One sequence item of defined length, holding the elements given.
+export const sequenceItem = (content: Uint8Array) =>
+  combine(tagBytes(ITEM_GROUP, ITEM_TAG), writeLong(content.length), content);
+
+// One sequence item whose length the delimiter that follows it declares.
+export const undefinedLengthItem = (content: Uint8Array) =>
+  combine(
+    tagBytes(ITEM_GROUP, ITEM_TAG),
+    writeLong(UNDEFINED_LENGTH),
+    content,
+    tagBytes(ITEM_GROUP, ITEM_DELIMITER_TAG),
+    writeLong(0)
+  );
+
+/**
+ * An Explicit VR LE sequence whose length the delimiter that follows it
+ * declares, the form an item's own length cannot be stepped over in. Not
+ * convertible to Implicit VR by `buildSyntheticDicom`.
+ */
+export const undefinedLengthSequence = (
+  group: number,
+  element: number,
+  items: Uint8Array
+) =>
+  combine(
+    tagBytes(group, element),
+    enc.encode('SQ'),
+    new Uint8Array(2),
+    writeLong(UNDEFINED_LENGTH),
+    items,
+    tagBytes(ITEM_GROUP, SEQUENCE_DELIMITER_TAG),
+    writeLong(0)
+  );
 
 // Items and delimiters carry no VR in either syntax, so only the elements
 // inside each item change shape. Item lengths must be defined.
