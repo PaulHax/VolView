@@ -2,6 +2,8 @@ import { encodingLabel, toBytes } from '@/src/io/dcmjsParser';
 
 const ESCAPE_BYTE = 0x1b;
 
+export const VALUE_DELIMITER = '\\';
+
 /** Bytes a conforming writer resets the repertoire before. */
 const DELIMITER_BYTES = new Set([0x0a, 0x0c, 0x0d, 0x3d, 0x5c, 0x5e]);
 
@@ -176,13 +178,23 @@ export const characterSetDecoder = (specificCharacterSet: string[]) => {
   };
   const table = { ...DESIGNATIONS, '(B': initial, '(J': initial };
 
-  return (raw: string) => {
+  const decode = (raw: string) => {
     const bytes = toBytes(raw);
-    const decoded = bytes.includes(ESCAPE_BYTE)
+    return bytes.includes(ESCAPE_BYTE)
       ? decodeDesignations(bytes, initial, table)
       : initial.decode(bytes);
-    return jisRoman
-      ? decoded.replace(/\\/g, '\u00a5').replace(/~/g, '\u203e')
-      : decoded;
+  };
+  const repertoireText = (text: string) =>
+    jisRoman ? text.replace(/\\/g, '\u00a5').replace(/~/g, '\u203e') : text;
+
+  return {
+    /** An element of value multiplicity 1, whose backslash is a character. */
+    value: (raw: string) => repertoireText(decode(raw)),
+    /**
+     * A whole element's bytes, split into its values once decoded: byte 0x5c
+     * delimits values only where it is not part of a multibyte character.
+     */
+    values: (raw: string) =>
+      decode(raw).split(VALUE_DELIMITER).map(repertoireText),
   };
 };

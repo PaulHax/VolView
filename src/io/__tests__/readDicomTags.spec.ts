@@ -425,6 +425,19 @@ describe('readDicomTags specific character set', () => {
     ]);
   });
 
+  it('keeps a multibyte character whose trailing byte delimits values', async () => {
+    const tags = await readDicomTags(
+      buildSlice({
+        specificCharacterSet: 'GB18030',
+        extraElements: [patientLocation(bytes(0x81, 0x5c, 0x5c, 0x81, 0x40))],
+      })
+    );
+
+    // GB18030 writes 0x5c as the second byte of a character, so only the lone
+    // one between the two characters separates values.
+    expect(valueOf(tags, CURRENT_PATIENT_LOCATION)).toBe('\u4e57\\\u4e02 ');
+  });
+
   it('decodes ISO_IR 100', async () => {
     expect(await nameFromCharacterSet('ISO_IR 100', LATIN1_NAME_BYTES)).toBe(
       LATIN1_NAME_PADDED

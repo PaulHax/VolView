@@ -1,4 +1,5 @@
 import { binaryString } from '@/src/io/dcmjsParser';
+import { VALUE_DELIMITER } from '@/src/io/dicomCharacterSet';
 import {
   DicomElement,
   isPrivateElement,
@@ -6,7 +7,6 @@ import {
 } from '@/src/io/dicomDataset';
 
 const SPECIFIC_CHARACTER_SET = '00080005';
-const VALUE_DELIMITER = '\\';
 
 /** VRs whose values are binary floats rather than text. */
 const FLOAT_VRS = new Set(['FD', 'FL', 'OD', 'OF']);

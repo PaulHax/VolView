@@ -26,6 +26,8 @@ const REQUEST_ATTRIBUTES = '00400275';
 const REFERENCED_STUDY = '00400008';
 const CODE_MEANING = '00080104';
 const SCHEDULED_PROCEDURE_STEP_ID = '00400009';
+const CURRENT_PATIENT_LOCATION = '00380300';
+const STUDY_COMMENTS = '00324000';
 
 const ascii = (text: string) => new TextEncoder().encode(text);
 
@@ -262,6 +264,40 @@ describe('readDicomDataset', () => {
     expect(valuesOf(dataset, PATIENT_NAME)).toEqual({
       kind: 'text',
       values: [UTF8_NAME],
+    });
+  });
+
+  it('separates values on a delimiter, not on a multibyte character', () => {
+    const dataset = readDicomDataset(
+      buildSlice({
+        specificCharacterSet: 'GB18030',
+        extraElements: [
+          rawElement(
+            0x0038,
+            0x0300,
+            'LO',
+            new Uint8Array([0x81, 0x5c, 0x5c, 0x81, 0x40])
+          ),
+        ],
+      })
+    );
+
+    expect(valuesOf(dataset, CURRENT_PATIENT_LOCATION)).toEqual({
+      kind: 'text',
+      values: ['\u4e57', '\u4e02 '],
+    });
+  });
+
+  it('keeps a backslash inside a single valued text VR as a character', () => {
+    const dataset = readDicomDataset(
+      buildSlice({
+        extraElements: [rawElement(0x0032, 0x4000, 'LT', ascii('C:\\DICOM'))],
+      })
+    );
+
+    expect(valuesOf(dataset, STUDY_COMMENTS)).toEqual({
+      kind: 'text',
+      values: ['C:\\DICOM'],
     });
   });
 
