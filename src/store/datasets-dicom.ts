@@ -202,6 +202,13 @@ const canHoldChunks = (
 export type ImportChunksDeps = {
   createChunkImage?: () => DicomChunkImage;
   parseCineDicom?: typeof parseCineDicom;
+  /**
+   * What one series committed, reported inside its own transaction. Another
+   * import of the same series runs before or after that call, never between
+   * it and the commit it describes, so a caller that publishes here cannot be
+   * overtaken by a batch a slower series delayed.
+   */
+  onCommitted?: (result: ImportChunksResult) => void;
 };
 
 export type ImportChunksResult = {
@@ -213,22 +220,19 @@ export type ImportChunksResult = {
 };
 
 /**
- * A batch whose series did not all commit. Each series commits on its own
- * lane, so what landed is reported alongside the failure instead of being
- * thrown away with it.
+ * A batch whose series did not all commit. Each series commits on its own lane
+ * and reports itself through `onCommitted`, so what landed is already published
+ * when this is thrown.
  */
 export class PartialImportError extends Error {
-  readonly committed: ImportChunksResult;
-
   // The chunks of every series that failed, so the caller blames those sources
   // and not the whole batch.
   readonly failed: Chunk[];
 
-  constructor(cause: Error, committed: ImportChunksResult, failed: Chunk[]) {
+  constructor(cause: Error, failed: Chunk[]) {
     super(cause.message);
     this.name = 'PartialImportError';
     this.cause = cause;
-    this.committed = committed;
     this.failed = failed;
   }
 }
@@ -535,6 +539,7 @@ export const useDICOMStore = defineStore('dicom', {
       const createChunkImage =
         deps.createChunkImage ?? (() => new DicomChunkImage());
       const parseCine = deps.parseCineDicom ?? parseCineDicom;
+      const onCommitted = deps.onCommitted ?? (() => {});
       const { registry } = sessionFor(this);
 
       const batches = [...groupChunksBySeries(chunks)];
@@ -581,12 +586,14 @@ export const useDICOMStore = defineStore('dicom', {
 
           commitPlan(this, candidates, removed);
 
-          return {
-            volumes: updates.map(
-              ({ id, provenance }) => [id, provenance] as const
+          const committed = {
+            volumes: Object.fromEntries(
+              updates.map(({ id, provenance }) => [id, provenance])
             ),
             dissolved: removed,
           };
+          onCommitted(committed);
+          return committed;
         })
       );
 
@@ -594,28 +601,26 @@ export const useDICOMStore = defineStore('dicom', {
       const results = settled.flatMap((result) =>
         result.status === 'fulfilled' ? [result.value] : []
       );
-      const committed = {
-        volumes: Object.fromEntries(results.flatMap(({ volumes }) => volumes)),
-        dissolved: results.flatMap(({ dissolved }) => dissolved),
-      };
-
       const failure = settled.find(
         (result): result is PromiseRejectedResult =>
           result.status === 'rejected'
       );
-      // A lane that committed still has datasets to reconcile, so a sibling's
-      // failure reports what landed instead of discarding it, and names only
-      // the chunks whose own lane failed.
+      // Every lane that committed has already reported itself, so a sibling's
+      // failure names only the chunks whose own lane failed.
       if (failure)
         throw new PartialImportError(
           ensureError(failure.reason),
-          committed,
           settled.flatMap((result, index) =>
             result.status === 'rejected' ? batches[index][1] : []
           )
         );
 
-      return committed;
+      return {
+        volumes: Object.fromEntries(
+          results.flatMap(({ volumes }) => Object.entries(volumes))
+        ),
+        dissolved: results.flatMap(({ dissolved }) => dissolved),
+      };
     },
 
     _updateDatabase(

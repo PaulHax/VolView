@@ -209,13 +209,11 @@ describe('DICOM store acquisition split across imports', () => {
     const store = useDICOMStore();
     const first = acquisitionOne().map(chunkSource);
     const second = acquisitionTwo().map(chunkSource);
-    const importChunks = (chunks: Chunk[]) =>
-      store.importChunks(chunks, { createChunkImage });
-
     const load = async (sources: ChunkSource[]) => {
-      const loadables = await importDicomChunkSources(sources, importChunks);
-      datasetStore.addDataSources(
-        loadables.map(({ dataID, dataSource }) => ({ dataID, dataSource }))
+      const loadables = await importDicomChunkSources(
+        sources,
+        (chunks, onCommitted) =>
+          store.importChunks(chunks, { createChunkImage, onCommitted })
       );
       return loadables.map(({ dataID }) => dataID);
     };
