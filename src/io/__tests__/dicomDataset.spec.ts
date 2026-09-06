@@ -4,9 +4,16 @@ import {
   findElement,
   readDicomDataset,
 } from '@/src/io/dicomDataset';
-import { rawElement } from '@/tests/specs/syntheticDicom';
+import {
+  rawElement,
+  sequenceItem,
+  undefinedLengthItem,
+  undefinedLengthSequence,
+} from '@/tests/specs/syntheticDicom';
 import {
   buildSlice,
+  JAPANESE_NAME,
+  JAPANESE_NAME_BYTES,
   MIXED_VR_ELEMENTS,
   UTF8_NAME,
   UTF8_NAME_BYTES,
@@ -40,16 +47,7 @@ const concat = (...parts: Uint8Array[]) => {
   return out;
 };
 
-const uint32 = (value: number) => {
-  const out = new Uint8Array(4);
-  new DataView(out.buffer).setUint32(0, value, true);
-  return out;
-};
-
-const ITEM_TAG = new Uint8Array([0xfe, 0xff, 0x00, 0xe0]);
-
-const item = (content: Uint8Array) =>
-  concat(ITEM_TAG, uint32(content.length), content);
+const item = sequenceItem;
 
 const sequence = (group: number, element: number, items: Uint8Array) =>
   rawElement(group, element, 'SQ', items);
@@ -70,6 +68,10 @@ const NESTED_SEQUENCE = sequence(
     )
   )
 );
+
+// A Japanese data set names the default repertoire and the extension its
+// ideographic runs escape into, which is the shape real studies write.
+const JAPANESE_CHARACTER_SET = 'ISO 2022 IR 6\\ISO 2022 IR 87';
 
 // A code meaning whose UTF-8 bytes no single byte character set survives.
 const UTF8_ITEM_TEXT = '\u738b ';
@@ -138,22 +140,58 @@ describe('readDicomDataset', () => {
 
   it.each([
     ['inherits the enclosing', []],
-    ['declares its own', [rawElement(0x0008, 0x0005, 'CS', ascii('ISO_IR 192'))]],
+    [
+      'declares its own',
+      [rawElement(0x0008, 0x0005, 'CS', ascii('ISO_IR 192'))],
+    ],
+  ])('decodes an item that %s character set once', (_, localCharacterSet) => {
+    const dataset = readDicomDataset(
+      buildSlice({
+        specificCharacterSet: 'ISO_IR 192',
+        extraElements: [
+          sequence(
+            0x0040,
+            0x0275,
+            item(
+              concat(
+                ...localCharacterSet,
+                rawElement(0x0008, 0x0104, 'LO', ascii(UTF8_ITEM_TEXT))
+              )
+            )
+          ),
+        ],
+      })
+    );
+    const values = valuesOf(dataset, REQUEST_ATTRIBUTES);
+    if (values?.kind !== 'sequence') throw new Error('not a sequence');
+
+    expect(valuesOf(values.items[0], CODE_MEANING)).toEqual({
+      kind: 'text',
+      values: [UTF8_ITEM_TEXT],
+    });
+  });
+
+  it.each([
+    [
+      'a defined length',
+      (content: Uint8Array) => sequence(0x0040, 0x0275, item(content)),
+    ],
+    [
+      'an undefined length',
+      (content: Uint8Array) =>
+        undefinedLengthSequence(0x0040, 0x0275, undefinedLengthItem(content)),
+    ],
   ])(
-    'decodes an item that %s character set once',
-    (_, localCharacterSet) => {
+    'decodes an item of %s sequence that declares a character set extension',
+    (_, build) => {
       const dataset = readDicomDataset(
         buildSlice({
-          specificCharacterSet: 'ISO_IR 192',
+          specificCharacterSet: JAPANESE_CHARACTER_SET,
           extraElements: [
-            sequence(
-              0x0040,
-              0x0275,
-              item(
-                concat(
-                  ...localCharacterSet,
-                  rawElement(0x0008, 0x0104, 'LO', ascii(UTF8_ITEM_TEXT))
-                )
+            build(
+              concat(
+                rawElement(0x0008, 0x0005, 'CS', ascii(JAPANESE_CHARACTER_SET)),
+                rawElement(0x0010, 0x0010, 'PN', JAPANESE_NAME_BYTES)
               )
             ),
           ],
@@ -162,9 +200,13 @@ describe('readDicomDataset', () => {
       const values = valuesOf(dataset, REQUEST_ATTRIBUTES);
       if (values?.kind !== 'sequence') throw new Error('not a sequence');
 
-      expect(valuesOf(values.items[0], CODE_MEANING)).toEqual({
+      expect(values.items[0].specificCharacterSet).toEqual([
+        'ISO 2022 IR 6',
+        'ISO 2022 IR 87',
+      ]);
+      expect(valuesOf(values.items[0], PATIENT_NAME)).toEqual({
         kind: 'text',
-        values: [UTF8_ITEM_TEXT],
+        values: [JAPANESE_NAME],
       });
     }
   );
