@@ -5,7 +5,6 @@ import type { Chunk } from '@/src/core/streaming/chunk';
 import { FILE_EXT_TO_MIME } from '@/src/io/mimeTypes';
 import type { ChunkSource, DataSource } from '@/src/io/import/dataSource';
 import { uriToDataSource } from '@/src/io/import/dataSource';
-import type { LoadableResult } from '@/src/io/import/common';
 import {
   importDicomChunkSources,
   PartialDicomImportError,
@@ -568,27 +567,31 @@ const sopsOfDataset = (dataSource: DataSource | undefined) => {
 };
 
 /**
- * The pipeline's own shape: whatever landed reaches the dataset store, whether
- * or not the import as a whole failed.
+ * The pipeline's own shape: a series reaches the dataset store as it commits,
+ * whether or not the import as a whole failed.
  */
 const load = (
   chunks: Chunk[],
   createChunkImage: ReturnType<typeof imageFactory>['createChunkImage']
-) => {
-  const register = (loadables: LoadableResult[]) => {
-    useDatasetStore().addDataSources(
-      loadables.map(({ dataID, dataSource }) => ({ dataID, dataSource }))
-    );
-    return loadables;
-  };
+) =>
+  importDicomChunkSources(chunks.map(sourceFor), (batch, onCommitted) =>
+    useDICOMStore().importChunks(batch, { createChunkImage, onCommitted })
+  );
 
-  return importDicomChunkSources(chunks.map(sourceFor), (batch) =>
-    useDICOMStore().importChunks(batch, { createChunkImage })
-  ).then(register, (err) => {
-    if (err instanceof PartialDicomImportError) register(err.loadables);
-    throw err;
+/** A batch whose other series waits for the returned release. */
+const gatedFactory = () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
   });
+  const { createChunkImage } = imageFactory({
+    onPrepare: (_index, chunks) =>
+      sopOf(chunks[0]) === 'slow' ? gate : Promise.resolve(),
+  });
+  return { createChunkImage, release: () => release() };
 };
+
+const slowSibling = () => chunkFor({ sop: 'slow', series: OTHER_SERIES_UID });
 
 describe('importDicomChunkSources transactional commit', () => {
   beforeEach(() => {
@@ -624,6 +627,57 @@ describe('importDicomChunkSources transactional commit', () => {
     ]);
     expect(cachedIds()).toEqual([id]);
     expect(store.volumeInfo[id].NumberOfSlices).toBe(2);
+  });
+
+  it('keeps the membership a later import recorded while a sibling delays', async () => {
+    const { createChunkImage, release } = gatedFactory();
+    const store = useDICOMStore();
+    const datasetStore = useDatasetStore();
+
+    const delayed = load(
+      [chunkFor({ sop: 'a', z: 0 }), slowSibling()],
+      createChunkImage
+    );
+    await flush();
+    const [grown] = await load(
+      [chunkFor({ sop: 'b', z: 1 })],
+      createChunkImage
+    );
+    release();
+    await delayed;
+
+    // The delayed batch reports the series as it stood when it committed, one
+    // slice ago, so the saved sources would name half the volume.
+    expect(sopsOfDataset(datasetStore.getDataSource(grown.dataID))).toEqual([
+      'a',
+      'b',
+    ]);
+    expect(store.volumeInfo[grown.dataID].NumberOfSlices).toBe(2);
+  });
+
+  it('leaves a dataset a later import dissolved removed', async () => {
+    const { zero, one, two, three } = splitting();
+    const { createChunkImage, release } = gatedFactory();
+    const datasetStore = useDatasetStore();
+
+    const delayed = load([one, three, slowSibling()], createChunkImage);
+    await flush();
+    const dissolvedId = datasetStore.idsAsSelections[0];
+    const split = await load([zero, two], createChunkImage);
+    release();
+    await delayed;
+
+    expect(datasetStore.getDataSource(dissolvedId)).toBeUndefined();
+    // The dataset list names what is loaded and nothing else, so the delayed
+    // batch brings back neither the collection nor its provenance.
+    expect([...datasetStore.idsAsSelections].sort()).toEqual(
+      [...cachedIds()].sort()
+    );
+    expect(
+      split.map(({ dataID }) =>
+        sopsOfDataset(datasetStore.getDataSource(dataID))
+      )
+    ).toContainEqual(['sop-0', 'sop-1']);
   });
 
   it('reports what a committed series landed and blames only what failed', async () => {

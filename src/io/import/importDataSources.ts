@@ -139,10 +139,12 @@ export class PartialDicomImportError extends Error {
   }
 }
 
-const reconcileImportedChunks = ({
-  volumes,
-  dissolved,
-}: ImportChunksResult) => {
+/**
+ * A committed series becomes datasets here, inside the transaction that
+ * committed it: publishing after the whole batch settled would let a series a
+ * slow sibling delayed overwrite the membership a later import had recorded.
+ */
+const publishImportedChunks = ({ volumes, dissolved }: ImportChunksResult) => {
   // A replan folded these collections into others, so the datasets an earlier
   // import created for them no longer describe anything loaded.
   const datasetStore = useDatasetStore();
@@ -150,7 +152,7 @@ const reconcileImportedChunks = ({
 
   // Every member reports back, so a collection that gained a member from a
   // dissolved one carries its provenance too.
-  return Object.entries(volumes).map(([id, chunks]) =>
+  const loadables = Object.entries(volumes).map(([id, chunks]) =>
     asLoadableResult(
       id,
       {
@@ -162,30 +164,43 @@ const reconcileImportedChunks = ({
       'image'
     )
   );
+  datasetStore.addDataSources(loadables);
+  return loadables;
 };
 
 export async function importDicomChunkSources(
   sources: ChunkSource[],
-  importChunks = (chunks: Chunk[]) => useDICOMStore().importChunks(chunks)
+  importChunks = (
+    chunks: Chunk[],
+    onCommitted: (result: ImportChunksResult) => void
+  ) => useDICOMStore().importChunks(chunks, { onCommitted })
 ) {
   if (sources.length === 0) return [];
 
   sources.forEach((src) => chunkToDataSource.set(src.chunk, src));
 
-  const imported = await importChunks(sources.map((src) => src.chunk)).catch(
-    (err) => {
-      if (!(err instanceof PartialImportError)) throw err;
-      throw new PartialDicomImportError(
-        ensureError(err.cause),
-        reconcileImportedChunks(err.committed),
-        err.failed
-          .map((chunk) => chunkToDataSource.get(chunk))
-          .filter((src): src is ChunkSource => src !== undefined)
-      );
-    }
-  );
+  const loadables: LoadableResult[] = [];
+  const publish = (committed: ImportChunksResult) => {
+    loadables.push(...publishImportedChunks(committed));
+  };
 
-  return reconcileImportedChunks(imported);
+  await importChunks(
+    sources.map((src) => src.chunk),
+    publish
+  ).catch((err) => {
+    if (!(err instanceof PartialImportError)) throw err;
+    // The series that committed published themselves, so they are reported
+    // beside the failure rather than lost with it.
+    throw new PartialDicomImportError(
+      ensureError(err.cause),
+      loadables,
+      err.failed
+        .map((chunk) => chunkToDataSource.get(chunk))
+        .filter((src): src is ChunkSource => src !== undefined)
+    );
+  });
+
+  return loadables;
 }
 
 /**
@@ -344,13 +359,20 @@ async function importDataSourcesWithPolicy(
       src.type === 'chunk' && src.mime === FILE_EXT_TO_MIME.dcm
   );
 
-  results.push(...(await importDicomResults(dicomChunkSources)));
+  const dicomResults = await importDicomResults(dicomChunkSources);
+  results.push(...dicomResults);
 
   const loadableResults = results.filter(
     (r): r is LoadableResult => r.type === 'data'
   );
 
-  useDatasetStore().addDataSources(loadableResults);
+  // A DICOM dataset was published inside its series transaction, so adding it
+  // again here would restore the membership that import saw rather than the
+  // membership the series now holds.
+  const published = new Set<ImportDataSourcesResult>(dicomResults);
+  useDatasetStore().addDataSources(
+    loadableResults.filter((result) => !published.has(result))
+  );
 
   // Failed leaves (e.g. a 404'd uri member of a multi-leaf dataset) feed the
   // restore's consolidated notice: a dataset that still resolves from its

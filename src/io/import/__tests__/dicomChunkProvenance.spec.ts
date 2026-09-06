@@ -45,15 +45,11 @@ describe('importDicomChunkSources', () => {
     const datasetStore = useDatasetStore();
     const [a, b, c] = ['sop-a', 'sop-b', 'sop-c'].map(chunkSourceFor);
 
-    const load = async (sources: ChunkSource[], result: ImportChunksResult) => {
-      const loadables = await importDicomChunkSources(
-        sources,
-        async () => result
-      );
-      datasetStore.addDataSources(
-        loadables.map(({ dataID, dataSource }) => ({ dataID, dataSource }))
-      );
-    };
+    const load = (sources: ChunkSource[], result: ImportChunksResult) =>
+      importDicomChunkSources(sources, async (_chunks, onCommitted) => {
+        onCommitted(result);
+        return result;
+      });
 
     await load([a, b], {
       volumes: { 'vol-1': [a.chunk], 'vol-2': [b.chunk] },
