@@ -8,9 +8,9 @@ import {
   CHARSET_VRS,
   characterSetDecoder,
   defaultRepertoire,
+  VALUE_DELIMITER,
 } from '@/src/io/dicomCharacterSet';
 
-const VALUE_DELIMITER = '\\';
 const SPECIFIC_CHARACTER_SET = '00080005';
 
 /** A tag as `ggggeeee` in upper case hexadecimal. */
@@ -36,6 +36,9 @@ const TEXT_VRS = new Set([
   'UR',
   'UT',
 ]);
+
+/** Text VRs of value multiplicity 1, whose backslash is a character. */
+const SINGLE_VALUED_TEXT_VRS = new Set(['LT', 'ST', 'UT']);
 
 /** VRs holding a number written as characters. */
 const DECIMAL_VRS = new Set(['DS', 'IS']);
@@ -143,20 +146,37 @@ const rawBytesOf = ({ values }: ParsedElement) => {
 const keepsBytes = ({ group, vr }: ParsedElement) =>
   (group & 1) === 1 || vr === 'UN' || !KNOWN_VRS.has(vr);
 
+type CharacterSetDecoder = ReturnType<typeof characterSetDecoder>;
+
+/**
+ * dcmjs splits a value on every 0x5c byte, which GB18030, GBK and ISO 2022
+ * write inside multibyte characters, so a value the character set reaches is
+ * put back together and separated again once its characters are known.
+ */
+const textValues = (
+  vr: string,
+  values: string[],
+  decode: CharacterSetDecoder
+) => {
+  if (!CHARSET_VRS.has(vr) || values.length === 0)
+    return values.map(defaultRepertoire);
+  const raw = values.join(VALUE_DELIMITER);
+  return SINGLE_VALUED_TEXT_VRS.has(vr)
+    ? [decode.value(raw)]
+    : decode.values(raw);
+};
+
 const classifiedValues = (
   vr: string,
   values: ParsedValue[],
-  decode: (raw: string) => string
+  decode: CharacterSetDecoder
 ): DicomValues => {
   if (vr === 'AT' && values.every(isNumber))
     return { kind: 'attributeTag', values: values.map(attributeTagOf) };
   if (DECIMAL_VRS.has(vr) && values.every(isText))
     return { kind: 'decimal', values: values.map(decimalOf), text: values };
   if (values.every(isText))
-    return {
-      kind: 'text',
-      values: values.map(CHARSET_VRS.has(vr) ? decode : defaultRepertoire),
-    };
+    return { kind: 'text', values: textValues(vr, values, decode) };
   if (values.every(isNumber)) return { kind: 'number', values };
   if (values.every(isBytes)) return { kind: 'bytes', values };
   return {
@@ -168,7 +188,7 @@ const classifiedValues = (
 
 const elementValues = (
   parsed: ParsedElement,
-  decode: (raw: string) => string,
+  decode: CharacterSetDecoder,
   charset: string[] | null
 ): DicomValues => {
   if (parsed.unread)
@@ -187,7 +207,7 @@ const elementValues = (
 
 const buildElement = (
   parsed: ParsedElement,
-  decode: (raw: string) => string,
+  decode: CharacterSetDecoder,
   charset: string[] | null
 ): DicomElement => {
   const bytes = keepsBytes(parsed) ? rawBytesOf(parsed) : undefined;
