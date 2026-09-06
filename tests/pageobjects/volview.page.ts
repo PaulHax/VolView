@@ -104,6 +104,38 @@ class VolViewPage extends Page {
     );
   }
 
+  /**
+   * Deletes the volume of the card at `index` of `getVolumeCardSliceCounts`,
+   * which orders by slice count rather than by the order the cards render in.
+   */
+  async deleteVolumeCard(index: number) {
+    const counts = await this.getVolumeCardSliceCounts();
+    const cards = [...(await this.volumeCards)];
+    const labelled = await Promise.all(
+      cards.map(async (card) => ({
+        card,
+        count: Number((await card.getText()).match(/\[(\d+)\]/)?.[1]),
+      }))
+    );
+    const target = labelled.find(({ count }) => count === counts[index]);
+    if (!target) throw new Error(`no volume card holding ${counts[index]}`);
+
+    const menu = target.card.$('button[data-testid="dataset-menu-button"]');
+    await menu.waitForClickable();
+    await menu.click();
+
+    const remove = await browser.waitUntil(
+      async () => {
+        const items = [...(await $$('.v-overlay-container .v-list-item'))];
+        const texts = await Promise.all(items.map((item) => item.getText()));
+        return items[texts.findIndex((text) => text.trim() === 'Delete')];
+      },
+      { timeoutMsg: 'expected a Delete item in the dataset menu' }
+    );
+    await remove.waitForClickable();
+    await remove.click();
+  }
+
   get notifications() {
     return $('#notifications');
   }
