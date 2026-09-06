@@ -164,6 +164,8 @@ const publishImportedChunks = ({ volumes, dissolved }: ImportChunksResult) => {
     )
   );
   datasetStore.addDataSources(loadables);
+  // These name what this batch supplied, not what the merged dataset now holds;
+  // the store owns that. Callers may read a name off them, never persist one.
   return loadables;
 };
 
