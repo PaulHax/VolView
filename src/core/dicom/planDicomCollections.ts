@@ -424,7 +424,7 @@ export function validateCollections(
 export function planDicomCollections(input: PlanInput) {
   const { kept, diagnostics: dedupeDiagnostics } = dedupe(input.instances);
 
-  const collections = groupBy(kept, hardFactSignature)
+  const planned = groupBy(kept, hardFactSignature)
     .flatMap((group) =>
       bucketByOrientation(group).map((bucket) => ({
         group,
@@ -478,6 +478,18 @@ export function planDicomCollections(input: PlanInput) {
     .sort((left, right) =>
       canonicalKey(left.key) < canonicalKey(right.key) ? -1 : 1
     );
+
+  // A series that plans to one instance is a whole volume: nothing was held
+  // out of a sibling, and one slice has no order or spacing to get wrong.
+  const lone = planned.length === 1 && planned[0].members.length === 1;
+  const collections = lone
+    ? planned.map((collection) => ({
+        ...collection,
+        warnings: collection.warnings.filter(
+          (warning) => warning !== UNREADABLE_POSITION_WARNING
+        ),
+      }))
+    : planned;
 
   validateCollections(kept, collections);
 
