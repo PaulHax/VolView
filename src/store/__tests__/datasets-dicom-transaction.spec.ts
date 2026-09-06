@@ -72,6 +72,16 @@ const splitting = () => ({
 
 const cachedIds = () => Object.keys(useImageCacheStore().imageById);
 
+// `vite.config.ts` runs the suite with --expose-gc, so an unreachable object is
+// collected rather than merely eligible.
+const collect = async (rounds = 5): Promise<void> => {
+  const { gc } = globalThis as { gc?: () => void };
+  if (!gc) throw new Error('run vitest with --expose-gc');
+  await flush();
+  gc();
+  if (rounds > 1) await collect(rounds - 1);
+};
+
 // The same image is asked twice: once for the first slice, once for the
 // membership the second slice grows it to.
 const failsFirstGrowth = () => {
@@ -486,6 +496,26 @@ describe('DICOM store transactional commit', () => {
     expect(cachedIds()).toEqual([]);
     expect(store.volumeInfo).toEqual({});
     expect(store.studyVolumes).toEqual({});
+  });
+
+  it('releases the chunks of a volume the user removed', async () => {
+    const store = useDICOMStore();
+    let chunk!: WeakRef<Chunk>;
+
+    await (async () => {
+      const only = chunkFor({ sop: 'collectable', z: 0 });
+      chunk = new WeakRef(only);
+      const image = imageFactory().createChunkImage();
+      const { volumes } = await store.importChunks([only], {
+        createChunkImage: () => image,
+      });
+      useDatasetStore().remove(Object.keys(volumes)[0]);
+    })();
+    await collect();
+
+    // The store outlives the import, so anything it still holds holds the
+    // removed volume's DICOM bytes with it.
+    expect(chunk.deref()).toBeUndefined();
   });
 
   it('lets another series commit while one series is still preparing', async () => {

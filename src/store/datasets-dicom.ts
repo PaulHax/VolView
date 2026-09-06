@@ -177,9 +177,15 @@ const inSeriesTransaction = <T>(
 ) => {
   const { lanes } = sessionFor(store);
   const transaction = (lanes.get(seriesKey) ?? Promise.resolve()).then(run);
+  // A lane outlives every import it sequences, so it keeps the outcome and not
+  // the result: holding the last batch's chunks would pin its DICOM bytes for
+  // the store's lifetime, past the point the user removed the volume.
   lanes.set(
     seriesKey,
-    transaction.catch(() => {})
+    transaction.then(
+      () => {},
+      () => {}
+    )
   );
   return transaction;
 };
