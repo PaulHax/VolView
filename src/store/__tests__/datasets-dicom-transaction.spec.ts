@@ -501,19 +501,24 @@ describe('DICOM store transactional commit', () => {
     const store = useDICOMStore();
     let chunk!: WeakRef<Chunk>;
 
+    // The series keeps its other collection, so nothing that outlives the
+    // import is emptied out from under the removed one.
     await (async () => {
-      const only = chunkFor({ sop: 'collectable', z: 0 });
-      chunk = new WeakRef(only);
-      const image = imageFactory().createChunkImage();
-      const { volumes } = await store.importChunks([only], {
-        createChunkImage: () => image,
+      const { scout, slices } = scoutBatch();
+      chunk = new WeakRef(scout);
+      const { createChunkImage } = imageFactory();
+      const { volumes } = await store.importChunks([scout, ...slices], {
+        createChunkImage,
       });
-      useDatasetStore().remove(Object.keys(volumes)[0]);
+      const removed = Object.entries(volumes).find(
+        ([, chunks]) => chunks[0] === scout
+      )![0];
+      useDatasetStore().remove(removed);
     })();
     await collect();
 
-    // The store outlives the import, so anything it still holds holds the
-    // removed volume's DICOM bytes with it.
+    // Whatever the store and the registry still hold holds the removed
+    // volume's DICOM bytes with it.
     expect(chunk.deref()).toBeUndefined();
   });
 
