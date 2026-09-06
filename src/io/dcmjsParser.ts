@@ -83,6 +83,20 @@ const byteDecoder = {
     binaryString(new Uint8Array(view.buffer, view.byteOffset, view.byteLength)),
 };
 
+/**
+ * dcmjs reads a sequence item from a stream of its own, whose decoder defaults
+ * to windows-1252 and which its item reader replaces with one of its own when
+ * the item declares a character set. Both lose the bytes a data set wide
+ * character set needs, so every derived stream keeps the byte decoder.
+ */
+const readsBytes = (stream: DicomReadStream) => {
+  stream.setDecoder(byteDecoder);
+  const derive = stream.more.bind(stream);
+  stream.more = (length: number) => readsBytes(derive(length));
+  stream.setDecoder = () => {};
+  return stream;
+};
+
 const viewBytes = (value: unknown) => {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value))
@@ -129,8 +143,10 @@ const openFile = (bytes: Uint8Array) => {
     syntax === DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN
       ? new DeflatedReadBufferStream(stream)
       : stream;
-  dataSet.setDecoder(byteDecoder);
-  return { dataSet, syntax: DicomMessage._normalizeSyntax(syntax) };
+  return {
+    dataSet: readsBytes(dataSet),
+    syntax: DicomMessage._normalizeSyntax(syntax),
+  };
 };
 
 /**
