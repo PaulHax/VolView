@@ -458,6 +458,35 @@ describe('planDicomCollections', () => {
     expect(unknown.warnings).toEqual([UNREADABLE_POSITION_WARNING]);
   });
 
+  it('says nothing about a series that is one positionless instance', () => {
+    const alone = makeFacts('uid-a', {
+      projectedPosition: null,
+      instanceNumber: 1,
+    });
+
+    const { collections } = plan([alone]);
+
+    expect(collections).toHaveLength(1);
+    expect(collections[0].warnings).toEqual([]);
+  });
+
+  it('warns about a lone positionless instance beside a volume it missed', () => {
+    const alone = makeFacts('uid-a', {
+      projectedPosition: null,
+      instanceNumber: 1,
+    });
+    const seen = makeFacts('uid-b', {
+      projectedPosition: 2,
+      instanceNumber: 2,
+    });
+
+    const { collections } = plan([alone, seen]);
+
+    expect(collectionWith(collections, 'uid-a').warnings).toEqual([
+      UNREADABLE_POSITION_WARNING,
+    ]);
+  });
+
   it('breaks a shared instance number on SOP Instance UID', () => {
     const second = makeFacts('uid-b', {
       projectedPosition: null,
