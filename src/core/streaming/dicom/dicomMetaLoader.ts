@@ -1,14 +1,11 @@
-import {
-  createDicomParser,
-  ImplicitTransferSyntaxUID,
-} from '@/src/core/streaming/dicom/dicomParser';
+import { createDicomParser } from '@/src/core/streaming/dicom/dicomParser';
 import { StopSignal } from '@/src/core/streaming/cachedStreamFetcher';
 import { Fetcher, MetaLoader } from '@/src/core/streaming/types';
 import { Maybe } from '@/src/types';
 import { Awaitable } from '@vueuse/core';
-import { toAscii } from '@/src/utils';
 import { FILE_EXT_TO_MIME } from '@/src/io/mimeTypes';
 import { Tags } from '@/src/core/dicomTags';
+import { readDicomTags } from '@/src/io/readDicomTags';
 import {
   decodeUltrasoundRegion,
   SEQUENCE_OF_ULTRASOUND_REGIONS,
@@ -16,30 +13,34 @@ import {
 } from '@/src/core/streaming/dicom/ultrasoundRegion';
 
 export type ReadDicomTagsFunction = (
-  file: File
+  bytes: Uint8Array
 ) => Awaitable<Array<[string, string]>>;
 
-function generateEmptyPixelData(explicitVr: boolean) {
-  // prettier-ignore
-  return new Uint8Array([
-    0xe0, 0x7f, 0x10, 0x00, // PixelData (group, element)
-    ...(explicitVr ? [0x4f, 0x42, 0x00, 0x00] : []), // OB
-    0, 0, 0, 0 // zero length
-  ]);
-}
+/** The delivered bytes up to `end`, in order. */
+const concatUpTo = (chunks: readonly Uint8Array[], end: number) => {
+  const header = new Uint8Array(end);
+  chunks.reduce((at, chunk) => {
+    if (at >= end) return at;
+    const part = chunk.subarray(0, end - at);
+    header.set(part, at);
+    return at + part.length;
+  }, 0);
+  return header;
+};
+
+const totalLength = (chunks: readonly Uint8Array[]) =>
+  chunks.reduce((total, chunk) => total + chunk.length, 0);
 
 export class DicomMetaLoader implements MetaLoader {
   private tags: Maybe<Array<[string, string]>>;
-  private fetcher: Fetcher;
-  private readDicomTags: ReadDicomTagsFunction;
-  private blob: Blob | null;
+  private blob: Blob | null = null;
+  private offset: Maybe<number>;
   public ultrasoundRegions: UltrasoundRegions | undefined;
 
-  constructor(fetcher: Fetcher, readDicomTags: ReadDicomTagsFunction) {
-    this.fetcher = fetcher;
-    this.readDicomTags = readDicomTags;
-    this.blob = null;
-  }
+  constructor(
+    private fetcher: Fetcher,
+    private readTags: ReadDicomTagsFunction = readDicomTags
+  ) {}
 
   get meta() {
     return this.tags;
@@ -49,30 +50,24 @@ export class DicomMetaLoader implements MetaLoader {
     return this.blob;
   }
 
+  /** Where Pixel Data starts, or the file's length when it has none. */
+  get pixelDataOffset() {
+    return this.offset;
+  }
+
   async load() {
     if (this.tags) return;
 
     await this.fetcher.connect();
     const stream = this.fetcher.getStream();
-    let explicitVr = true;
-    let dicomUpToPixelDataIdx = -1;
-    let modality: string | undefined;
+    let pixelDataIdx = -1;
     let ultrasoundRegions: UltrasoundRegions | undefined;
 
     const parse = createDicomParser({
       stopAtElement(group, element) {
-        // PixelData
         return group === 0x7fe0 && element === 0x0010;
       },
       onDataElement: (el) => {
-        if (el.group === 0x0002 && el.element === 0x0010) {
-          const transferSyntaxUid = toAscii(el.data as Uint8Array);
-          explicitVr = transferSyntaxUid !== ImplicitTransferSyntaxUID;
-        }
-        // Capture Modality tag (0008,0060)
-        if (el.group === 0x0008 && el.element === 0x0060 && el.data) {
-          modality = toAscii(el.data as Uint8Array).trim();
-        }
         if (
           el.group === SEQUENCE_OF_ULTRASOUND_REGIONS[0] &&
           el.element === SEQUENCE_OF_ULTRASOUND_REGIONS[1] &&
@@ -89,53 +84,39 @@ export class DicomMetaLoader implements MetaLoader {
       },
     });
 
-    const sinkStream = new WritableStream({
-      write: (chunk) => {
-        const result = parse(chunk);
-        if (result.done) {
-          dicomUpToPixelDataIdx = result.value.position;
-          this.fetcher.close();
-        }
-      },
-    });
-
+    // Read a chunk at a time and cancel the moment the header ends: a stream
+    // that reads ahead pulls pixel data this loader never uses.
+    const reader = stream.getReader();
     try {
-      await stream.pipeTo(sinkStream, {
-        // ensure we use the fetcher's abort signal,
-        // otherwise a DOMException will be propagated
-        signal: this.fetcher.abortSignal,
-      });
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const result = parse(value);
+        if (result.done) {
+          pixelDataIdx = result.value.position;
+          break;
+        }
+      }
     } catch (err) {
       if (err !== StopSignal) {
         throw err;
       }
+    } finally {
+      // Not awaited, so the cancel lands before the stream refills its queue.
+      reader.cancel().catch(() => {});
+      this.fetcher.close();
     }
 
-    // itk.wasm/GDCM requires valid pixel data to be present, so we need to
-    // generate fake pixel data. Valid means valid length and VR.
-    // It turns out that encapsulated pixel data structures are parsed, even if
-    // the pixel data itself is not touched. This does not work well with
-    // metadata streaming.
-    const metaBlob = new Blob(this.fetcher.cachedChunks).slice(
-      0,
-      dicomUpToPixelDataIdx
-    );
-    const validPixelDataBlob = new Blob(
-      [metaBlob, generateEmptyPixelData(explicitVr)],
-      { type: FILE_EXT_TO_MIME.dcm }
-    );
+    // An object with no Pixel Data, such as an RT structure set, is header to
+    // its last byte.
+    const chunks = this.fetcher.cachedChunks;
+    this.offset = pixelDataIdx < 0 ? totalLength(chunks) : pixelDataIdx;
 
-    this.blob = validPixelDataBlob;
+    const header = concatUpTo(chunks, this.offset);
+    this.blob = new Blob([header as BlobPart], { type: FILE_EXT_TO_MIME.dcm });
+    this.tags = await this.readTags(header);
 
-    // Skip ITK-WASM for RT modalities as they're not supported
-    if (modality?.startsWith('RT')) {
-      this.tags = [[Tags.Modality, modality]];
-      return;
-    }
-
-    const metadataFile = new File([validPixelDataBlob], 'file.dcm');
-    this.tags = await this.readDicomTags(metadataFile);
-
+    const modality = new Map(this.tags).get(Tags.Modality)?.trim();
     if (modality === 'US' && ultrasoundRegions) {
       this.ultrasoundRegions = ultrasoundRegions;
     }
