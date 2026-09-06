@@ -69,7 +69,8 @@ type SeriesEntry = {
   dissolving: Set<string>;
   // Every collection ID forgotten from this series, in order.
   forgotten: string[];
-  queue: Promise<unknown>;
+  // Sequencing only: a settled queue holds no plan, so it pins no chunk.
+  queue: Promise<void>;
 };
 
 type Snapshot = {
@@ -272,8 +273,14 @@ export function createDicomCollectionRegistry(): DicomCollectionRegistry {
         });
         return planSeries(entry, seriesKey, batch);
       });
-      // A failed plan must not wedge the series behind it.
-      entry.queue = update.catch(() => {});
+      // A failed plan must not wedge the series behind it, and the queue
+      // outlives every batch it orders, so it keeps the outcome and not the
+      // plan: holding the members would pin the chunks of a collection the
+      // user has since removed for as long as the series has any other.
+      entry.queue = update.then(
+        () => {},
+        () => {}
+      );
       return update;
     });
 
