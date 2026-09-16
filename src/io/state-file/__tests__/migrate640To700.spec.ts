@@ -409,6 +409,57 @@ describe('migrate640To700: structural stage', () => {
     expect(() => ManifestSchema.parse(migrated)).not.toThrow();
   });
 
+  it('treats inherited property names and label ids as literal keys', () => {
+    const inheritedName = {
+      ...TUMOR,
+      name: 'constructor',
+    };
+    const polygon = (label: string, slice: number) => ({
+      imageID: 'ds-ct',
+      frameOfReference: {
+        planeOrigin: [0, 0, slice],
+        planeNormal: [0, 0, 1],
+      },
+      slice,
+      label,
+      points: [
+        [1, 1, slice],
+        [3, 1, slice],
+        [2, 3, slice],
+      ],
+    });
+    const migrated = ManifestSchema.parse(
+      migrate({
+        segmentGroups: [legacyGroup('sg-a', 'ds-ct', [inheritedName])],
+        tools: {
+          polygons: {
+            tools: [polygon('constructor', 1), polygon('__proto__', 2)],
+            labels: {
+              constructor: { labelName: 'constructor', color: 'blue' },
+              ['__proto__']: { labelName: 'Prototype', color: 'green' },
+              toString: { labelName: 'toString', color: 'red' },
+            },
+          },
+        },
+      })
+    ) as any;
+
+    const painted = segmentOfMask(
+      migrated,
+      orderedMasks(segmentationFor(migrated, 'ds-ct'))[0]
+    );
+    expect(migrated.tools.polygons.tools[0].segmentId).toBe(painted.id);
+    expect(painted.color).toEqual(inheritedName.color);
+    expect(migrated.tools.polygons.tools[1].segmentId).toBe(
+      migrated.segments.find((segment: any) => segment.name === 'Prototype').id
+    );
+    expect(migrated.segments.map((segment: any) => segment.name)).toEqual([
+      'constructor',
+      'Prototype',
+      'toString',
+    ]);
+  });
+
   // Two masks of one type on one image is a state the app cannot hold, and two
   // images that painted "Tumor" separately each described their own thing.
   it('keeps a name two groups carry on separate types', () => {

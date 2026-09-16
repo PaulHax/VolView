@@ -404,7 +404,7 @@ const migrate640To700 = (inputManifest: any) => {
   // first to declare it sets the appearance. Groups themselves never merge:
   // two of them on one image would put two masks on one segment, and the app
   // keeps only one.
-  const segmentIdByName: Record<string, string> = {};
+  const segmentIdByName = new Map<string, string>();
 
   const addRecord = (parentImage: string, record: any) => {
     const records = recordsByParent.get(parentImage) ?? [];
@@ -445,7 +445,9 @@ const migrate640To700 = (inputManifest: any) => {
         visible: mask.visible ?? true,
         locked: mask.locked ?? false,
       });
-      segmentIdByName[mask.name] ??= segmentId;
+      if (!segmentIdByName.has(mask.name)) {
+        segmentIdByName.set(mask.name, segmentId);
+      }
       if (group.id === activeGroupId && value === activeValue) {
         selectedSegmentId = segmentId;
       }
@@ -487,34 +489,34 @@ const migrate640To700 = (inputManifest: any) => {
   // before and goes on offering it.
   const toolSegmentIds = (key: string, into: any[]) => {
     const entry = manifest.tools?.[key];
-    if (!entry) return {} as Record<string, string>;
+    if (!entry) return;
 
     const labels = entry.labels ?? {};
-    const segmentIdByLabel: Record<string, string> = {};
+    const segmentIdByLabel = new Map<string, string>();
     Object.entries(labels).forEach(([labelId, label]: [string, any]) => {
       const { labelName, color, strokeWidth } = label;
       const name = labelName || labelId;
-      segmentIdByLabel[labelId] =
-        segmentIdByName[name] ??
+      const segmentId =
+        segmentIdByName.get(name) ??
         addSegment(into, uniqueId(`${key}-${labelId}`), {
           name,
           color: cssColorToRGBA(color ?? ''),
           ...(strokeWidth === undefined ? {} : { strokeWidth }),
         });
-      segmentIdByName[name] = segmentIdByLabel[labelId];
+      segmentIdByLabel.set(labelId, segmentId);
+      segmentIdByName.set(name, segmentId);
     });
 
     entry.tools = (Array.isArray(entry.tools) ? entry.tools : []).map(
       (tool: any) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { label, labelName, color, strokeWidth, ...rest } = tool;
-        const segmentId = segmentIdByLabel[label];
+        const segmentId = segmentIdByLabel.get(label);
         return segmentId === undefined ? rest : { ...rest, segmentId };
       }
     );
 
     delete entry.labels;
-    return segmentIdByLabel;
   };
 
   ['rulers', 'rectangles', 'polygons'].forEach((key) =>
