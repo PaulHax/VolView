@@ -31,8 +31,10 @@ const onDelete = () => {
   <v-card>
     <slot name="title"></slot>
     <v-card-item>
-      <div class="d-flex flex-row">
-        <div class="flex-grow-1 d-flex flex-column justify-space-between mr-4">
+      <div class="label-editor-layout d-flex flex-row">
+        <div
+          class="label-editor-fields flex-grow-1 d-flex flex-column justify-space-between mr-4"
+        >
           <slot name="fields" :done="done"></slot>
           <v-card-actions class="mb-2 px-0">
             <span
@@ -81,6 +83,7 @@ const onDelete = () => {
           </v-card-actions>
         </div>
         <v-color-picker
+          class="label-color-picker"
           :model-value="color"
           @update:model-value="$emit('update:color', $event)"
           mode="rgb"
@@ -90,3 +93,20 @@ const onDelete = () => {
     </v-card-item>
   </v-card>
 </template>
+
+<style scoped>
+@media (max-width: 600px) {
+  .label-editor-layout {
+    flex-direction: column !important;
+  }
+
+  .label-editor-fields {
+    margin-right: 0 !important;
+  }
+
+  .label-color-picker {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+</style>
