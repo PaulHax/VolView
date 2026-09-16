@@ -20,15 +20,30 @@
       :tool-store="activeToolStore"
       v-slot="{ context }"
     >
-      <v-list-item
-        v-if="!isCurrentImageCine"
-        @click="rasterize(context.forToolID)"
+      <v-tooltip
+        :disabled="!rasterizeDisabledReason(context.forToolID)"
+        :text="rasterizeDisabledReason(context.forToolID)"
+        location="top"
       >
-        <template #prepend>
-          <v-icon>mdi-grid</v-icon>
+        <template #activator="{ props: tooltipProps }">
+          <div
+            v-bind="tooltipProps"
+            :tabindex="
+              rasterizeDisabledReason(context.forToolID) ? 0 : undefined
+            "
+          >
+            <v-list-item
+              @click="rasterize(context.forToolID)"
+              :disabled="!!rasterizeDisabledReason(context.forToolID)"
+            >
+              <template #prepend>
+                <v-icon>mdi-grid</v-icon>
+              </template>
+              <v-list-item-title>Rasterize</v-list-item-title>
+            </v-list-item>
+          </div>
         </template>
-        <v-list-item-title>Rasterize</v-list-item-title>
-      </v-list-item>
+      </v-tooltip>
       <v-tooltip
         :disabled="mergePossible"
         text="Shift select multiple polygons that overlap and have the same label."
@@ -73,7 +88,10 @@ import { locatorPatch } from '@/src/core/annotations/locator';
 import { watchImmediate } from '@vueuse/core';
 import { type ToolID } from '@/src/types/annotation-tool';
 import PolygonWidget2D from '@/src/components/tools/polygon/PolygonWidget2D.vue';
-import { rasterizePolygon } from '@/src/segmentation/editing/rasterizePolygon';
+import {
+  rasterizePolygon,
+  rasterizeTargetDisabledReason,
+} from '@/src/segmentation/editing/rasterizePolygon';
 import { isCineImage } from '@/src/core/cine/isCineImage';
 
 const useActiveToolStore = usePolygonStore;
@@ -193,6 +211,14 @@ export default defineComponent({
 
     const isCurrentImageCine = computed(() => isCineImage(imageId.value));
 
+    function rasterizeDisabledReason(toolId: ToolID) {
+      if (isCurrentImageCine.value) {
+        return 'Rasterization is not supported for cine images';
+      }
+      const tool = activeToolStore.toolByID[toolId];
+      return rasterizeTargetDisabledReason(tool?.segmentId);
+    }
+
     function rasterize(toolId: ToolID) {
       if (!imageId.value) {
         throw new Error('No image ID available for rasterization');
@@ -234,7 +260,7 @@ export default defineComponent({
       onHover,
       overlayInfo,
       rasterize,
-      isCurrentImageCine,
+      rasterizeDisabledReason,
     };
   },
 });
