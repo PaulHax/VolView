@@ -1,4 +1,5 @@
 import AppPage from '../pageobjects/volview.page';
+import type { ChainablePromiseElement } from 'webdriverio';
 import {
   drawSquare,
   nudgeTo,
@@ -7,14 +8,29 @@ import {
 } from './annotationTestUtils';
 import {
   addSegment,
+  lockSegment,
   openAnnotationSegments,
   renameSegment,
   segmentColor,
   segmentNames,
   waitForNamedSegments,
 } from './segmentationTestUtils';
+import { CINE_US_DATASET } from './configTestUtils';
+import { openUrls } from './utils';
 
 const RASTERIZE_ITEM = '.v-list-item-title=Rasterize';
+
+const rasterizeMenuParts = async () => {
+  const title = await $(RASTERIZE_ITEM);
+  const item = await title.$('..').$('..');
+  return { item, activator: await item.$('..') };
+};
+
+const tooltipFor = async (element: ChainablePromiseElement) => {
+  const id = await element.getAttribute('aria-describedby');
+  expect(id).toBeTruthy();
+  return $(`[id="${id}"]`);
+};
 
 // The menu comes off the widget's own pick, so hover the handle first and press
 // without moving.
@@ -87,5 +103,69 @@ describe('Polygon rasterize target', () => {
       timeoutMsg:
         'Rasterizing against an empty registry should create one segment',
     });
+  });
+
+  it('explains a locked rasterize target on hover and keyboard focus', async () => {
+    const { centerX, centerY } = await setupTest();
+    const half = 60;
+    await openAnnotationSegments();
+    await addSegment();
+    await AppPage.selectTool('mdi-pentagon-outline');
+    await drawSquare(centerX, centerY, half);
+    await lockSegment('Segment 1');
+
+    await AppPage.selectTool('mdi-cursor-default');
+    await openPolygonMenuAt(centerX + half, centerY - half);
+    let { item, activator } = await rasterizeMenuParts();
+    expect(await item.getAttribute('class')).toContain('v-list-item--disabled');
+
+    await activator.moveTo();
+    let tooltip = await tooltipFor(activator);
+    await expect(tooltip).toBeDisplayed();
+    await expect(tooltip).toHaveText(
+      'Unlock this segment to rasterize into it'
+    );
+
+    await activator.execute((element) => element.focus());
+    tooltip = await tooltipFor(activator);
+    await expect(tooltip).toBeDisplayed();
+
+    await browser.keys('Escape');
+    const row = await $('[data-testid="segment-list"] .item-row');
+    await row.$('button i[class~="mdi-lock"]').click();
+    await openPolygonMenuAt(centerX + half, centerY - half);
+    ({ item, activator } = await rasterizeMenuParts());
+    expect(await item.getAttribute('class')).not.toContain(
+      'v-list-item--disabled'
+    );
+    await item.click();
+    await waitForNamedSegments();
+  });
+
+  it('keeps Rasterize visible on cine and explains why it is disabled', async () => {
+    await openUrls([CINE_US_DATASET]);
+    const [view] = await AppPage.getViews2D();
+    const canvas = await view.$('canvas');
+    const [location, size] = await Promise.all([
+      canvas.getLocation(),
+      canvas.getSize(),
+    ]);
+    const centerX = location.x + size.width / 2;
+    const centerY = location.y + size.height / 2;
+    const half = 30;
+
+    await AppPage.selectTool('mdi-pentagon-outline');
+    await drawSquare(centerX, centerY, half);
+    await AppPage.selectTool('mdi-cursor-default');
+    await openPolygonMenuAt(centerX + half, centerY - half);
+
+    const { item, activator } = await rasterizeMenuParts();
+    expect(await item.getAttribute('class')).toContain('v-list-item--disabled');
+    await activator.moveTo();
+    const tooltip = $('.v-tooltip.v-overlay--active .v-overlay__content');
+    await expect(tooltip).toBeDisplayed();
+    await expect(tooltip).toHaveText(
+      'Rasterization is not supported for cine images'
+    );
   });
 });
