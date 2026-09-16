@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';
 import vtkImageData from '@kitware/vtk.js/Common/DataModel/ImageData';
 import {
   allocateLabelmap,
   labelmapScalars,
   normalizeLabelmapScalars,
 } from '../labelmap';
+import { toLabelMap } from '../import';
 
 describe('labelmap interchange storage', () => {
   it.each([255, 256, 65535])('stores label %i without truncation', (count) => {
@@ -45,6 +47,21 @@ describe('labelmap interchange storage', () => {
     expect(values).toBeInstanceOf(Uint16Array);
     expect(Array.from(values)).toEqual([0, 1, 255, 256, 65535, 0, 0, 0, 0]);
     expect(input[6]).toBe(65536);
+  });
+
+  it('excludes fractional labels instead of merging their voxels', () => {
+    const input = vtkImageData.newInstance();
+    input.setDimensions(4, 1, 1);
+    input.getPointData().setScalars(
+      vtkDataArray.newInstance({
+        numberOfComponents: 1,
+        values: new Float32Array([1, 1.9, 2, 2.9]),
+      })
+    );
+
+    expect(Array.from(labelmapScalars(toLabelMap(input)))).toEqual([
+      1, 0, 2, 0,
+    ]);
   });
 
   it('normalizes a wide binary input to byte mask storage', () => {
