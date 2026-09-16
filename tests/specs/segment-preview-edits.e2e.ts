@@ -98,19 +98,95 @@ async function previewFill() {
   await AppPage.processApplyButton.waitForClickable();
 }
 
-async function renderedPreview() {
-  await browser.executeAsync((done) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => done(undefined)));
-  });
-  const images = await browser.execute(() =>
+type PreviewChoice = 'original' | 'processed';
+
+const previewCanvasState = () =>
+  browser.execute(() =>
     Array.from(
       document.querySelectorAll<HTMLCanvasElement>(
         'div[data-testid~="vtk-two-view"] canvas'
       )
-    ).map((canvas) => canvas.toDataURL())
+    ).map((canvas) => {
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const context = copy.getContext('2d');
+      context?.drawImage(canvas, 0, 0);
+      const pixels = context?.getImageData(0, 0, copy.width, copy.height).data;
+      if (!pixels) return null;
+
+      const size = Math.min(copy.width, copy.height);
+      const centerX = copy.width / 2;
+      const centerY = copy.height / 2;
+      const samples = Array.from({ length: pixels.length / 4 }, (_, index) => {
+        const offset = index * 4;
+        const red = pixels[offset];
+        const green = pixels[offset + 1];
+        const blue = pixels[offset + 2];
+        return {
+          dx: Math.abs((index % copy.width) - centerX) / size,
+          dy: Math.abs(Math.floor(index / copy.width) - centerY) / size,
+          visible: pixels[offset + 3] > 0 && red + green + blue > 15,
+          overlay: red > green + 35 && red > blue + 35,
+        };
+      });
+      const interior = samples.filter(
+        ({ dx, dy }) => dx > 0.07 && dx < 0.16 && dy > 0.07 && dy < 0.16
+      );
+
+      return {
+        image: canvas.toDataURL(),
+        visiblePixels: samples.filter(({ visible }) => visible).length,
+        boundaryOverlayPixels: samples.filter(
+          ({ dx, dy, overlay }) =>
+            overlay &&
+            dx > 0.025 &&
+            dy > 0.025 &&
+            dx < 0.42 &&
+            dy < 0.42 &&
+            (dx > 0.22 || dy > 0.22)
+        ).length,
+        interiorOverlayRatio:
+          interior.filter(({ overlay }) => overlay).length / interior.length,
+      };
+    })
   );
-  return images.map((image) =>
-    createHash('sha256').update(image).digest('hex')
+
+async function renderedPreview(choice: PreviewChoice, requireSelection = true) {
+  const button =
+    choice === 'original'
+      ? AppPage.processOriginalButton
+      : AppPage.processProcessedButton;
+  let state: Awaited<ReturnType<typeof previewCanvasState>> = [];
+
+  await browser.waitUntil(
+    async () => {
+      state = await previewCanvasState();
+      const expectedInterior = choice === 'processed' ? 0.25 : 0.02;
+      const interiorMatches = state.every((canvas) =>
+        choice === 'processed'
+          ? canvas !== null && canvas.interiorOverlayRatio > expectedInterior
+          : canvas !== null && canvas.interiorOverlayRatio < expectedInterior
+      );
+      return (
+        (!requireSelection || (await AppPage.isPreviewToggleActive(button))) &&
+        state.length > 0 &&
+        state.every(
+          (canvas) =>
+            canvas !== null &&
+            canvas.visiblePixels > 100 &&
+            canvas.boundaryOverlayPixels > 50
+        ) &&
+        interiorMatches
+      );
+    },
+    { timeoutMsg: `Expected ${choice} preview pixels and selection` }
+  );
+
+  return state.map((canvas) =>
+    createHash('sha256')
+      .update(canvas?.image ?? '')
+      .digest('hex')
   );
 }
 
@@ -147,26 +223,24 @@ describe('Segment preview ownership', () => {
   });
 
   it('keeps named preview choices idempotent for pointer and keyboard activation', async () => {
-    const beforePreview = await renderedPreview();
+    const initial = await renderedPreview('original', false);
     await previewFill();
-    const processed = await renderedPreview();
-    expect(processed).not.toEqual(beforePreview);
+    const processed = await renderedPreview('processed');
+    expect(processed).not.toEqual(initial);
 
     await AppPage.processProcessedButton.click();
-    const reselectedProcessed = await renderedPreview();
-    await AppPage.processProcessedButton.click();
-    expect(await renderedPreview()).toEqual(reselectedProcessed);
+    expect(await renderedPreview('processed')).toEqual(processed);
 
     await AppPage.processOriginalButton.execute((element) => element.focus());
     await browser.keys('Enter');
-    const original = await renderedPreview();
-    expect(original).not.toEqual(reselectedProcessed);
+    const original = await renderedPreview('original');
+    expect(original).toEqual(initial);
 
     await browser.keys('Enter');
-    expect(await renderedPreview()).toEqual(original);
+    expect(await renderedPreview('original')).toEqual(original);
 
     await AppPage.processProcessedButton.click();
-    expect(await renderedPreview()).toEqual(reselectedProcessed);
+    expect(await renderedPreview('processed')).toEqual(processed);
   });
 
   it('cancels a preview before a brush stroke and preserves the new stroke', async () => {
