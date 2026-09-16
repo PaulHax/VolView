@@ -28,6 +28,7 @@ import { useRectangleStore } from '@/src/store/tools/rectangles';
 import { usePolygonStore } from '@/src/store/tools/polygons';
 import { useViewStore } from '@/src/store/views';
 import { SEGMENT_VALUE } from '@/src/segmentation/masks/labelValue';
+import { defer } from '@/src/utils';
 
 // ---------------------------------------------------------------------------
 // Applying an `add-annotations` result.
@@ -124,8 +125,8 @@ const annotationsFile = (): WireFile => ({
   schemaVersion: 1,
   space: 'LPS',
   labels: {
-    // The SAME name in two namespaces with different styles — legal, because
-    // the stores are independent.
+    // Wire namespaces may style the same name differently. The first kind to
+    // bind that name establishes its appearance in the shared scene registry.
     rulers: { roi: { color: '#ff0000', strokeWidth: 3 } },
     rectangles: { roi: { color: '#00ff00', fillColor: '#00ff0033' } },
     polygons: { lesion: { color: '#0000ff' } },
@@ -175,6 +176,33 @@ const apply = (
     ...appApplyDependencies(),
     fetchResult: results.fetchResult,
   });
+
+const pauseApplyAt = (phase: 'download' | 'text') => {
+  const pending = defer<File | string>();
+  const entered = defer<void>();
+  const body = JSON.stringify(annotationsFile());
+  const file = new File([body], 'out.annotations.json');
+  const operation = applyIntent(intent(), context(IMAGE_ID), {
+    ...appApplyDependencies(),
+    fetchResult: async () => {
+      if (phase === 'download') {
+        entered.resolve();
+        return pending.promise as Promise<File>;
+      }
+      return {
+        text: () => {
+          entered.resolve();
+          return pending.promise as Promise<string>;
+        },
+      } as File;
+    },
+  });
+  return {
+    entered: entered.promise,
+    operation,
+    release: () => pending.resolve(phase === 'download' ? file : body),
+  };
+};
 
 const toolCounts = () => ({
   rulers: useRulerStore().toolIDs.length,
@@ -561,6 +589,63 @@ describe('applyIntent — add-annotations', () => {
     expect(outcome.status).toBe('failed');
     expect(results.downloads).toEqual([]);
   });
+
+  it.each(['download', 'text'] as const)(
+    'does not mutate the scene when the submitted image is deleted during %s',
+    async (phase) => {
+      const otherImage = 'healthy-image';
+      seatImage(otherImage);
+      const registry = useSegmentStore().segments;
+      const existingSegment = registry.addSegment({ name: 'Existing' });
+      const existingTool = useRulerStore().addTool({
+        imageID: otherImage,
+        segmentId: existingSegment,
+        placing: false,
+      });
+      const paused = pauseApplyAt(phase);
+
+      await paused.entered;
+      useImageCacheStore().removeImage(IMAGE_ID);
+      useViewStore().setDataForAllViews(otherImage);
+      paused.release();
+
+      const outcome = await paused.operation;
+      expect(outcome.status).toBe('failed');
+      expect(toolCounts()).toEqual({ rulers: 1, rectangles: 0, polygons: 0 });
+      expect(useRulerStore().toolByID[existingTool]).toMatchObject({
+        imageID: otherImage,
+        segmentId: existingSegment,
+      });
+      expect(useRulerStore().serializeTools().tools).toEqual([
+        expect.objectContaining({ imageID: otherImage }),
+      ]);
+      expect(registry.segmentList.value.map(({ name }) => name)).toEqual([
+        'Existing',
+      ]);
+      expect(useImageCacheStore().getImageMetadata(otherImage)).not.toBeNull();
+    }
+  );
+
+  it.each(['download', 'text'] as const)(
+    'keeps targeting the submitted image when the current image changes during %s',
+    async (phase) => {
+      const otherImage = 'current-image';
+      seatImage(otherImage);
+      const paused = pauseApplyAt(phase);
+
+      await paused.entered;
+      useViewStore().setDataForAllViews(otherImage);
+      paused.release();
+
+      expect((await paused.operation).status).toBe('applied');
+      expect(toolCounts()).toEqual({ rulers: 1, rectangles: 1, polygons: 1 });
+      expect([
+        onlyTool(useRulerStore()).imageID,
+        onlyTool(useRectangleStore()).imageID,
+        onlyTool(usePolygonStore()).imageID,
+      ]).toEqual([IMAGE_ID, IMAGE_ID, IMAGE_ID]);
+    }
+  );
 
   it('fails on a malformed result body without touching the stores', async () => {
     serveFile('not json at all');

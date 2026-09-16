@@ -265,10 +265,10 @@ const reportUnparseableColors = (rejected: Set<string>) => {
   );
 };
 
-// Type identity across the boundary is the NAME, inside its own registry:
-// binding returns the type id a tool must point at, minting on a miss. Only
-// names the tools actually reference are bound. A declaration nothing uses
-// would be clutter in the picker.
+// Wire labels have per-kind namespaces, but their names bind into the shared
+// scene segment registry. The first kind to mint a name establishes its style.
+// Only names that tools reference are bound, keeping unused declarations out
+// of the picker.
 const bindReferencedSegments = (
   kind: AnnotationToolKind,
   tools: readonly PreparedCore[],
@@ -312,8 +312,9 @@ async function applyAnnotations(
   // Tools are anchored to an image; without one they would be orphans the UI
   // never shows. Opening the file as a dataset is not a fallback either — it is
   // not an image.
+  const imageCache = useImageCacheStore();
   const imageMetadata = parentSelection
-    ? useImageCacheStore().getImageMetadata(parentSelection)
+    ? imageCache.getImageMetadata(parentSelection)
     : null;
   if (!parentSelection || !imageMetadata) {
     return {
@@ -331,6 +332,14 @@ async function applyAnnotations(
   });
   const decoded = decodeAnnotationsFile(JSON.parse(await file.text()));
 
+  if (!imageCache.getImageMetadata(parentSelection)) {
+    return {
+      status: 'failed',
+      error: new Error(
+        "Load the job's input image before applying annotations"
+      ),
+    };
+  }
   const prepared = prepareAnnotations(
     decoded,
     parentSelection,
@@ -342,8 +351,7 @@ async function applyAnnotations(
     return { status: 'applied' };
   }
 
-  // Types first for every kind, then the tools: a tool points at the type id
-  // its name bound to.
+  // Bind all names first, then add tools that reference the resulting segments.
   const rejectedColors = new Set<string>();
   const segmentIds = Object.fromEntries(
     ANNOTATION_TOOL_KINDS.map((kind) => [
