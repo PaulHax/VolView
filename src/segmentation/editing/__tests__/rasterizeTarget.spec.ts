@@ -6,7 +6,10 @@ import {
   lockSegment,
 } from '@/src/segmentation/__tests__/segmentMaskFixtures';
 
-import { resolveRasterizeTarget } from '@/src/segmentation/editing/rasterizePolygon';
+import {
+  rasterizeTargetDisabledReason,
+  resolveRasterizeTarget,
+} from '@/src/segmentation/editing/rasterizePolygon';
 import { useMessageStore } from '@/src/store/messages';
 import { useSegmentationStore } from '@/src/segmentation/store';
 import { useSegmentStore } from '@/src/segmentation/segments';
@@ -110,6 +113,31 @@ describe('polygon rasterize target', () => {
     expect(
       useMessageStore().messages.map((message) => message.title)
     ).toContain('Cannot rasterize into a locked segment');
+    expect(rasterizeTargetDisabledReason(segment.segmentId)).toBe(
+      'Unlock this segment to rasterize into it'
+    );
+  });
+
+  it('describes the same selected fallback execution will use', async () => {
+    await seatImage('img-1');
+    const stale = makeMask('img-1', 'Deleted');
+    const fallback = makeMask('img-1', 'Selected');
+    segments().selectSegment(fallback.segmentId);
+    segments().deleteSegment(stale.segmentId);
+    lockSegment(fallback.record.id, true);
+
+    expect(rasterizeTargetDisabledReason(stale.segmentId)).toBe(
+      'Unlock this segment to rasterize into it'
+    );
+    expect(rasterizeTargetDisabledReason('')).toBe(
+      'Unlock this segment to rasterize into it'
+    );
+
+    lockSegment(fallback.record.id, false);
+    expect(rasterizeTargetDisabledReason(stale.segmentId)).toBe('');
+    expect(targetOf('img-1', stale.segmentId).segmentId).toBe(
+      fallback.segmentId
+    );
   });
 
   it('rasterizes into a minted type when nothing is selected', async () => {

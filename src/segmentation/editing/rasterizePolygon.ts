@@ -7,6 +7,7 @@ import { containsPoint } from '@kitware/vtk.js/Common/DataModel/BoundingBox';
 import { useImageCacheStore } from '@/src/store/image-cache';
 import { useMessageStore } from '@/src/store/messages';
 import { useSegmentationStore } from '@/src/segmentation/store';
+import { useSegmentStore } from '@/src/segmentation/segments';
 import { SEGMENT_VALUE } from '@/src/segmentation/masks/labelValue';
 import type { Maybe } from '@/src/types';
 import type { LPSAxis } from '@/src/types/lps';
@@ -18,6 +19,14 @@ import {
   type Extent3D,
 } from '@/src/segmentation/geometry';
 import { getLPSDirections } from '@/src/utils/lps';
+
+/** Why the polygon's effective segment cannot receive a rasterized edit. */
+export function rasterizeTargetDisabledReason(segmentId: Maybe<string>) {
+  const registry = useSegmentStore().segments;
+  const preferred = registry.getSegment(segmentId);
+  const effective = preferred ?? registry.selectedSegment.value;
+  return effective?.locked ? 'Unlock this segment to rasterize into it' : '';
+}
 
 /**
  * The labelmap a polygon rasterizes into, absent when the record it lands in
