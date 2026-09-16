@@ -24,7 +24,10 @@ import { getLPSDirections } from '@/src/utils/lps';
 export function rasterizeTargetDisabledReason(segmentId: Maybe<string>) {
   const registry = useSegmentStore().segments;
   const preferred = registry.getSegment(segmentId);
-  const effective = preferred ?? registry.selectedSegment.value;
+  const effective =
+    preferred ??
+    registry.selectedSegment.value ??
+    registry.segmentList.value[0];
   return effective?.locked ? 'Unlock this segment to rasterize into it' : '';
 }
 
