@@ -52,7 +52,9 @@ const segmentsFromLabels = (legacy: NonNullable<z.output<typeof labels>>) =>
     (merged, record) => ({
       ...merged,
       ...Object.fromEntries(
-        Object.entries(record ?? {}).filter(([name]) => !(name in merged))
+        Object.entries(record ?? {}).filter(
+          ([name]) => !Object.hasOwn(merged, name)
+        )
       ),
     }),
     {}
