@@ -37,27 +37,29 @@ export function allocateLabelmap(parent: vtkImageData, count: number) {
   return image;
 }
 
+// Number.isInteger also excludes NaN and the infinities.
+const isLabelValue = (value: number) =>
+  value >= 0 && value <= LABELMAP_MAX_VALUE && Number.isInteger(value);
+
 /** Reject unsupported values instead of wrapping them into another segment. */
 export function normalizeLabelmapScalars(
   input: number[] | TypedArray
 ): LabelmapScalars {
   if (input instanceof Uint8Array) return input;
-  // Both passes are hot over whole volumes, so they index the input directly
-  // and compare inline. NaN and the infinities fail every comparison below,
-  // which is what excludes them; a fresh typed array is already zeroed, so an
-  // excluded voxel needs no write.
+  // Both passes are hot over whole volumes, so they index the input directly.
+  // A fresh typed array is already zeroed, so an excluded voxel needs no write.
   const { length } = input;
   let maximum = 0;
   for (let index = 0; index < length; index += 1) {
     const value = input[index];
-    if (value > maximum && value <= LABELMAP_MAX_VALUE) maximum = value;
+    if (value > maximum && isLabelValue(value)) maximum = value;
   }
   const ArrayType = labelmapArrayType(maximum);
   if (input instanceof ArrayType) return input;
   const values = new ArrayType(length);
   for (let index = 0; index < length; index += 1) {
     const value = input[index];
-    if (value >= 0 && value <= LABELMAP_MAX_VALUE) values[index] = value;
+    if (isLabelValue(value)) values[index] = value;
   }
   return values;
 }
