@@ -84,6 +84,7 @@
           <div class="paint-parameters">
             <span class="text-body-2 text-no-wrap">Size</span>
             <v-slider
+              name="Brush size"
               :model-value="brushSize"
               @update:model-value="setBrushSize"
               density="compact"
@@ -95,6 +96,7 @@
             <span class="text-body-2 text-no-wrap">Threshold</span>
             <v-range-slider
               v-if="currentImageStats"
+              v-threshold-thumb-labels
               class="threshold-control"
               v-model="threshold"
               :min="currentImageStats.scalarMin"
@@ -103,6 +105,7 @@
             >
               <template #prepend>
                 <v-text-field
+                  aria-label="Minimum threshold"
                   :model-value="thresholdRange[0].toFixed(2)"
                   @input="setMinThreshold($event.target.value)"
                   variant="underlined"
@@ -119,6 +122,7 @@
               </template>
               <template #append>
                 <v-text-field
+                  aria-label="Maximum threshold"
                   :model-value="thresholdRange[1].toFixed(2)"
                   @input="setMaxThreshold($event.target.value)"
                   variant="underlined"
@@ -138,6 +142,7 @@
           <v-row no-gutters align="center" class="mb-2">
             <span class="mr-2">Sync Views</span>
             <v-switch
+              aria-label="Sync Views"
               v-model="crossPlaneSync"
               color="primary"
               density="compact"
@@ -175,6 +180,18 @@ import { usePaintProcessStore } from '@/src/segmentation/editing/paintProcess';
 import ProcessControls from '@/src/components/ProcessControls.vue';
 import { useCurrentImage } from '@/src/composables/useCurrentImage';
 import { useImageStatsStore } from '@/src/store/image-stats';
+
+const setThresholdThumbLabels = (element: HTMLElement) => {
+  // VRangeSlider has no endpoint-name props, so label its two focus targets.
+  const thumbs = element.querySelectorAll<HTMLElement>('[role="slider"]');
+  thumbs[0]?.setAttribute('aria-label', 'Minimum threshold');
+  thumbs[1]?.setAttribute('aria-label', 'Maximum threshold');
+};
+
+const vThresholdThumbLabels = {
+  mounted: setThresholdThumbLabels,
+  updated: setThresholdThumbLabels,
+};
 
 const paintStore = usePaintToolStore();
 const processStore = usePaintProcessStore();
