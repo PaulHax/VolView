@@ -1,14 +1,18 @@
 import { resolveLabelmapSources } from '@/src/io/import/labelmapImports';
-import { type Manifest } from '@/src/io/state-file/schema';
+import { ManifestSchema, type Manifest } from '@/src/io/state-file/schema';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setActivePinia, createPinia } from 'pinia';
 import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';
 import vtkImageData from '@kitware/vtk.js/Common/DataModel/ImageData';
-import { restoreStateFile } from '@/src/io/import/processors/restoreStateFile';
+import {
+  completeStateFileRestore,
+  restoreStateFile,
+} from '@/src/io/import/processors/restoreStateFile';
 import type { StateFileSetupResult } from '@/src/io/import/common';
 import { useSegmentationStore } from '@/src/segmentation/store';
 import { useSegmentStore } from '@/src/segmentation/segments';
 import { useImageCacheStore } from '@/src/store/image-cache';
+import { useViewStore } from '@/src/store/views';
 
 // ---------------------------------------------------------------------------
 // Disjoint restore stateID namespaces: a composed
@@ -165,6 +169,28 @@ describe('restore stateID namespaces (collision)', () => {
     // The synthesized artifact leaf can never take a dataset id's key.
     expect(artifact!.stateFileLeaf).toBeDefined();
     expect(artifact!.stateFileLeaf!.stateID).not.toBe('2');
+  });
+
+  it('assigns views to a manifest dataset when a temporary artifact finished first', async () => {
+    const manifest = ManifestSchema.parse({
+      version: '7.0.0',
+      dataSources: [
+        { id: 1, type: 'uri', uri: BASE_URI },
+        { id: 2, type: 'uri', uri: ARTIFACT_URI },
+      ],
+      datasets: [{ id: 'parent', dataSourceId: 1 }],
+    });
+    seatImage(BASE_STORE_ID, 'CT Chest');
+    seatImage(ARTIFACT_STORE_ID, 'Tumor.seg.nrrd');
+
+    await completeStateFileRestore(manifest, [], {
+      temporaryArtifact: ARTIFACT_STORE_ID,
+      parent: BASE_STORE_ID,
+    });
+
+    const displayed = useViewStore().visibleViews.map(({ dataID }) => dataID);
+    expect(displayed.length).toBeGreaterThan(0);
+    expect(new Set(displayed)).toEqual(new Set([BASE_STORE_ID]));
   });
 
   it.each([

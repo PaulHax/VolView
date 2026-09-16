@@ -164,29 +164,27 @@ export async function completeStateFileRestore(
     viewStore.bindViewsToData(stateID, storeID, manifest);
   });
 
-  if (!manifest.viewByID) {
-    const storeID = manifest.primarySelection
+  const defaultStoreID =
+    (manifest.primarySelection
       ? stateIDToStoreID[manifest.primarySelection]
-      : Object.values(stateIDToStoreID)[0];
-    if (storeID) {
-      viewStore.setDataForAllViews(storeID);
+      : undefined) ??
+    (resolvedDatasets.length > 0
+      ? stateIDToStoreID[resolvedDatasets[0].id]
+      : undefined);
+
+  if (!manifest.viewByID) {
+    if (defaultStoreID) {
+      viewStore.setDataForAllViews(defaultStoreID);
     }
   } else if (unresolvedDatasets.length > 0) {
     // Resolve-first-then-apply: a view whose saved dataset
     // never resolved resets to the default assignment — views are
     // reconstructible UI — rather than staying empty.
-    const fallbackStoreID =
-      (manifest.primarySelection
-        ? stateIDToStoreID[manifest.primarySelection]
-        : undefined) ??
-      (resolvedDatasets.length > 0
-        ? stateIDToStoreID[resolvedDatasets[0].id]
-        : undefined);
     const unresolvedIDs = new Set(unresolvedDatasets.map((ds) => ds.id));
-    if (fallbackStoreID !== undefined) {
+    if (defaultStoreID !== undefined) {
       Object.entries(manifest.viewByID).forEach(([viewID, view]) => {
         if (typeof view.dataID === 'string' && unresolvedIDs.has(view.dataID)) {
-          viewStore.setDataForView(viewID, fallbackStoreID);
+          viewStore.setDataForView(viewID, defaultStoreID);
         }
       });
     }
