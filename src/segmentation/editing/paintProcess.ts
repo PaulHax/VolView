@@ -564,13 +564,6 @@ export const usePaintProcessStore = defineStore('paintProcess', () => {
     }
   }
 
-  function togglePreview() {
-    const state = processState.value;
-    setShowingOriginal(
-      state.step === 'previewing' ? !state.showingOriginal : false
-    );
-  }
-
   watch(
     () => paintStore.activeMode,
     (mode, previousMode) => {
@@ -642,6 +635,5 @@ export const usePaintProcessStore = defineStore('paintProcess', () => {
     confirmProcess,
     cancelProcess,
     setShowingOriginal,
-    togglePreview,
   };
 });

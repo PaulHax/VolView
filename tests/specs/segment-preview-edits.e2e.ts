@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { createHash } from 'node:crypto';
 import JSZip from 'jszip';
 import { TEMP_DIR } from '../../wdio.shared.conf';
 import AppPage, { setValueVueInput } from '../pageobjects/volview.page';
@@ -97,6 +98,22 @@ async function previewFill() {
   await AppPage.processApplyButton.waitForClickable();
 }
 
+async function renderedPreview() {
+  await browser.executeAsync((done) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => done(undefined)));
+  });
+  const images = await browser.execute(() =>
+    Array.from(
+      document.querySelectorAll<HTMLCanvasElement>(
+        'div[data-testid~="vtk-two-view"] canvas'
+      )
+    ).map((canvas) => canvas.toDataURL())
+  );
+  return images.map((image) =>
+    createHash('sha256').update(image).digest('hex')
+  );
+}
+
 async function exportedVoxelCount(stem: string) {
   const destination = path.join(TEMP_DIR, `${stem}.seg.nrrd`);
   fs.rmSync(destination, { force: true });
@@ -124,9 +141,32 @@ describe('Segment preview ownership', () => {
     await AppPage.processPreviewButton.waitForClickable();
     await AppPage.processPreviewButton.click();
     await AppPage.processApplyButton.waitForClickable();
-    await AppPage.processApplyButton.waitForClickable();
+    await AppPage.processOriginalButton.click();
     await AppPage.processApplyButton.click();
     expect(await exportedVoxelCount('applied-preview')).toBe(filledCount);
+  });
+
+  it('keeps named preview choices idempotent for pointer and keyboard activation', async () => {
+    const beforePreview = await renderedPreview();
+    await previewFill();
+    const processed = await renderedPreview();
+    expect(processed).not.toEqual(beforePreview);
+
+    await AppPage.processProcessedButton.click();
+    const reselectedProcessed = await renderedPreview();
+    await AppPage.processProcessedButton.click();
+    expect(await renderedPreview()).toEqual(reselectedProcessed);
+
+    await AppPage.processOriginalButton.execute((element) => element.focus());
+    await browser.keys('Enter');
+    const original = await renderedPreview();
+    expect(original).not.toEqual(reselectedProcessed);
+
+    await browser.keys('Enter');
+    expect(await renderedPreview()).toEqual(original);
+
+    await AppPage.processProcessedButton.click();
+    expect(await renderedPreview()).toEqual(reselectedProcessed);
   });
 
   it('cancels a preview before a brush stroke and preserves the new stroke', async () => {

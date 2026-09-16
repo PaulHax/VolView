@@ -224,12 +224,12 @@ describe('a process running over every segment', () => {
     const processStore = usePaintProcessStore();
 
     await runOverEverySegment();
-    processStore.togglePreview();
+    processStore.setShowingOriginal(true);
 
     expect(maskValueAt(left, [1, 1, 0])).toBe(0);
     expect(maskValueAt(right, [5, 5, 0])).toBe(0);
 
-    processStore.togglePreview();
+    processStore.setShowingOriginal(false);
 
     expect(maskValueAt(left, [1, 1, 0])).toBe(labelValueOf(left));
     expect(maskValueAt(right, [5, 5, 0])).toBe(labelValueOf(right));

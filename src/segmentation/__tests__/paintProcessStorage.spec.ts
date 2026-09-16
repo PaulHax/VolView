@@ -239,21 +239,36 @@ describe('paint process storage', () => {
     });
   });
 
-  describe('toggling the preview', () => {
+  describe('selecting the preview', () => {
     it('swaps values in place in both directions', async () => {
       const { processStore, labelMap, original } = await startedProcess();
       expect(values(labelMap)).toEqual([1, 1]);
 
-      processStore.togglePreview();
+      processStore.setShowingOriginal(true);
 
       expect(processStore.showingOriginal).toBe(true);
       expect(buffer(labelMap)).toBe(original);
       expect(values(labelMap)).toEqual([1, 0]);
 
-      processStore.togglePreview();
+      processStore.setShowingOriginal(false);
 
       expect(processStore.showingOriginal).toBe(false);
       expect(buffer(labelMap)).toBe(original);
+      expect(values(labelMap)).toEqual([1, 1]);
+    });
+
+    it('selects a named preview idempotently', async () => {
+      const { processStore, labelMap } = await startedProcess();
+
+      processStore.setShowingOriginal(false);
+      expect(values(labelMap)).toEqual([1, 1]);
+
+      processStore.setShowingOriginal(true);
+      expect(values(labelMap)).toEqual([1, 0]);
+      processStore.setShowingOriginal(true);
+      expect(values(labelMap)).toEqual([1, 0]);
+
+      processStore.setShowingOriginal(false);
       expect(values(labelMap)).toEqual([1, 1]);
     });
   });
@@ -272,7 +287,7 @@ describe('paint process storage', () => {
   describe('confirm', () => {
     it('keeps the processed result in place when the original is showing', async () => {
       const { processStore, labelMap, original } = await startedProcess();
-      processStore.togglePreview();
+      processStore.setShowingOriginal(true);
       processStore.confirmProcess();
 
       expect(processStore.processState.step).toBe('start');
@@ -310,7 +325,7 @@ describe('paint process storage', () => {
       const segmentationStore = useSegmentationStore();
       const { maskId, processStore } = await startedProcess();
 
-      processStore.togglePreview();
+      processStore.setShowingOriginal(true);
       segmentationStore.deleteMask(maskId);
 
       expect(() => processStore.confirmProcess()).not.toThrow();
@@ -324,7 +339,7 @@ describe('paint process storage', () => {
 
       segmentationStore.deleteMask(maskId);
 
-      expect(() => processStore.togglePreview()).not.toThrow();
+      expect(() => processStore.setShowingOriginal(true)).not.toThrow();
       expect(processStore.processStep).toBe('start');
     });
 
@@ -446,14 +461,15 @@ describe('paint process storage', () => {
       expect(paint.activeMode).toBe(PaintMode.Erase);
     });
 
-    it.each(['confirmProcess', 'togglePreview'] as const)(
+    it.each(['confirmProcess', 'setShowingOriginal'] as const)(
       'refuses %s in the same turn as locking an Original preview',
       async (action) => {
         const { processStore, labelMap, maskId } = await startedProcess();
-        processStore.togglePreview();
+        processStore.setShowingOriginal(true);
         expect(values(labelMap)).toEqual([1, 0]);
         lockSegment(maskId);
-        processStore[action]();
+        if (action === 'confirmProcess') processStore.confirmProcess();
+        else processStore.setShowingOriginal(false);
         expect(processStore.processStep).toBe('start');
         expect(values(labelMap)).toEqual([1, 0]);
         expect(usePaintToolStore().activeMode).not.toBe(PaintMode.Process);

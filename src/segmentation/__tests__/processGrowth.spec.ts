@@ -116,14 +116,14 @@ describe.each(cases)('$name with bounded storage', (fixture) => {
     expect(store().maskVoxels(id).scalars().length).toBeLessThan(
       fixture.dimensions.reduce((a, b) => a * b, 1)
     );
-    process.togglePreview();
+    process.setShowingOriginal(true);
     expect(markedVoxels(id)).toEqual(before);
-    process.togglePreview();
+    process.setShowingOriginal(false);
     expect(markedVoxels(id)).toEqual(preview);
     process.cancelProcess();
     expect(markedVoxels(id)).toEqual(before);
     await process.startProcess(fixture.algorithm());
-    process.togglePreview();
+    process.setShowingOriginal(true);
     process.confirmProcess();
     expect(markedVoxels(id)).toEqual(preview);
 
