@@ -102,7 +102,7 @@ describe('polygon rasterize action', () => {
 
     rasterize(target);
     processStore.cancelProcess();
-    processStore.togglePreview();
+    processStore.setShowingOriginal(true);
 
     expect(processStore.processState.step).toBe('start');
     expect(extentOf(target)).toEqual([0, 5, 0, 5, 0, 0]);
