@@ -33,14 +33,41 @@ const readSegNrrd = (file: Buffer) => {
     .toString('latin1', 0, split)
     .split('\n')
     .forEach((line) => {
-      const separator = line.indexOf(':=');
-      if (separator < 0) return;
-      header.set(line.slice(0, separator).trim(), line.slice(separator + 2));
+      const customSeparator = line.indexOf(':=');
+      if (customSeparator >= 0) {
+        header.set(
+          line.slice(0, customSeparator).trim(),
+          line.slice(customSeparator + 2).trim()
+        );
+        return;
+      }
+      const separator = line.indexOf(':');
+      if (separator >= 0 && !line.startsWith('#')) {
+        header.set(
+          line.slice(0, separator).trim(),
+          line.slice(separator + 1).trim()
+        );
+      }
     });
 
   const data = raw.subarray(split + 2);
-  return { header, voxels: isGzip(data) ? zlib.gunzipSync(data) : data };
+  const voxels = isGzip(data) ? zlib.gunzipSync(data) : data;
+  return {
+    header,
+    foreground: Array.from(voxels.entries())
+      .filter(([, voxel]) => voxel !== 0)
+      .map(([offset]) => offset),
+  };
 };
+
+const geometryFields = [
+  'type',
+  'dimension',
+  'sizes',
+  'space',
+  'space directions',
+  'space origin',
+] as const;
 
 /** Paints one stroke into a new segment, over the ground the last one covered. */
 const paintNewSegmentOverTheSameSpot = async () => {
@@ -66,6 +93,17 @@ const saveAndUnzip = async (stem: string) => {
 
   await waitForDownload(filePath, SAVE_TIMEOUT);
   return JSZip.loadAsync(fs.readFileSync(filePath));
+};
+
+const saveSingleLayer = async (stem: string) => {
+  const filePath = path.join(TEMP_DIR, `${stem}.seg.nrrd`);
+  fs.rmSync(filePath, { force: true });
+  cleanuptotal.addCleanup(async () => fs.rmSync(filePath, { force: true }));
+
+  await setValueVueInput(volViewPage.saveSegmentsFilenameInput, stem);
+  await volViewPage.saveSegmentsConfirmButton.click();
+  await waitForDownload(filePath, SAVE_TIMEOUT);
+  return readSegNrrd(fs.readFileSync(filePath));
 };
 
 describe('Painting one segment over another', function () {
@@ -99,6 +137,13 @@ describe('Painting one segment over another', function () {
   });
 
   it('saves overlapping segments losslessly, one file per layer', async () => {
+    await openSaveDialog();
+    const baseline = await saveSingleLayer(`overlap-baseline-${Date.now()}`);
+    expect(baseline.foreground.length).toBeGreaterThan(0);
+    geometryFields.forEach((field) => {
+      expect(baseline.header.get(field)).toBeDefined();
+    });
+    expect(baseline.header.get('type')).toBe('unsigned char');
     await lockSegment('Segment 1');
     await paintNewSegmentOverTheSameSpot();
     await openSaveDialog();
@@ -125,7 +170,10 @@ describe('Painting one segment over another', function () {
     ]);
     layers.forEach((layer) => {
       expect(layer.header.get('Segment1_Name')).toBeUndefined();
-      expect(layer.voxels.some((voxel) => voxel !== 0)).toBe(true);
+      expect(layer.foreground).toEqual(baseline.foreground);
+      expect(geometryFields.map((field) => layer.header.get(field))).toEqual(
+        geometryFields.map((field) => baseline.header.get(field))
+      );
     });
   });
 });
