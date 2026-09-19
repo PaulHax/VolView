@@ -54,7 +54,7 @@ describe('Fill Holes paint process', () => {
     await expect(AppPage.processPreviewButton).toBeDisplayed();
   });
 
-  it('toggles the preview in place between processed and original', async () => {
+  it('selects the named processed and original previews', async () => {
     await startFillHolesPreview();
 
     // Previewing starts on the processed result.
@@ -66,15 +66,19 @@ describe('Fill Holes paint process', () => {
       await AppPage.isPreviewToggleActive(AppPage.processOriginalButton)
     ).toBe(false);
 
-    // Clicking the already-active button flips the preview in place, without
-    // moving the pointer to the other button.
+    // Re-selecting the active choice leaves that named preview selected.
     await AppPage.processProcessedButton.click();
+    await browser.waitUntil(() =>
+      AppPage.isPreviewToggleActive(AppPage.processProcessedButton)
+    );
+    expect(
+      await AppPage.isPreviewToggleActive(AppPage.processOriginalButton)
+    ).toBe(false);
+
+    await AppPage.processOriginalButton.click();
     await browser.waitUntil(() =>
       AppPage.isPreviewToggleActive(AppPage.processOriginalButton)
     );
-    expect(
-      await AppPage.isPreviewToggleActive(AppPage.processProcessedButton)
-    ).toBe(false);
   });
 
   for (const preview of ['Original', 'Processed']) {
