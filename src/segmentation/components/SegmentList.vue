@@ -52,12 +52,40 @@ const boundMask = (segmentId: string) => {
   return binding && !isEmptyExtent(binding.extent) ? mask : undefined;
 };
 
+type Row = {
+  id: string;
+  shortcut: string | undefined;
+  name: string;
+  color: string;
+  visible: boolean;
+  locked: boolean;
+  shapeCount: number;
+};
+
+// Fields compare by identity, which the constraint keeps meaningful: a row
+// that gained an object or array field would never equal its predecessor.
+const sameRow = <
+  R extends Record<keyof R, string | number | boolean | undefined>,
+>(
+  one: R,
+  other: R
+) => (Object.keys(one) as (keyof R)[]).every((key) => one[key] === other[key]);
+
+// The rows a segment already had, so an unchanged one is handed back as the
+// same object: EditableItemList memoizes a rendered row on its item's
+// identity, and the shape count is recomputed from every annotation in the
+// scene, which a single ruler drag rewrites per pointer move. Without this,
+// moving one annotation re-renders every row.
+let previousRows = new Map<string, Row>();
+
 // Row data does not depend on mask bounds: growing a painted mask must not
-// rebuild the list. Reveal controls resolve their own mask when needed.
-const rows = computed(() =>
-  registry.segmentList.value.map((segment, index) => {
+// rebuild the list. Reveal controls resolve their own mask and shapes when
+// needed, so a row carries the count alone and never goes stale.
+const rows = computed(() => {
+  const kept = new Map<string, Row>();
+  const list = registry.segmentList.value.map((segment, index) => {
     const appearance = registry.appearanceOf(segment.id);
-    return {
+    const row: Row = {
       id: segment.id,
       shortcut: SEGMENT_SHORTCUT_ACTIONS[index]
         ? readableBinding(actionToKey.value[SEGMENT_SHORTCUT_ACTIONS[index]])
@@ -66,12 +94,16 @@ const rows = computed(() =>
       color: appearance.cssColor,
       visible: appearance.visible,
       locked: appearance.locked,
-      shapes: shapesOf(segment.id),
+      shapeCount: shapesOf(segment.id).length,
     };
-  })
-);
-
-type Row = (typeof rows.value)[number];
+    const previous = previousRows.get(segment.id);
+    const reused = previous && sameRow(previous, row) ? previous : row;
+    kept.set(segment.id, reused);
+    return reused;
+  });
+  previousRows = kept;
+  return list;
+});
 
 // A clip is a stack of unrelated frames, so a segmentation drawn across it
 // means nothing and saves as an empty 2D file.
@@ -159,7 +191,7 @@ const masksArriving = computed(
 );
 
 const revealReason = (row: Row) => {
-  if (boundMask(row.id) || row.shapes.length) return '';
+  if (boundMask(row.id) || row.shapeCount) return '';
   return masksArriving.value
     ? 'Still loading'
     : 'This segment has nothing on this image';
@@ -183,7 +215,8 @@ function revealSlice(row: Row) {
   const maskId = boundMask(row.id)?.id;
   const imageId = currentImageID.value;
   if (!imageId) return;
-  const slicesByAxis = row.shapes.reduce<Partial<Record<LPSAxis, number[]>>>(
+  const shapes = shapesOf(row.id);
+  const slicesByAxis = shapes.reduce<Partial<Record<LPSAxis, number[]>>>(
     (byAxis, shape) => {
       if (shape.frame != null) return byAxis;
       const axis = shape.axis as LPSAxis;
@@ -194,7 +227,7 @@ function revealSlice(row: Row) {
   revealSegmentContent(imageId, {
     paintedSlicesByIJK: paintedSlices(maskId),
     slicesByAxis,
-    frames: row.shapes.flatMap((shape) =>
+    frames: shapes.flatMap((shape) =>
       shape.frame == null ? [] : [shape.frame]
     ),
   });
