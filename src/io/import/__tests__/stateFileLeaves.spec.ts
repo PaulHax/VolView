@@ -4,7 +4,10 @@ import {
   findStateFileLeaves,
   type DataSource,
 } from '@/src/io/import/dataSource';
-import { buildStateIDToStoreID } from '@/src/io/import/importDataSources';
+import {
+  buildStateIDToStoreID,
+  findSplitStateDatasets,
+} from '@/src/io/import/importDataSources';
 import type { LoadableResult } from '@/src/io/import/common';
 
 // ---------------------------------------------------------------------------
@@ -133,6 +136,33 @@ describe('buildStateIDToStoreID', () => {
 
     expect(buildStateIDToStoreID(loadables)).toEqual({
       'ds-whole': 'store-whole',
+    });
+  });
+
+  it('names the volumes a split dataset now loads as', () => {
+    const loadables: LoadableResult[] = [
+      {
+        type: 'data',
+        dataID: 'store-acq1',
+        dataType: 'image',
+        dataSource: mergedDicomSource(['ds-split']),
+      },
+      {
+        type: 'data',
+        dataID: 'store-acq2',
+        dataType: 'image',
+        dataSource: mergedDicomSource(['ds-split']),
+      },
+      {
+        type: 'data',
+        dataID: 'store-whole',
+        dataType: 'image',
+        dataSource: mergedDicomSource(['ds-whole']),
+      },
+    ];
+
+    expect(findSplitStateDatasets(loadables)).toEqual({
+      'ds-split': ['store-acq1', 'store-acq2'],
     });
   });
 });

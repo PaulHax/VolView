@@ -95,6 +95,29 @@ const applyConfigsPostState = (
 export function buildStateIDToStoreID(
   loadables: readonly LoadableResult[]
 ): Record<string, string> {
+  return Object.fromEntries(
+    [...storeIDsByStateID(loadables)]
+      .filter(([, storeIDs]) => storeIDs.size === 1)
+      .map(([stateID, storeIDs]) => [stateID, [...storeIDs][0]])
+  );
+}
+
+/**
+ * The state-file datasets the map above leaves out because their leaves now
+ * load as several volumes, with those volumes. The restore names them as
+ * split rather than as missing: every one of them is on screen.
+ */
+export function findSplitStateDatasets(
+  loadables: readonly LoadableResult[]
+): Record<string, string[]> {
+  return Object.fromEntries(
+    [...storeIDsByStateID(loadables)]
+      .filter(([, storeIDs]) => storeIDs.size > 1)
+      .map(([stateID, storeIDs]) => [stateID, [...storeIDs]])
+  );
+}
+
+function storeIDsByStateID(loadables: readonly LoadableResult[]) {
   const storeIDsByState = new Map<string, Set<string>>();
   loadables.forEach((loadable) => {
     findStateFileLeaves(loadable.dataSource).forEach((leaf) => {
@@ -103,11 +126,7 @@ export function buildStateIDToStoreID(
       storeIDsByState.set(leaf.stateID, storeIDs);
     });
   });
-  return Object.fromEntries(
-    [...storeIDsByState.entries()]
-      .filter(([, storeIDs]) => storeIDs.size === 1)
-      .map(([stateID, storeIDs]) => [stateID, [...storeIDs][0]])
-  );
+  return storeIDsByState;
 }
 
 // A chunk outlives the batch that brought it: a replan can move a member into
@@ -399,6 +418,7 @@ async function importDataSourcesWithPolicy(
     );
 
   const stateIDToStoreID = buildStateIDToStoreID(loadableResults);
+  const splitDatasets = findSplitStateDatasets(loadableResults);
   // Leaf stateIDs covered by a consolidated notice that actually ran — only
   // their errors may be suppressed below.
   const reportedStateIDs = new Set<string>();
@@ -409,7 +429,8 @@ async function importDataSourcesWithPolicy(
         setup.stateFiles,
         stateIDToStoreID,
         setup.missingFiles,
-        failedLeaves
+        failedLeaves,
+        splitDatasets
       );
       setup.dataSources.forEach((src) => {
         findStateFileLeaves(src).forEach((leaf) =>

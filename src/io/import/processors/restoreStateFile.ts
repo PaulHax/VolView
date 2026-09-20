@@ -235,7 +235,9 @@ export async function completeStateFileRestore(
   stateFiles: FileEntry[],
   stateIDToStoreID: Record<string, string>,
   missingFiles: Array<{ stateID: string; path: string }> = [],
-  failedLeaves: Array<{ stateID: string; name: string }> = []
+  failedLeaves: Array<{ stateID: string; name: string }> = [],
+  // Datasets whose files now load as several volumes, and which.
+  splitDatasets: Record<string, string[]> = {}
 ) {
   const viewStore = useViewStore();
   const byId = dataSourcesById(manifest);
@@ -292,14 +294,27 @@ export async function completeStateFileRestore(
 
   useToolStore().deserialize(manifest, segmentGroupIDMap, stateIDToStoreID);
 
-  const missingBases = unresolvedDatasets.map((ds) =>
+  const summarize = (ds: (typeof datasets)[number]) =>
     summarizeDataSource(
       ds.dataSourceId,
       byId,
       manifest.datasetFilePath,
       String(ds.id)
-    )
-  );
+    );
+  const missingBases = unresolvedDatasets
+    .filter((ds) => !(ds.id in splitDatasets))
+    .map(summarize);
+  // A dataset whose files now load as several volumes is on screen, in
+  // pieces. What was saved on it had no one volume to return to, so it is
+  // named as split rather than as missing.
+  const splitBases = unresolvedDatasets
+    .filter((ds) => ds.id in splitDatasets)
+    .map(
+      (ds) =>
+        `- image: ${summarize(ds)} (loaded as ${splitDatasets[ds.id].length} ` +
+        'volumes; the annotations, layers and view settings saved on it were ' +
+        'not restored)'
+    );
   // Members missing from a dataset that STILL resolved (from its surviving
   // files) — an unresolved dataset is already named whole above, but a partial
   // one restores truncated and must say which files it is missing.
@@ -328,6 +343,7 @@ export async function completeStateFileRestore(
   ];
   const missing = [
     ...missingBases.map((name) => `- image: ${name}`),
+    ...splitBases,
     ...missingMembers,
     ...failedMembers,
     ...skippedSegmentGroups.map(
