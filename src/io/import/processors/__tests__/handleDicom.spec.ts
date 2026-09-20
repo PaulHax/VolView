@@ -9,6 +9,7 @@ import { FILE_EXT_TO_MIME } from '@/src/io/mimeTypes';
 import { readDicomTags } from '@/src/io/readDicomTags';
 import { Skip } from '@/src/utils/evaluateChain';
 import { useMessageStore } from '@/src/store/messages';
+import { stripFileMeta, stripPreamble } from '@/tests/specs/syntheticDicom';
 import {
   bytesFetcher,
   dicomFile,
@@ -55,6 +56,36 @@ describe('handleDicom', () => {
 
     expect(chunkSource.mime).toBe(FILE_EXT_TO_MIME.dcm);
     expect(chunkSource.chunk.metadata).toEqual(readDicomTags(bytes));
+  });
+
+  it.each(kinds)(
+    'reads a $kind source that has no preamble without comment',
+    async ({ source }) => {
+      const bytes = syntheticSlice({ patientName: 'DOE^JOHN' });
+
+      const chunkSource = chunkOf(
+        await handleDicom(source(stripPreamble(bytes), 'bare.dcm'))
+      );
+
+      expect(chunkSource.chunk.metadata).toEqual(readDicomTags(bytes));
+      expect(useMessageStore().messages).toHaveLength(0);
+    }
+  );
+
+  it('reads a bare data set and says once that its syntax was assumed', async () => {
+    const bytes = syntheticSlice({ patientName: 'DOE^JOHN' });
+    const bare = stripFileMeta(bytes);
+
+    const first = chunkOf(await handleDicom(fileSource(bare, 'first.dcm')));
+    const second = chunkOf(await handleDicom(fileSource(bare, 'second.dcm')));
+
+    expect(first.chunk.metadata).toEqual(readDicomTags(bytes));
+    expect(second.chunk.metadata).toEqual(readDicomTags(bytes));
+    const { messages } = useMessageStore();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].title).toContain('no file meta information');
+    expect(messages[0].options.details).toContain('first.dcm');
+    expect(messages[0].options.details).toContain('Explicit VR Little Endian');
   });
 
   it('reads the same metadata from a file and from a uri', async () => {

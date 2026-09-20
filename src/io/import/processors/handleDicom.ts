@@ -14,7 +14,44 @@ import { DataSource, getDataSourceName } from '@/src/io/import/dataSource';
 import { FILE_EXT_TO_MIME } from '@/src/io/mimeTypes';
 import { getErrorDetail } from '@/src/utils';
 import { Tags } from '@/src/core/dicomTags';
-import { useMessageStore } from '@/src/store/messages';
+import { surfaceWarning, useMessageStore } from '@/src/store/messages';
+import {
+  IMPLICIT_VR_LITTLE_ENDIAN,
+  type DicomLayout,
+} from '@/src/io/dicomLayout';
+import { Maybe } from '@/src/types';
+
+// A folder of files that all depart from Part 10 the same way would raise one
+// notice per file, so each departure is reported once per session.
+const noticed = new WeakMap<object, Set<string>>();
+
+const noticeOnce = (key: string, title: string, details: string) => {
+  const store = useMessageStore();
+  const seen = noticed.get(store) ?? new Set<string>();
+  noticed.set(store, seen);
+  if (seen.has(key)) return;
+  seen.add(key);
+  surfaceWarning(title, details);
+};
+
+/**
+ * A data set with no file meta information names no transfer syntax, so the
+ * one it was read in is an assumption the user should hear about.
+ */
+const reportLayout = (name: Maybe<string>, layout: Maybe<DicomLayout>) => {
+  if (!layout || layout.fileMeta) return;
+  const syntax =
+    layout.transferSyntaxUid === IMPLICIT_VR_LITTLE_ENDIAN
+      ? 'Implicit'
+      : 'Explicit';
+  noticeOnce(
+    `assumed-syntax:${syntax}`,
+    'A DICOM file has no file meta information',
+    `${name ?? 'A file'} has no preamble and no file meta information, so it was read ` +
+      `as ${syntax} VR Little Endian. Other files that open the same way ` +
+      'were read the same way without further notice.'
+  );
+};
 
 const dicomFetcher = (dataSource: DataSource) => {
   if (
@@ -42,13 +79,15 @@ const handleDicom: ImportHandler = async (dataSource) => {
   if (!fetcher) return Skip;
 
   const name = getDataSourceName(dataSource);
+  const metaLoader = new DicomMetaLoader(fetcher);
   const chunk = new Chunk({
-    metaLoader: new DicomMetaLoader(fetcher),
+    metaLoader,
     dataLoader: new DicomDataLoader(fetcher),
   });
 
   try {
     await chunk.loadMeta();
+    reportLayout(name, metaLoader.fileLayout);
   } catch (error) {
     const detail = getErrorDetail(
       error,

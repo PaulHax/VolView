@@ -84,7 +84,10 @@ export const bytesFetcher = (bytes: Uint8Array, chunkSize = bytes.length) => {
 };
 
 export const deliveredBytes = (fetcher: Fetcher) =>
-  fetcher.cachedChunks.reduce((total, chunk) => total + chunk.length, 0);
+  (fetcher.cachedChunks ?? []).reduce(
+    (total, chunk) => total + chunk.length,
+    0
+  );
 
 export type FetcherCounts = {
   connect: number;

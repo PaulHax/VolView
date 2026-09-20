@@ -51,7 +51,6 @@ async function makeLoadedChunk(
   const chunk = new Chunk({
     metaLoader: {
       meta,
-      metaBlob: new Blob([`meta-${z}`]),
       ultrasoundRegions,
       load: () => {},
       stop: () => {},
@@ -76,7 +75,6 @@ function makeGatedChunk(z: number) {
   });
   const metaLoader = {
     meta: null as ReturnType<typeof metadataFor> | null,
-    metaBlob: new Blob([`meta-${z}`]),
     load: () =>
       gate.then(() => {
         metaLoader.meta = metadataFor(z);
@@ -833,12 +831,7 @@ describe('DicomChunkImage', () => {
   it('rejects the thumbnail when the middle chunk fails to load instead of waiting', async () => {
     const image = new DicomChunkImage({ readDicomImage });
     const chunk = new Chunk({
-      metaLoader: {
-        meta: metadataFor(1),
-        metaBlob: null,
-        load: () => {},
-        stop: () => {},
-      },
+      metaLoader: { meta: metadataFor(1), load: () => {}, stop: () => {} },
       dataLoader: {
         data: null,
         load: () => Promise.reject(new Error('no bytes for this slice')),

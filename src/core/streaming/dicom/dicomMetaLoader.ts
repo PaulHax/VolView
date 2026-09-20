@@ -3,9 +3,10 @@ import { StopSignal } from '@/src/core/streaming/cachedStreamFetcher';
 import { Fetcher, MetaLoader } from '@/src/core/streaming/types';
 import { Maybe } from '@/src/types';
 import { Awaitable } from '@vueuse/core';
-import { FILE_EXT_TO_MIME } from '@/src/io/mimeTypes';
 import { Tags } from '@/src/core/dicomTags';
 import { readDicomTags } from '@/src/io/readDicomTags';
+import type { DicomLayout } from '@/src/io/dicomLayout';
+import { concatBytes, toAscii } from '@/src/utils';
 import {
   decodeUltrasoundRegion,
   SEQUENCE_OF_ULTRASOUND_REGIONS,
@@ -16,25 +17,26 @@ export type ReadDicomTagsFunction = (
   bytes: Uint8Array
 ) => Awaitable<Array<[string, string]>>;
 
-/** The delivered bytes up to `end`, in order. */
-const concatUpTo = (chunks: readonly Uint8Array[], end: number) => {
-  const header = new Uint8Array(end);
-  chunks.reduce((at, chunk) => {
-    if (at >= end) return at;
-    const part = chunk.subarray(0, end - at);
-    header.set(part, at);
-    return at + part.length;
-  }, 0);
-  return header;
-};
+const MODALITY = [0x0008, 0x0060] as const;
+const PIXEL_DATA = [0x7fe0, 0x0010] as const;
 
-const totalLength = (chunks: readonly Uint8Array[]) =>
-  chunks.reduce((total, chunk) => total + chunk.length, 0);
+const isTag = (
+  tag: readonly [number, number],
+  group: number,
+  element: number
+) => group === tag[0] && element === tag[1];
+
+/**
+ * Radiotherapy objects are dropped on their modality alone, so nothing past
+ * that element is read: a structure set carries megabytes of contours.
+ */
+const isRadiotherapy = (modality: string | undefined) =>
+  modality?.startsWith('RT') ?? false;
 
 export class DicomMetaLoader implements MetaLoader {
   private tags: Maybe<Array<[string, string]>>;
-  private blob: Blob | null = null;
   private offset: Maybe<number>;
+  private layout: Maybe<DicomLayout>;
   public ultrasoundRegions: UltrasoundRegions | undefined;
 
   constructor(
@@ -46,13 +48,17 @@ export class DicomMetaLoader implements MetaLoader {
     return this.tags;
   }
 
-  get metaBlob() {
-    return this.blob;
-  }
-
-  /** Where Pixel Data starts, or the file's length when it has none. */
+  /**
+   * Where Pixel Data starts, or the file's length when it has none. Unset for
+   * a radiotherapy object, whose header past Modality is never read.
+   */
   get pixelDataOffset() {
     return this.offset;
+  }
+
+  /** How the bytes opened: with or without the Part 10 preamble and file meta. */
+  get fileLayout() {
+    return this.layout;
   }
 
   async load() {
@@ -61,16 +67,23 @@ export class DicomMetaLoader implements MetaLoader {
     await this.fetcher.connect();
     const stream = this.fetcher.getStream();
     let pixelDataIdx = -1;
+    let modality: string | undefined;
     let ultrasoundRegions: UltrasoundRegions | undefined;
 
     const parse = createDicomParser({
-      stopAtElement(group, element) {
-        return group === 0x7fe0 && element === 0x0010;
+      stopAtElement: (group, element) =>
+        isTag(PIXEL_DATA, group, element) || isRadiotherapy(modality),
+      onLayout: (layout) => {
+        this.layout = layout;
       },
       onDataElement: (el) => {
         if (
-          el.group === SEQUENCE_OF_ULTRASOUND_REGIONS[0] &&
-          el.element === SEQUENCE_OF_ULTRASOUND_REGIONS[1] &&
+          isTag(MODALITY, el.group, el.element) &&
+          el.data instanceof Uint8Array
+        )
+          modality = toAscii(el.data).trim();
+        if (
+          isTag(SEQUENCE_OF_ULTRASOUND_REGIONS, el.group, el.element) &&
           !ultrasoundRegions
         ) {
           // Decoding can throw if a malformed FD/US value has an unexpected
@@ -84,6 +97,11 @@ export class DicomMetaLoader implements MetaLoader {
       },
     });
 
+    // The bytes read so far live here rather than in the fetcher: the header
+    // is parsed once and then done with, and a fetcher over a file has no
+    // reason to keep a copy of it for the chunk's lifetime.
+    const received: Uint8Array[] = [];
+
     // Read a chunk at a time and cancel the moment the header ends: a stream
     // that reads ahead pulls pixel data this loader never uses.
     const reader = stream.getReader();
@@ -91,6 +109,7 @@ export class DicomMetaLoader implements MetaLoader {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        received.push(value);
         const result = parse(value);
         if (result.done) {
           pixelDataIdx = result.value.position;
@@ -98,25 +117,30 @@ export class DicomMetaLoader implements MetaLoader {
         }
       }
     } catch (err) {
-      if (err !== StopSignal) {
-        throw err;
-      }
+      if (err !== StopSignal) throw err;
+      // Stopped from outside before the header ended, so what arrived is not
+      // a header and must not be read as one.
+      throw new Error('The DICOM header read was stopped before it finished');
     } finally {
       // Not awaited, so the cancel lands before the stream refills its queue.
       reader.cancel().catch(() => {});
       this.fetcher.close();
     }
 
-    // An object with no Pixel Data, such as an RT structure set, is header to
-    // its last byte.
-    const chunks = this.fetcher.cachedChunks;
-    this.offset = pixelDataIdx < 0 ? totalLength(chunks) : pixelDataIdx;
+    if (isRadiotherapy(modality)) {
+      this.tags = [[Tags.Modality, modality as string]];
+      return;
+    }
 
-    const header = concatUpTo(chunks, this.offset);
-    this.blob = new Blob([header as BlobPart], { type: FILE_EXT_TO_MIME.dcm });
+    // An object with no Pixel Data, such as a structured report, is header to
+    // its last byte.
+    const header = concatBytes(
+      received,
+      pixelDataIdx < 0 ? undefined : pixelDataIdx
+    );
+    this.offset = header.length;
     this.tags = await this.readTags(header);
 
-    const modality = new Map(this.tags).get(Tags.Modality)?.trim();
     if (modality === 'US' && ultrasoundRegions) {
       this.ultrasoundRegions = ultrasoundRegions;
     }

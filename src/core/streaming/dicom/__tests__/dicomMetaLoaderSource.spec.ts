@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { DicomMetaLoader } from '@/src/core/streaming/dicom/dicomMetaLoader';
+import { StopSignal } from '@/src/core/streaming/cachedStreamFetcher';
+import type { Fetcher } from '@/src/core/streaming/types';
 import { Tags } from '@/src/core/dicomTags';
 import { readDicomTags } from '@/src/io/readDicomTags';
+import {
+  EXPLICIT_VR_LITTLE_ENDIAN,
+  IMPLICIT_VR_LITTLE_ENDIAN,
+} from '@/src/io/dicomLayout';
+import { stripFileMeta, stripPreamble } from '@/tests/specs/syntheticDicom';
 import {
   bytesFetcher,
   countingFetcher,
@@ -11,9 +18,25 @@ import {
   withoutPixelData,
 } from './dicomSourceFixtures';
 
-const bytesOf = async (blob: Blob) => new Uint8Array(await blob.arrayBuffer());
-
 const REGION = { physicalDeltaX: 0.0625, physicalDeltaY: 0.125 };
+
+/** A source that delivers `after` bytes and then stops, as a cancel does. */
+const stoppingFetcher = (bytes: Uint8Array, after: number): Fetcher => ({
+  ...bytesFetcher(bytes),
+  getStream: () => {
+    let delivered = false;
+    return new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        if (delivered) {
+          controller.error(StopSignal);
+          return;
+        }
+        delivered = true;
+        controller.enqueue(bytes.slice(0, after));
+      },
+    });
+  },
+});
 
 describe('DicomMetaLoader over a byte source', () => {
   it('reads the file tags with the JS reader by default', async () => {
@@ -25,16 +48,60 @@ describe('DicomMetaLoader over a byte source', () => {
     expect(loader.meta).toEqual(readDicomTags(bytes));
   });
 
-  it('stops at Pixel Data and keeps the header bytes verbatim', async () => {
+  it('stops at Pixel Data', async () => {
     const bytes = syntheticSlice();
-    const offset = pixelDataStart(bytes);
     const loader = new DicomMetaLoader(bytesFetcher(bytes));
 
     await loader.load();
 
-    expect(loader.pixelDataOffset).toBe(offset);
-    expect(loader.metaBlob).toBeTruthy();
-    expect(await bytesOf(loader.metaBlob!)).toEqual(bytes.slice(0, offset));
+    expect(loader.pixelDataOffset).toBe(pixelDataStart(bytes));
+    expect(loader.fileLayout).toEqual({ preamble: true, fileMeta: true });
+  });
+
+  it('reads a source without a preamble as the Part 10 file it came from', async () => {
+    const bytes = syntheticSlice({ patientName: 'DOE^JOHN' });
+    const loader = new DicomMetaLoader(bytesFetcher(stripPreamble(bytes), 64));
+
+    await loader.load();
+
+    expect(loader.meta).toEqual(readDicomTags(bytes));
+    expect(loader.fileLayout).toEqual({ preamble: false, fileMeta: true });
+  });
+
+  it.each([
+    ['explicit', false, EXPLICIT_VR_LITTLE_ENDIAN],
+    ['implicit', true, IMPLICIT_VR_LITTLE_ENDIAN],
+  ])(
+    'reads a bare %s VR data set with its transfer syntax assumed',
+    async (_kind, implicitVr, transferSyntaxUid) => {
+      const bytes = syntheticSlice({ patientName: 'DOE^JOHN', implicitVr });
+      const loader = new DicomMetaLoader(
+        bytesFetcher(stripFileMeta(bytes), 64)
+      );
+
+      await loader.load();
+
+      expect(loader.meta).toEqual(readDicomTags(bytes));
+      expect(loader.fileLayout).toEqual({
+        preamble: false,
+        fileMeta: false,
+        transferSyntaxUid,
+      });
+    }
+  );
+
+  it('reads nothing as a header when stopped before the header ends', async () => {
+    const bytes = syntheticSlice();
+    const seen: Uint8Array[] = [];
+    const loader = new DicomMetaLoader(stoppingFetcher(bytes, 64), (header) => {
+      seen.push(header);
+      return [];
+    });
+
+    await expect(loader.load()).rejects.toThrow(/stopped/);
+
+    expect(seen).toEqual([]);
+    expect(loader.meta).toBeUndefined();
   });
 
   it('leaves the byte source undelivered past Pixel Data', async () => {
@@ -94,19 +161,34 @@ describe('DicomMetaLoader over a byte source', () => {
     expect(loader.ultrasoundRegions).toBeUndefined();
   });
 
-  it('reads every tag of an RT object that has no Pixel Data', async () => {
-    const bytes = withoutPixelData(syntheticSlice({ modality: 'RTSTRUCT' }));
+  it('reads every tag of an object that has no Pixel Data', async () => {
+    const bytes = withoutPixelData(syntheticSlice({ modality: 'SR' }));
     const loader = new DicomMetaLoader(bytesFetcher(bytes));
 
     await loader.load();
 
     expect(loader.meta).toEqual(readDicomTags(bytes));
     expect(loader.meta!.length).toBeGreaterThan(1);
-    expect(Object.fromEntries(loader.meta!)[Tags.Modality].trim()).toBe(
-      'RTSTRUCT'
-    );
     expect(loader.pixelDataOffset).toBe(bytes.length);
-    expect(await bytesOf(loader.metaBlob!)).toEqual(bytes);
+  });
+
+  // A structure set is megabytes of contours the importer drops unread, so
+  // the loader stops at the modality that says so.
+  it('reads a radiotherapy object no further than its modality', async () => {
+    const bytes = withoutPixelData(syntheticSlice({ modality: 'RTSTRUCT' }));
+    const fetcher = bytesFetcher(bytes, 32);
+    const seen: Uint8Array[] = [];
+    const loader = new DicomMetaLoader(fetcher, (header) => {
+      seen.push(header);
+      return [];
+    });
+
+    await loader.load();
+
+    expect(loader.meta).toEqual([[Tags.Modality, 'RTSTRUCT']]);
+    expect(seen).toEqual([]);
+    expect(deliveredBytes(fetcher)).toBeLessThan(bytes.length);
+    expect(loader.pixelDataOffset).toBeUndefined();
   });
 
   it('closes the byte source once the header is read', async () => {
