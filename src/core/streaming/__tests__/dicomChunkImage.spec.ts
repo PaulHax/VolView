@@ -777,4 +777,85 @@ describe('DicomChunkImage', () => {
 
     image.dispose();
   });
+
+  it('decodes the middle chunk once for every thumbnail asked before its slot is filled', async () => {
+    const reader = deferredReader();
+    const encoder = capturingEncoder();
+    const image = new DicomChunkImage({
+      readDicomImage: reader.read,
+      encodeThumbnail: encoder.encodeThumbnail,
+    });
+    const chunks = await threeChunks();
+
+    await image.setChunks(chunks);
+    await vi.waitFor(() => expect(reader.countFor(2)).toBe(1));
+
+    // The volume browser asks again on every change to the volume list.
+    const first = image.getThumbnail();
+    const second = image.getThumbnail();
+    await vi.waitFor(() => expect(reader.countFor(2)).toBe(2));
+    await Promise.resolve();
+    expect(reader.countFor(2)).toBe(2);
+    reader.settleAll(2);
+
+    expect(await first).toBe(await second);
+    expect(encoder.slices).toHaveLength(1);
+
+    image.dispose();
+  });
+
+  it('forgets a thumbnail when its membership changes', async () => {
+    const encoder = capturingEncoder();
+    const image = new DicomChunkImage({
+      readDicomImage,
+      encodeThumbnail: encoder.encodeThumbnail,
+    });
+    const [first, second, third] = await threeChunks();
+
+    await image.setChunks([first, second, third]);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(3))
+    );
+    const before = await image.getThumbnail();
+    expect(await image.getThumbnail()).toBe(before);
+
+    await image.setChunks([first, third]);
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual(allLoaded(2))
+    );
+
+    expect(await image.getThumbnail()).not.toBe(before);
+    expect(encoder.slices).toHaveLength(2);
+
+    image.dispose();
+  });
+
+  it('rejects the thumbnail when the middle chunk fails to load instead of waiting', async () => {
+    const image = new DicomChunkImage({ readDicomImage });
+    const chunk = new Chunk({
+      metaLoader: {
+        meta: metadataFor(1),
+        metaBlob: null,
+        load: () => {},
+        stop: () => {},
+      },
+      dataLoader: {
+        data: null,
+        load: () => Promise.reject(new Error('no bytes for this slice')),
+        stop: () => {},
+      },
+    });
+    await chunk.loadMeta();
+    await image.setChunks([chunk]);
+
+    const thumbnail = image.getThumbnail();
+    await chunk.loadData().catch(() => {});
+
+    await expect(thumbnail).rejects.toThrow('no bytes for this slice');
+    await vi.waitFor(() =>
+      expect(image.getChunkStatuses()).toEqual([ChunkStatus.Errored])
+    );
+
+    image.dispose();
+  });
 });

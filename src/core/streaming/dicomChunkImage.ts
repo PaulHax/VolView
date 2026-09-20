@@ -2,7 +2,8 @@ import {
   buildSegmentGroups,
   ReadOverlappingSegmentationMeta,
 } from '@/src/io/dicom';
-import { Chunk, waitForChunkState } from '@/src/core/streaming/chunk';
+import { Chunk } from '@/src/core/streaming/chunk';
+import { getChunkTag } from '@/src/utils/dicom/dicomChunks';
 import {
   Image,
   JsonCompatible,
@@ -45,20 +46,42 @@ const { fastComputeRange } = vtkDataArray;
 
 const DATA_RANGE_KEY = 'pixel-data-range';
 
-function getChunkId(chunk: Chunk) {
-  const metadata = Object.fromEntries(chunk.metadata!);
-  const SOPInstanceUID = metadata[Tags.SOPInstanceUID];
-  return SOPInstanceUID;
-}
+const getChunkId = (chunk: Chunk) => getChunkTag(chunk, Tags.SOPInstanceUID);
 
 function readDicomImage(file: File) {
   return readItkImage(file, { webWorker: getWorker() });
 }
 
-const modalityOf = (chunks: Chunk[]) => {
-  const meta = Object.fromEntries(chunks[0]?.metadata ?? []);
-  return meta[Tags.Modality]?.trim() ?? null;
-};
+// A scan, not a map of the header: this runs once per decoded chunk.
+const modalityOf = (chunks: Chunk[]) =>
+  chunks.length > 0
+    ? (getChunkTag(chunks[0], Tags.Modality)?.trim() ?? null)
+    : null;
+
+/**
+ * The chunk once its bytes are in, or the error that means they never will
+ * be. A chunk that errored settles back to holding metadata only, so waiting
+ * on the loaded state alone would wait forever.
+ */
+const loadedChunk = (chunk: Chunk) =>
+  new Promise<Chunk>((resolve, reject) => {
+    if (chunk.state === ChunkState.Loaded) {
+      resolve(chunk);
+      return;
+    }
+    const stopWatching = chunk.watchForState(ChunkState.Loaded, () => {
+      stopListening();
+      resolve(chunk);
+    });
+    const stopListening = () => {
+      stopWatching();
+      stopOnError();
+    };
+    const stopOnError = chunk.addEventListener('error', (err) => {
+      stopListening();
+      reject(ensureError(err));
+    });
+  });
 
 function initialChunkStatus(chunk: Chunk) {
   switch (chunk.state) {
@@ -100,6 +123,9 @@ export default class DicomChunkImage
   private allocationGeneration: number;
   private chunkUpdateQueue: Promise<void>;
   private disposed: boolean;
+  // One thumbnail per membership: the browser asks again whenever the volume
+  // list changes, and each ask before the slot is decoded costs a decode.
+  private thumbnail: Promise<string | null> | null;
 
   public segBuildInfo:
     | (JsonCompatible & ReadOverlappingSegmentationMeta)
@@ -124,6 +150,7 @@ export default class DicomChunkImage
     this.allocationGeneration = 0;
     this.chunkUpdateQueue = Promise.resolve();
     this.disposed = false;
+    this.thumbnail = null;
     this.segBuildInfo = null;
 
     this.addEventListener('loading', (loading) => {
@@ -233,6 +260,7 @@ export default class DicomChunkImage
     this.allocationGeneration += 1;
     this.chunks = chunks;
     this.chunkStatus = status;
+    this.thumbnail = null;
     this.onChunksUpdated();
 
     if (allocated) {
@@ -250,7 +278,16 @@ export default class DicomChunkImage
     }
   }
 
-  async getThumbnail(): Promise<string | null> {
+  getThumbnail(): Promise<string | null> {
+    // A failure is not kept: the next ask tries again.
+    this.thumbnail ??= this.readThumbnail().catch((err) => {
+      this.thumbnail = null;
+      throw err;
+    });
+    return this.thumbnail;
+  }
+
+  private async readThumbnail(): Promise<string | null> {
     const middle = Math.floor(this.chunks.length / 2);
     const chunk = this.chunks[middle];
     if (!chunk) return null;
@@ -286,7 +323,7 @@ export default class DicomChunkImage
 
   // Before a chunk's slot holds pixels, its own bytes are the only source.
   private async sliceFromChunk(chunk: Chunk) {
-    const loaded = await waitForChunkState(chunk, ChunkState.Loaded);
+    const loaded = await loadedChunk(chunk);
     if (!loaded.dataBlob) throw new Error('No chunk data');
 
     const { image } = await this.readDicomImage(
