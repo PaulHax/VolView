@@ -4,7 +4,7 @@ import { Fetcher, MetaLoader } from '@/src/core/streaming/types';
 import { Maybe } from '@/src/types';
 import { Awaitable } from '@vueuse/core';
 import { Tags } from '@/src/core/dicomTags';
-import { readDicomTags } from '@/src/io/readDicomTags';
+import { readDicomTagsOffThread } from '@/src/io/readDicomTagsOffThread';
 import type { DicomLayout } from '@/src/io/dicomLayout';
 import { concatBytes, toAscii } from '@/src/utils';
 import {
@@ -41,7 +41,7 @@ export class DicomMetaLoader implements MetaLoader {
 
   constructor(
     private fetcher: Fetcher,
-    private readTags: ReadDicomTagsFunction = readDicomTags
+    private readTags: ReadDicomTagsFunction = readDicomTagsOffThread
   ) {}
 
   get meta() {
