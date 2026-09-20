@@ -77,15 +77,16 @@ type Snapshot = {
   entry: SeriesEntry;
   instances: SeriesEntry['instances'];
   committed: SeriesEntry['committed'];
+  dissolving: SeriesEntry['dissolving'];
   forgotten: number;
 };
 
+const unread = () =>
+  new Error('Cannot register a DICOM chunk whose metadata has not been read');
+
 const readChunk = (chunk: Chunk) => {
   const { metadata } = chunk;
-  if (!metadata)
-    throw new Error(
-      'Cannot register a DICOM chunk whose metadata has not been read'
-    );
+  if (!metadata) throw unread();
   const facts = readInstanceFacts(metadata);
   return {
     seriesKey: seriesKeyOf(metadata),
@@ -93,25 +94,39 @@ const readChunk = (chunk: Chunk) => {
   };
 };
 
+/** Groups preserve input order, both of the keys and of their members. */
+const groupBy = <T>(items: T[], keyOf: (item: T) => string) => {
+  const groups = new Map<string, T[]>();
+  items.forEach((item) => {
+    const key = keyOf(item);
+    const group = groups.get(key);
+    if (group) group.push(item);
+    else groups.set(key, [item]);
+  });
+  return groups;
+};
+
 /**
- * Splits a batch into one list per series, preserving input order. Every chunk
- * is read here, so a batch naming an unread chunk fails before any series
- * transaction starts.
+ * Splits a batch into one list per series, preserving input order. Only the
+ * series key is read here, since registration reads the rest of every chunk;
+ * a batch naming an unread chunk still fails before any series transaction
+ * starts.
  */
 export const groupChunksBySeries = (chunks: Chunk[]) =>
-  chunks.reduce((groups, chunk) => {
-    const { seriesKey } = readChunk(chunk);
-    return groups.set(seriesKey, [...(groups.get(seriesKey) ?? []), chunk]);
-  }, new Map<string, Chunk[]>());
+  groupBy(chunks, (chunk) => {
+    if (!chunk.metadata) throw unread();
+    return seriesKeyOf(chunk.metadata);
+  });
 
-/** Groups preserve input order, both of the series and of their instances. */
 const groupBySeries = (chunks: Chunk[]) => {
   const groups = new Map<string, RegisteredInstance[]>();
-  chunks
-    .map(readChunk)
-    .forEach(({ seriesKey, instance }) =>
-      groups.set(seriesKey, [...(groups.get(seriesKey) ?? []), instance])
-    );
+  groupBy(chunks.map(readChunk), (read) => read.seriesKey).forEach(
+    (reads, seriesKey) =>
+      groups.set(
+        seriesKey,
+        reads.map((read) => read.instance)
+      )
+  );
   return groups;
 };
 
@@ -237,8 +252,9 @@ export function createDicomCollectionRegistry(): DicomCollectionRegistry {
   };
 
   // Releasing the instances releases the chunk bytes they hold. An ID a
-  // replan already dissolved owns nothing, so forgetting it is a no-op and
-  // the members it handed to another collection stay registered.
+  // replan already dissolved owns nothing, so forgetting it releases nothing
+  // and the members it handed to another collection stay registered; it is
+  // still recorded, once, as the change to the pending plan it is.
   const forgetFrom = (
     entry: SeriesEntry,
     seriesKey: string,
@@ -246,7 +262,7 @@ export function createDicomCollectionRegistry(): DicomCollectionRegistry {
   ) => {
     const forgotten = entry.committed.get(collectionId);
     if (!forgotten) {
-      if (entry.dissolving.has(collectionId))
+      if (entry.dissolving.delete(collectionId))
         entry.forgotten.push(collectionId);
       return;
     }
@@ -269,6 +285,7 @@ export function createDicomCollectionRegistry(): DicomCollectionRegistry {
           entry,
           instances: new Map(entry.instances),
           committed: new Map(entry.committed),
+          dissolving: new Set(entry.dissolving),
           forgotten: entry.forgotten.length,
         });
         return planSeries(entry, seriesKey, batch);
@@ -303,6 +320,7 @@ export function createDicomCollectionRegistry(): DicomCollectionRegistry {
         const { entry } = snapshot;
         entry.instances = snapshot.instances;
         entry.committed = snapshot.committed;
+        entry.dissolving = snapshot.dissolving;
         // What the user removed while the batch was in flight stays removed.
         const forgotten = entry.forgotten.slice(snapshot.forgotten);
         entry.forgotten.length = snapshot.forgotten;
