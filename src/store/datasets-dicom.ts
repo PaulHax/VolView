@@ -209,6 +209,13 @@ export type ImportChunksDeps = {
    * overtaken by a batch a slower series delayed.
    */
   onCommitted?: (result: ImportChunksResult) => void;
+  /**
+   * Removes a volume a replan dissolved from everything that names it, before
+   * its replacements are reported. This store and the image cache alone by
+   * default; the app hands in the dataset store's removal so layers, view
+   * configuration and statistics let go of the image before it is evicted.
+   */
+  removeDissolved?: (id: string) => void;
 };
 
 export type ImportChunksResult = {
@@ -474,7 +481,8 @@ type CommitTarget = {
 function commitPlan(
   store: CommitTarget,
   candidates: Candidate[],
-  dissolved: string[]
+  dissolved: string[],
+  removeDissolved: (id: string) => void
 ) {
   const imageCacheStore = useImageCacheStore();
   const messageStore = useMessageStore();
@@ -507,8 +515,7 @@ function commitPlan(
 
   dissolved.forEach((id) => {
     const previous = store.volumeInfo[id];
-    imageCacheStore.removeImage(id);
-    store.deleteVolume(id);
+    removeDissolved(id);
     // Whatever the user attached to the dissolved dataset went with it.
     if (previous)
       messageStore.addWarning(
@@ -540,6 +547,12 @@ export const useDICOMStore = defineStore('dicom', {
         deps.createChunkImage ?? (() => new DicomChunkImage());
       const parseCine = deps.parseCineDicom ?? parseCineDicom;
       const onCommitted = deps.onCommitted ?? (() => {});
+      const removeDissolved =
+        deps.removeDissolved ??
+        ((id: string) => {
+          this.deleteVolume(id);
+          useImageCacheStore().removeImage(id);
+        });
       const { registry } = sessionFor(this);
 
       const batches = [...groupChunksBySeries(chunks)];
@@ -584,7 +597,7 @@ export const useDICOMStore = defineStore('dicom', {
                 );
           }
 
-          commitPlan(this, candidates, removed);
+          commitPlan(this, candidates, removed, removeDissolved);
 
           const committed = {
             volumes: Object.fromEntries(

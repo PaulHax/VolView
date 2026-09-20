@@ -212,8 +212,8 @@ describe('DICOM store acquisition split across imports', () => {
     const load = async (sources: ChunkSource[]) => {
       const loadables = await importDicomChunkSources(
         sources,
-        (chunks, onCommitted) =>
-          store.importChunks(chunks, { createChunkImage, onCommitted })
+        (chunks, hooks) =>
+          store.importChunks(chunks, { createChunkImage, ...hooks })
       );
       return loadables.map(({ dataID }) => dataID);
     };

@@ -45,11 +45,17 @@ describe('importDicomChunkSources', () => {
     const datasetStore = useDatasetStore();
     const [a, b, c] = ['sop-a', 'sop-b', 'sop-c'].map(chunkSourceFor);
 
+    // Stands in for the store: a dissolved id is removed, then the commit
+    // is reported, as commitPlan does.
     const load = (sources: ChunkSource[], result: ImportChunksResult) =>
-      importDicomChunkSources(sources, async (_chunks, onCommitted) => {
-        onCommitted(result);
-        return result;
-      });
+      importDicomChunkSources(
+        sources,
+        async (_chunks, { onCommitted, removeDissolved }) => {
+          result.dissolved.forEach(removeDissolved);
+          onCommitted(result);
+          return result;
+        }
+      );
 
     await load([a, b], {
       volumes: { 'vol-1': [a.chunk], 'vol-2': [b.chunk] },

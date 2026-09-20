@@ -48,6 +48,7 @@ import { useDatasetStore } from '@/src/store/datasets';
 import {
   PartialImportError,
   useDICOMStore,
+  type ImportChunksDeps,
   type ImportChunksResult,
 } from '@/src/store/datasets-dicom';
 import { useMessageStore } from '@/src/store/messages';
@@ -144,11 +145,8 @@ export class PartialDicomImportError extends Error {
  * committed it: publishing after the whole batch settled would let a series a
  * slow sibling delayed overwrite the membership a later import had recorded.
  */
-const publishImportedChunks = ({ volumes, dissolved }: ImportChunksResult) => {
-  // A replan folded these collections into others, so the datasets an earlier
-  // import created for them no longer describe anything loaded.
+const publishImportedChunks = ({ volumes }: ImportChunksResult) => {
   const datasetStore = useDatasetStore();
-  dissolved.forEach((id) => datasetStore.remove(id));
 
   // Every member reports back, so a collection that gained a member from a
   // dissolved one carries its provenance too.
@@ -170,12 +168,15 @@ const publishImportedChunks = ({ volumes, dissolved }: ImportChunksResult) => {
   return loadables;
 };
 
+/** What the import needs of its caller: where to publish and how to remove. */
+export type ImportChunksHooks = Required<
+  Pick<ImportChunksDeps, 'onCommitted' | 'removeDissolved'>
+>;
+
 export async function importDicomChunkSources(
   sources: ChunkSource[],
-  importChunks = (
-    chunks: Chunk[],
-    onCommitted: (result: ImportChunksResult) => void
-  ) => useDICOMStore().importChunks(chunks, { onCommitted })
+  importChunks = (chunks: Chunk[], hooks: ImportChunksHooks) =>
+    useDICOMStore().importChunks(chunks, hooks)
 ) {
   if (sources.length === 0) return [];
 
@@ -185,10 +186,19 @@ export async function importDicomChunkSources(
   const publish = (committed: ImportChunksResult) => {
     loadables.push(...publishImportedChunks(committed));
   };
+  // A replan folded the dissolved collection into others, so the dataset an
+  // earlier import created for it no longer describes anything loaded. The
+  // dataset store's removal clears every store that names it, in the order
+  // eviction needs.
+  const datasetStore = useDatasetStore();
+  const removeDissolved = (id: string) => datasetStore.remove(id);
 
   await importChunks(
     sources.map((src) => src.chunk),
-    publish
+    {
+      onCommitted: publish,
+      removeDissolved,
+    }
   ).catch((err) => {
     if (!(err instanceof PartialImportError)) throw err;
     // The series that committed published themselves, so they are reported

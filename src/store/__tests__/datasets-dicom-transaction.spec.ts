@@ -376,6 +376,22 @@ describe('DICOM store transactional commit', () => {
     expect(failing.created.map((image) => image.disposeCount)).toEqual([1, 1]);
   });
 
+  it('hands a dissolved volume to the given removal before reporting the commit', async () => {
+    const { store, id, zero, two } = await loadSplittablePair();
+    const calls: string[] = [];
+
+    await store.importChunks([zero, two], {
+      createChunkImage: imageFactory().createChunkImage,
+      removeDissolved: (removed) => calls.push(`remove:${removed}`),
+      onCommitted: ({ dissolved }) => calls.push(`commit:${dissolved.join()}`),
+    });
+
+    expect(calls).toEqual([`remove:${id}`, `commit:${id}`]);
+    // The removal is the caller's whole, so the store evicted nothing itself.
+    expect(cachedIds()).toContain(id);
+    expect(store.volumeInfo[id]).toBeDefined();
+  });
+
   it('removes the dissolved volume once the split commits', async () => {
     const { store, id, zero, one, two, three, loaded } =
       await loadSplittablePair();
@@ -579,8 +595,8 @@ const load = (
   chunks: Chunk[],
   createChunkImage: ReturnType<typeof imageFactory>['createChunkImage']
 ) =>
-  importDicomChunkSources(chunks.map(sourceFor), (batch, onCommitted) =>
-    useDICOMStore().importChunks(batch, { createChunkImage, onCommitted })
+  importDicomChunkSources(chunks.map(sourceFor), (batch, hooks) =>
+    useDICOMStore().importChunks(batch, { createChunkImage, ...hooks })
   );
 
 /** A batch whose other series waits for the returned release. */
