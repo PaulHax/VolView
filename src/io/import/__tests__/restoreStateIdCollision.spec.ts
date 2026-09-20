@@ -1,13 +1,13 @@
+import { resolveLabelmapSources } from '@/src/io/import/labelmapImports';
+import { type Manifest } from '@/src/io/state-file/schema';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setActivePinia, createPinia } from 'pinia';
 import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';
 import vtkImageData from '@kitware/vtk.js/Common/DataModel/ImageData';
-import {
-  restoreStateFile,
-  resolveArtifactRestoreSources,
-} from '@/src/io/import/processors/restoreStateFile';
+import { restoreStateFile } from '@/src/io/import/processors/restoreStateFile';
 import type { StateFileSetupResult } from '@/src/io/import/common';
-import { useSegmentGroupStore } from '@/src/store/segmentGroups';
+import { useSegmentationStore } from '@/src/segmentation/store';
+import { useSegmentStore } from '@/src/segmentation/segments';
 import { useImageCacheStore } from '@/src/store/image-cache';
 
 // ---------------------------------------------------------------------------
@@ -26,17 +26,7 @@ import { useImageCacheStore } from '@/src/store/image-cache';
 // unchanged).
 // ---------------------------------------------------------------------------
 
-// `writeSegmentation` spawns a real Worker; keep the IO module out of the test.
-const ioMocks = vi.hoisted(() => ({
-  readImage: vi.fn(),
-  writeSegmentation: vi.fn(async () => new Uint8Array([1, 2, 3])),
-}));
-
-// eslint-disable-next-line no-restricted-syntax -- ITK-wasm image IO has no counterpart in the node test environment
-vi.mock('@/src/io/readWriteImage', () => ({
-  readImage: ioMocks.readImage,
-  writeSegmentation: ioMocks.writeSegmentation,
-}));
+const artifactIO = { read: vi.fn(), write: vi.fn() };
 
 const BASE_URI = 'volview-backend:base/ct-chest-001';
 const ARTIFACT_URI = 'volview-backend:artifact/tumor-seg/v2';
@@ -127,10 +117,39 @@ const assembleStateIdMap = (leaves: UriLeaf[], completionOrder: string[]) =>
     return { ...map, [leaf!.stateFileLeaf!.stateID]: storeIdByUri[uri] };
   }, {});
 
+/** Restores a prepared manifest and hands back the mask it attached. */
+const restoreOnto = async (
+  setup: { manifest: Manifest },
+  stateFiles: Parameters<
+    ReturnType<typeof useSegmentationStore>['deserialize']
+  >[0]['stateFiles'],
+  dataIDMap: Record<string, string>
+) => {
+  const store = useSegmentationStore();
+  const { restoredImportIds: restored } = await store.deserialize({
+    manifest: setup.manifest,
+    stateFiles,
+    dataIDMap,
+    segmentIdMap: useSegmentStore().deserialize(setup.manifest),
+    labelmapSources: resolveLabelmapSources(setup.manifest),
+    io: artifactIO,
+  });
+  const [maskId] = store.getSegmentationForImage(BASE_STORE_ID)!.order;
+  return { restored, maskId };
+};
+
+/** The group attached, parented on the BASE dataset's store id. */
+const expectTumorOnBase = (restored: Set<string>, maskId: string) => {
+  const store = useSegmentationStore();
+  expect(restored.has('sg-tumor')).toBe(true);
+  expect(store.findMaskBinding(maskId)).toBeDefined();
+  expect(store.segmentationOfMask(maskId)?.parentImageId).toBe(BASE_STORE_ID);
+};
+
 describe('restore stateID namespaces (collision)', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
-    ioMocks.readImage.mockReset();
+    artifactIO.read.mockReset();
   });
 
   it('mints disjoint stateIDs for a dataset and a leaf sharing the numeral', async () => {
@@ -165,25 +184,20 @@ describe('restore stateID namespaces (collision)', () => {
       seatImage(BASE_STORE_ID, 'CT Chest', 0);
       seatImage(ARTIFACT_STORE_ID, 'Tumor.seg.nrrd', 1);
 
-      const store = useSegmentGroupStore();
-      const { segmentGroupIDMap: idMap } = await store.deserialize(
-        setup.manifest,
+      const store = useSegmentationStore();
+      const { restored, maskId } = await restoreOnto(
+        setup,
         [],
-        stateIDToStoreID,
-        resolveArtifactRestoreSources(setup.manifest)
+        stateIDToStoreID
       );
 
       // The group attached, parented on the BASE dataset's store id.
-      const groupId = idMap['sg-tumor'];
-      expect(groupId).toBeDefined();
-      expect(store.metadataByID[groupId].parentImage).toBe(BASE_STORE_ID);
+      expectTumorOnBase(restored, maskId);
 
-      // Its labelmap was built from the ARTIFACT's voxels, not the base's.
-      const scalars = store.dataIndex[groupId]
-        .getPointData()
-        .getScalars()
-        .getData() as Uint8Array;
-      expect(Array.from(new Set(scalars))).toEqual([1]);
+      // Its mask was built from the ARTIFACT's voxels, not the base's.
+      expect(Array.from(new Set(store.maskVoxels(maskId).scalars()))).toEqual([
+        1,
+      ]);
 
       // The base dataset survived; only the consumed temp dataset is gone.
       expect(imageCache.getVtkImageData(BASE_STORE_ID)).toBeTruthy();
@@ -197,7 +211,7 @@ describe('restore stateID namespaces (collision)', () => {
     // Those keys must keep working with no prefix (wire compat with every
     // existing saved scene).
     seatImage(BASE_STORE_ID, 'CT Chest', 0);
-    ioMocks.readImage.mockResolvedValue({ image: makeImage(7) });
+    artifactIO.read.mockResolvedValue({ image: makeImage(7) });
 
     const setup = await prepareLeaves({
       version: '6.4.0',
@@ -212,22 +226,18 @@ describe('restore stateID namespaces (collision)', () => {
       ],
     });
 
-    const store = useSegmentGroupStore();
-    const { segmentGroupIDMap: idMap } = await store.deserialize(
-      setup.manifest,
+    const { restored, maskId } = await restoreOnto(
+      setup,
       [
         {
           archivePath: 'segmentations/Tumor.seg.nrrd',
           file: new File([''], 'Tumor.seg.nrrd'),
         },
       ],
-      { '2': BASE_STORE_ID },
-      resolveArtifactRestoreSources(setup.manifest)
+      { '2': BASE_STORE_ID }
     );
 
-    const groupId = idMap['sg-tumor'];
-    expect(groupId).toBeDefined();
-    expect(store.metadataByID[groupId].parentImage).toBe(BASE_STORE_ID);
-    expect(ioMocks.readImage).toHaveBeenCalledTimes(1);
+    expectTumorOnBase(restored, maskId);
+    expect(artifactIO.read).toHaveBeenCalledTimes(1);
   });
 });
