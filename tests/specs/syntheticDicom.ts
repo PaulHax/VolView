@@ -441,6 +441,24 @@ export function buildSyntheticDicom(opts: SyntheticSliceOptions): Uint8Array {
   return combine(new Uint8Array(128), enc.encode('DICM'), fileMeta, dataset);
 }
 
+/** The bytes a Part 10 file spends on its preamble and DICM prefix. */
+const PART_10_HEADER_LENGTH = 132;
+
+/** The same file with its preamble and prefix cut off: file meta comes first. */
+export const stripPreamble = (bytes: Uint8Array) =>
+  bytes.slice(PART_10_HEADER_LENGTH);
+
+/** The same file as a bare data set: no preamble, prefix or file meta. */
+export const stripFileMeta = (bytes: Uint8Array) => {
+  const meta = stripPreamble(bytes);
+  // (0002,0000) UL: tag, VR and a 16 bit length, then the group length.
+  const bodyLength = new DataView(meta.buffer, meta.byteOffset).getUint32(
+    8,
+    true
+  );
+  return meta.slice(12 + bodyLength);
+};
+
 export type SyntheticCineOptions = {
   studyUid: string;
   seriesUid: string;

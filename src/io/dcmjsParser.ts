@@ -1,4 +1,10 @@
 import dcmjs, { DicomDataElement, DicomElement, DicomReadStream } from 'dcmjs';
+import {
+  EXPLICIT_VR_LITTLE_ENDIAN,
+  IMPLICIT_VR_LITTLE_ENDIAN,
+  PART_10_HEADER_LENGTH,
+  sniffDicomLayout,
+} from '@/src/io/dicomLayout';
 
 const { encodingMapping } = dcmjs.constants;
 const {
@@ -8,13 +14,9 @@ const {
   DeflatedReadBufferStream,
 } = dcmjs.data;
 
-const PREAMBLE_LENGTH = 128;
-const MAGIC = 'DICM';
 const FILE_META_GROUP_LENGTH = '00020000';
 const TRANSFER_SYNTAX_UID = '00020010';
 const PIXEL_DATA = '7FE00010';
-const IMPLICIT_VR_LITTLE_ENDIAN = '1.2.840.10008.1.2';
-const EXPLICIT_VR_LITTLE_ENDIAN = '1.2.840.10008.1.2.1';
 const EXPLICIT_VR_BIG_ENDIAN = '1.2.840.10008.1.2.2';
 const DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN = '1.2.840.10008.1.2.1.99';
 const RESERVED_LENGTH = 2;
@@ -104,7 +106,8 @@ const viewBytes = (value: unknown) => {
   return null;
 };
 
-const hex4 = (value: number) =>
+/** A group or element number as four upper case hexadecimal digits. */
+export const hex4 = (value: number) =>
   value.toString(16).padStart(4, '0').toUpperCase();
 
 const dictionaryVr = (group: number, element: number) =>
@@ -116,15 +119,22 @@ const bufferOf = (bytes: Uint8Array) =>
     ? (bytes.buffer as ArrayBuffer)
     : (bytes.slice().buffer as ArrayBuffer);
 
+/**
+ * Opens the data set. A file without the Part 10 preamble is read from its
+ * first element; one without file meta information is read in the transfer
+ * syntax its first element suggests.
+ */
 const openFile = (bytes: Uint8Array) => {
-  if (bytes.byteLength <= PREAMBLE_LENGTH + MAGIC.length)
-    throw new Error('Not a DICOM file: too short to hold a preamble');
+  const layout = sniffDicomLayout(bytes.subarray(0, PART_10_HEADER_LENGTH));
 
   const stream = new ReadBufferStream(bufferOf(bytes));
   stream.reset();
-  stream.increment(PREAMBLE_LENGTH);
-  if (stream.readAsciiString(MAGIC.length) !== MAGIC)
-    throw new Error('Not a DICOM file: the DICM prefix is missing');
+  if (layout.preamble) stream.increment(PART_10_HEADER_LENGTH);
+  if (!layout.fileMeta)
+    return {
+      dataSet: readsBytes(stream),
+      syntax: DicomMessage._normalizeSyntax(layout.transferSyntaxUid),
+    };
 
   const groupLength = DicomMessage._readTag(stream, EXPLICIT_VR_LITTLE_ENDIAN);
   if (groupLength.tag.toCleanString() !== FILE_META_GROUP_LENGTH)

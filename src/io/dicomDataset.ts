@@ -1,9 +1,11 @@
 import {
+  hex4,
   ParsedElement,
   ParsedValue,
   parseDicomElements,
   toBytes,
 } from '@/src/io/dcmjsParser';
+import { concatBytes } from '@/src/utils';
 import {
   CHARSET_VRS,
   characterSetDecoder,
@@ -92,9 +94,6 @@ export type DicomDataset = {
   specificCharacterSet: string[] | null;
 };
 
-const hex4 = (value: number) =>
-  value.toString(16).padStart(4, '0').toUpperCase();
-
 export const tagKey = (group: number, element: number) =>
   `${hex4(group)}${hex4(element)}`;
 
@@ -122,15 +121,6 @@ const attributeTagOf = (packed: number) => ({
   group: packed >>> 16,
   element: packed & 0xffff,
 });
-
-const concatBytes = (parts: Uint8Array[]) => {
-  const out = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
-  parts.reduce((offset, part) => {
-    out.set(part, offset);
-    return offset + part.length;
-  }, 0);
-  return out;
-};
 
 /** Undecoded value bytes, where every value carries them. */
 const rawBytesOf = ({ values }: ParsedElement) => {

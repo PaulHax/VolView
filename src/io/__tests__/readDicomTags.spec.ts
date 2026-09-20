@@ -25,6 +25,8 @@ import {
 import {
   buildSyntheticCineDicom,
   rawElement,
+  stripFileMeta,
+  stripPreamble,
 } from '@/tests/specs/syntheticDicom';
 
 type TagPairs = ReadonlyArray<readonly [string, string]>;
@@ -442,5 +444,32 @@ describe('readDicomTags specific character set', () => {
     expect(await nameFromCharacterSet('ISO_IR 100', LATIN1_NAME_BYTES)).toBe(
       LATIN1_NAME_PADDED
     );
+  });
+});
+
+describe('readDicomTags without a Part 10 header', () => {
+  it('reads a file with no preamble as the Part 10 file it came from', () => {
+    const file = buildSlice({ patientName: 'DOE^JOHN' });
+
+    expect(readDicomTags(stripPreamble(file))).toEqual(readDicomTags(file));
+  });
+
+  it.each([
+    ['explicit', false],
+    ['implicit', true],
+  ])(
+    'reads a bare %s VR data set as the Part 10 file it came from',
+    (_kind, implicitVr) => {
+      const file = buildSlice({ patientName: 'DOE^JOHN', implicitVr });
+
+      const tags = readDicomTags(stripFileMeta(file));
+
+      expect(tags).toEqual(readDicomTags(file));
+      expect(valueOf(tags, Tags.PatientName)).toBe('DOE^JOHN');
+    }
+  );
+
+  it('rejects bytes that open with no element at all', () => {
+    expect(() => readDicomTags(new Uint8Array(512))).toThrow(/Not DICOM/);
   });
 });

@@ -1,4 +1,4 @@
-import { binaryString } from '@/src/io/dcmjsParser';
+import { binaryString, hex4 } from '@/src/io/dcmjsParser';
 import { VALUE_DELIMITER } from '@/src/io/dicomCharacterSet';
 import {
   DicomElement,
@@ -14,7 +14,7 @@ const FLOAT_VRS = new Set(['FD', 'FL', 'OD', 'OF']);
 /** Significant digits of a C++ `ostream`, which is what GDCM printed with. */
 const FLOAT_PRECISION = 6;
 
-const hexTag = (value: number) => value.toString(16).padStart(4, '0');
+const hexTag = (value: number) => hex4(value).toLowerCase();
 
 /** An AT value is a packed tag, which GDCM printed as `(gggg,eeee)`. */
 const attributeTagText = ({

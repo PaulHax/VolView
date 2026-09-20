@@ -1,5 +1,10 @@
 import StreamingByteReader from '@/src/core/streaming/streamingByteReader.js';
 import { toAscii, asCoroutine } from '@/src/utils';
+import {
+  PART_10_HEADER_LENGTH,
+  sniffDicomLayout,
+  type DicomLayout,
+} from '@/src/io/dicomLayout';
 
 // [Group, Element]
 type Tag = [number, number];
@@ -352,25 +357,27 @@ function* readFieldMetaInfo(
 export type ReadDicomOptions = {
   stopAtElement?(group: number, element: number): boolean;
   onDataElement?: DataElementCallback;
+  /** Called once the opening bytes say how the file is laid out. */
+  onLayout?(layout: DicomLayout): void;
 };
 
 export function* readDicomUntilPixelData(opts?: ReadDicomOptions) {
   const reader = new StreamingByteReader();
 
-  // preamble
-  yield* reader.seek(128);
+  // Peeked rather than read: a file without the Part 10 preamble has its
+  // first element at byte 0.
+  const head = yield* reader.read(PART_10_HEADER_LENGTH, { peek: true });
+  const layout = sniffDicomLayout(head);
+  opts?.onLayout?.(layout);
+  if (layout.preamble) yield* reader.seek(PART_10_HEADER_LENGTH);
 
-  // prefix
-  const prefix = yield* reader.readAscii(4);
-  if (prefix !== 'DICM') {
-    throw new Error('Not DICOM');
-  }
-
-  const info = yield* readFieldMetaInfo(reader, {
-    onDataElement: opts?.onDataElement,
-  });
-  const explicitVr = info.transferSyntaxUid !== ImplicitTransferSyntaxUID;
-  const littleEndian = info.transferSyntaxUid !== ExplicitVRBigEndianUID;
+  const transferSyntaxUid = layout.fileMeta
+    ? (yield* readFieldMetaInfo(reader, {
+        onDataElement: opts?.onDataElement,
+      })).transferSyntaxUid
+    : layout.transferSyntaxUid;
+  const explicitVr = transferSyntaxUid !== ImplicitTransferSyntaxUID;
+  const littleEndian = transferSyntaxUid !== ExplicitVRBigEndianUID;
 
   yield* readDataElementsUntil(
     reader,
