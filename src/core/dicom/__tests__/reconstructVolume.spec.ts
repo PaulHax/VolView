@@ -21,6 +21,20 @@ const slice = (z: number, tags: Record<string, string> = {}) =>
 
 const stack = (zs: number[]) => zs.map((z) => slice(z));
 
+// A gantry tilted by theta leans the columns into z, so each slice plane sits
+// sideways of the last as the table advances along z.
+const tiltedSlice = (z: number, theta: number) =>
+  slice(z, {
+    [Tags.ImageOrientationPatient]: [
+      1,
+      0,
+      0,
+      0,
+      Math.cos(theta),
+      Math.sin(theta),
+    ].join('\\'),
+  });
+
 const fixtureSlices = (fixture: IdcSeriesFixture) =>
   fixture
     .groups!.flatMap((group) => group.zs.map((z) => slice(z)))
@@ -124,6 +138,25 @@ describe('reconstructVolume', () => {
       kind: 'irregular',
       reason: 'in-plane-shift',
     });
+    // The fallback is a step the members do take, not the one to the outlier.
+    expect(result.sliceSpacing).toBeCloseTo(4, 12);
+  });
+
+  it('steps a tilted gantry stack by the distance its slices advance', () => {
+    const theta = Math.PI / 9;
+
+    const result = reconstructVolume(
+      [0, 3, 6, 9].map((z) => tiltedSlice(z, theta))
+    );
+
+    expect(result).toMatchObject({
+      kind: 'irregular',
+      reason: 'in-plane-shift',
+    });
+    // The table stepped 3mm a slice, which is the extent ITK's series reader
+    // keeps too; the shear is warned about, not folded into the spacing.
+    expect(result.sliceSpacing).toBeCloseTo(3, 12);
+    expect(result.slots).toEqual([0, 1, 2, 3]);
   });
 
   it('reports two in-plane sample spacings as irregular', () => {
@@ -135,6 +168,33 @@ describe('reconstructVolume', () => {
       kind: 'irregular',
       reason: 'mixed-pixel-spacing',
     });
+    expect(result.sliceSpacing).toBeCloseTo(4, 12);
+  });
+
+  it('steps a stack whose orientation cannot be read by its positions', () => {
+    const blind = (z: number) =>
+      readInstanceFacts([
+        [Tags.ImagePositionPatient, `0\\0\\${z}`],
+        [Tags.PixelSpacing, '0.5\\0.5'],
+      ]);
+
+    const result = reconstructVolume([0, 4, 8].map(blind));
+
+    expect(result).toMatchObject({
+      kind: 'irregular',
+      reason: 'unreadable-geometry',
+    });
+    expect(result.sliceSpacing).toBeCloseTo(4, 12);
+  });
+
+  it('has no step for members that never move', () => {
+    const result = reconstructVolume(stack([5, 5, 5]));
+
+    expect(result).toMatchObject({
+      kind: 'irregular',
+      reason: 'repeated-position',
+    });
+    expect(result.sliceSpacing).toBeNull();
   });
 
   it('projects on the normal it is given rather than on the first member', () => {

@@ -20,8 +20,8 @@ export type IrregularReason =
  * `regular` means every consecutive pair of slice planes is the same distance
  * apart and the members share one in-plane grid, so member i belongs at slot
  * `slots[i]` of a volume sampled at `sliceSpacing`. `irregular` means they do
- * not: the members still load, placed one slot apart, but no lattice describes
- * where they actually are.
+ * not: the members still load, placed one slot apart at the step the stack
+ * does take, but no lattice describes where they actually are.
  *
  * A slice spacing of null means there is nothing to derive one from, which one
  * member alone always is.
@@ -72,6 +72,31 @@ const scale = (vector: number[], factor: number) =>
 
 const maxAbs = (values: number[]) =>
   values.reduce((largest, value) => Math.max(largest, Math.abs(value)), 0);
+
+const distance = (left: number[], right: number[]) =>
+  Math.sqrt(
+    subtract(left, right).reduce((sum, value) => sum + value * value, 0)
+  );
+
+/**
+ * The step a stack that is no lattice still takes: the lower median of the
+ * straight-line distance from each member to the next, in the order given.
+ * That is what ITK's series reader steps by, so a tilted gantry's slices,
+ * whose planes shift sideways as they advance, keep the extent they were
+ * scanned over. Null when a position is unreadable or the members never move.
+ */
+const positionStep = (members: ReconstructionMember[]) => {
+  const positions = members.map((member) => member.position);
+  if (positions.length < 2 || positions.some((position) => position === null))
+    return null;
+  const gaps = positions
+    .slice(1)
+    .map((position, index) =>
+      distance(position as number[], positions[index] as number[])
+    );
+  const step = median(gaps);
+  return step > 0 ? step : null;
+};
 
 // A member with no pixel spacing at all is unknown, not different: only two
 // spacings that both read and disagree describe two grids.
@@ -170,5 +195,5 @@ export function reconstructVolume(
   const fault = geometryFault(members, axis, along);
   return fault === null
     ? lattice(along as number[])
-    : irregular(fault, null, members.length);
+    : irregular(fault, positionStep(members), members.length);
 }

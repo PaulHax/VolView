@@ -106,13 +106,18 @@ export const UNREADABLE_POSITION_WARNING =
   'holds slices whose position could not be read. They were kept out of the ' +
   'volumes of their series, and their order and spacing may be wrong.';
 
+export const IN_PLANE_SHIFT_WARNING =
+  'holds slices that are offset within their own plane from one to the next, ' +
+  'as a tilted gantry produces. They were stacked without correcting for the ' +
+  'offset, so positions and measurements across slices may be wrong.';
+
 // A repeated or unreadable position makes a stack irregular too, and already
 // carries a warning of its own.
 const RECONSTRUCTION_WARNINGS: Record<IrregularReason, string[]> = {
   'unreadable-geometry': [],
   'repeated-position': [],
   'uneven-slice-spacing': [IRREGULAR_VOLUME_WARNING],
-  'in-plane-shift': [IRREGULAR_VOLUME_WARNING],
+  'in-plane-shift': [IN_PLANE_SHIFT_WARNING],
   'mixed-pixel-spacing': [IRREGULAR_VOLUME_WARNING],
 };
 

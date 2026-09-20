@@ -421,4 +421,41 @@ describe('allocateImageFromChunks', () => {
 
     expect(image.getSpacing()[2]).toBe(1);
   });
+
+  it('takes the declared SpacingBetweenSlices when no position can be read', () => {
+    const image = allocateImageFromChunks([
+      chunk({
+        [Tags.ImagePositionPatient]: '',
+        [Tags.SpacingBetweenSlices]: '2.5',
+      }),
+      chunk({ [Tags.ImagePositionPatient]: '' }),
+    ]);
+
+    expect(image.getSpacing()[2]).toBe(2.5);
+  });
+
+  it('takes the declared SpacingBetweenSlices for a multi-frame instance', () => {
+    const image = allocateImageFromChunks([
+      chunk({ [Tags.NumberOfFrames]: '4', [Tags.SpacingBetweenSlices]: '1.5' }),
+    ]);
+
+    expect(Array.from(image.getDimensions())).toEqual([4, 3, 4]);
+    expect(image.getSpacing()[2]).toBe(1.5);
+  });
+
+  // A tilted gantry leans every slice plane sideways of the last, so no lattice
+  // holds them; the extent the table stepped over is kept all the same.
+  it('steps a tilted gantry stack by the distance its slices advance', () => {
+    const theta = Math.PI / 9;
+    const tilted = [1, 0, 0, 0, Math.cos(theta), Math.sin(theta)].join('\\');
+
+    const image = allocateImageFromChunks(
+      [0, 3, 6, 9].map((z) =>
+        positionedChunk(z, { [Tags.ImageOrientationPatient]: tilted })
+      )
+    );
+
+    expect(image.getSpacing()[2]).toBeCloseTo(3, 12);
+    expect(image.getDirection()[5]).toBeCloseTo(Math.sin(theta), 12);
+  });
 });

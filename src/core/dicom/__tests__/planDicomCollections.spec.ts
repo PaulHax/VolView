@@ -3,6 +3,7 @@ import {
   HARD_FACT_RULES,
   ORIENTATION_RULE,
   ORIENTATION_TOLERANCE,
+  IN_PLANE_SHIFT_WARNING,
   IRREGULAR_VOLUME_WARNING,
   REPEATED_POSITIONS_WARNING,
   UNREADABLE_POSITION_WARNING,
@@ -668,6 +669,28 @@ describe('planDicomCollections semantic partition', () => {
     const { collections } = plan(pass('1', [0, 4, 8, 12]));
 
     expect(collections[0].warnings).toEqual([]);
+  });
+
+  it('warns that a tilted gantry stack was stacked without correcting its shear', () => {
+    const theta = Math.PI / 9;
+    const orientation = tiltedOrientation(theta);
+    // The table advances along z while the columns lean into it, so each
+    // slice plane sits sideways of the last on the stack's own normal.
+    const stack = [0, 3, 6, 9].map((z, i) =>
+      makeFacts(`tilt-${i}`, {
+        orientation,
+        position: [0, 0, z],
+        projectedPosition: z * Math.cos(theta),
+        instanceNumber: i + 1,
+      })
+    );
+
+    const { collections } = plan(stack);
+
+    expect(collections).toHaveLength(1);
+    expect(collections[0].order).toBe('spatial');
+    expect(uidsOf(collections[0])).toEqual(stack.map((m) => m.sopInstanceUid));
+    expect(collections[0].warnings).toEqual([IN_PLANE_SHIFT_WARNING]);
   });
 
   it('warns about a repeated position no axis separates', () => {

@@ -136,12 +136,15 @@ function numberOr(value: Maybe<string>, fallback: number) {
  * default: BitsStored is Type 1, so a conforming instance always carries one.
  */
 export function getPixelFormat(metadata: Maybe<Iterable<[string, string]>>) {
-  const meta = new Map(metadata ?? []);
+  // Four lookups scan the header rather than copying it: every chunk of a
+  // volume comes through here on every allocation.
+  const entries = Array.isArray(metadata) ? metadata : [...(metadata ?? [])];
+  const valueOf = (tag: string) => entries.find(([name]) => name === tag)?.[1];
   return {
-    bitsStored: numberOr(meta.get(BitsStoredTag), 0),
-    pixelRepresentation: numberOr(meta.get(PixelRepresentationTag), 0),
-    rescaleSlope: numberOr(meta.get(RescaleSlope), 1),
-    rescaleIntercept: numberOr(meta.get(RescaleIntercept), 0),
+    bitsStored: numberOr(valueOf(BitsStoredTag), 0),
+    pixelRepresentation: numberOr(valueOf(PixelRepresentationTag), 0),
+    rescaleSlope: numberOr(valueOf(RescaleSlope), 1),
+    rescaleIntercept: numberOr(valueOf(RescaleIntercept), 0),
   };
 }
 
@@ -256,12 +259,13 @@ export function allocateImageFromChunks(sortedChunks: Chunk[]) {
     ? [pixelSpacing[1], pixelSpacing[0], 1]
     : [1, 1, 1];
 
-  // An irregular stack has no lattice of its own, so it falls back to a step
-  // the series does hold and the planner warns about the collection.
+  // A stack steps by what its positions say, a lattice's own spacing or, for
+  // an irregular stack the planner warns about, a step the series does hold.
+  // Anything whose positions say nothing takes the step the header declares.
   const sliceSpacing = reconstruction.sliceSpacing ?? 0;
-  if (sortedChunks.length > 1 && isPositiveFiniteNumber(sliceSpacing)) {
+  if (isPositiveFiniteNumber(sliceSpacing)) {
     spacing[2] = sliceSpacing;
-  } else if (slices === 1 && isPositiveFiniteNumber(spacingBetweenSlices)) {
+  } else if (isPositiveFiniteNumber(spacingBetweenSlices)) {
     spacing[2] = spacingBetweenSlices;
   }
   image.setSpacing(spacing);

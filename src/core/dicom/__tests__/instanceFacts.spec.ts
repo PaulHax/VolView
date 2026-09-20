@@ -191,7 +191,6 @@ describe('readInstanceFacts', () => {
   it.each([
     ['an all zero basis', '0\\0\\0\\0\\0\\0'],
     ['a zero length row', '0\\0\\0\\0\\1\\0'],
-    ['a row twice unit length', '2\\0\\0\\0\\1\\0'],
     ['a row and column that are the same axis', '1\\0\\0\\1\\0\\0'],
     ['a row and column 45 degrees apart', '1\\0\\0\\0.7071\\0.7071\\0'],
     ['a blank cosine', '1\\0\\0\\0\\\\0'],
@@ -215,6 +214,43 @@ describe('readInstanceFacts', () => {
     expect(facts.orientation![0]).toBeCloseTo(1, 12);
     expect(facts.orientation![4]).toBeCloseTo(1, 12);
     expect(facts.projectedPosition).toBeCloseTo(30, 12);
+  });
+
+  // GDCM rescales whatever cosines it is given, so a basis printed to three
+  // decimals or written at the wrong length loads as the scanner meant it
+  // rather than landing in the unreadable bucket.
+  it.each([
+    [
+      'an oblique printed to three decimals',
+      '0.707\\0.707\\0\\-0.707\\0.707\\0',
+      [0.7071, 0.7071, 0, -0.7071, 0.7071, 0],
+    ],
+    [
+      'a row written at twice unit length',
+      '2\\0\\0\\0\\1\\0',
+      [1, 0, 0, 0, 1, 0],
+    ],
+  ])('rescales %s to unit axes', (_case, value, expected) => {
+    const facts = readInstanceFacts(
+      metadata({ [Tags.ImageOrientationPatient]: value })
+    );
+
+    expect(facts.orientation).not.toBeNull();
+    facts.orientation!.forEach((cosine, index) =>
+      expect(cosine).toBeCloseTo(expected[index], 3)
+    );
+    expect(facts.projectedPosition).toBeCloseTo(30, 10);
+  });
+
+  it('accepts cosines a printed digit away from square', () => {
+    const facts = readInstanceFacts(
+      metadata({
+        [Tags.ImageOrientationPatient]: '0.7071\\0.7071\\0\\-0.7072\\0.7070\\0',
+      })
+    );
+
+    expect(facts.orientation).not.toBeNull();
+    expect(facts.projectedPosition).toBeCloseTo(30, 3);
   });
 
   it.each([
