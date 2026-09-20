@@ -78,13 +78,23 @@ export const useCurrentTools = <S extends AnnotationToolStore>(
       return (
         tool.imageID === curImageID &&
         doesToolFrameMatchViewAxis(viewAxis, tool, currentImageMetadata) &&
-        !tool.hidden
+        !tool.hidden &&
+        // Keep the active placement widget alive until it commits. Completed
+        // shapes inherit the segment's visibility without changing child flags.
+        (tool.placing ||
+          toolStore.segments.appearanceOf(tool.segmentId).visible)
       );
     });
   });
 };
 
 // --- Context Menu --- //
+
+/** The appearance a shape draws itself in, resolved from the segment it names. */
+export const useToolAppearance = (
+  store: AnnotationToolStore,
+  tool: () => Maybe<{ segmentId?: string }>
+) => computed(() => store.segments.appearanceOf(tool()?.segmentId));
 
 export const useContextMenu = () => {
   const contextMenu = ref<{
@@ -224,7 +234,7 @@ export const usePlacingAnnotationTool = (
   const commit = () => {
     const id_ = id.value as Maybe<ToolID>;
     if (!id_) return;
-    store.updateTool(id_, { placing: false });
+    store.placeTool(id_);
     id.value = null;
   };
 
@@ -248,8 +258,16 @@ export const usePlacingAnnotationTool = (
     store.updateTool(id.value as ToolID, metadata.value);
   });
 
+  // The first gesture is what mints, so the shape resolves its segment as
+  // placement starts rather than when it lands.
+  const beginPlacement = () => {
+    const id_ = id.value as Maybe<ToolID>;
+    if (id_) store.resolveToolType(id_);
+  };
+
   return {
     id: readonly(id),
+    beginPlacement,
     commit,
     add,
     remove,
