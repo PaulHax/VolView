@@ -227,6 +227,9 @@ export function createSegmentationWire(deps: SegmentationWireDeps) {
 
     delete manifest.segmentationArtifacts;
 
+    // The wire binding each write has to restate its extent on, by mask id.
+    const wireBindings = new Map<string, { extent: Extent3D }>();
+
     manifest.segmentations = Object.values(segmentations).map(
       (segmentation) => ({
         id: segmentation.id,
@@ -237,19 +240,17 @@ export function createSegmentationWire(deps: SegmentationWireDeps) {
         outlineThickness: segmentation.outlineThickness,
         masks: listMasks(segmentation).map((segment) => {
           const binding = segment.representations.labelmap;
+          const labelmap = binding && {
+            extent: [...binding.extent] as Extent3D,
+            path: pathOf.get(segment.id)!,
+            name: binding.name,
+            ...(binding.source ? { source: binding.source } : {}),
+          };
+          if (labelmap) wireBindings.set(segment.id, labelmap);
           return {
             id: segment.id,
             segmentId: segment.segmentId,
-            representations: binding
-              ? {
-                  labelmap: {
-                    extent: [...binding.extent] as Extent3D,
-                    path: pathOf.get(segment.id)!,
-                    name: binding.name,
-                    ...(binding.source ? { source: binding.source } : {}),
-                  },
-                }
-              : {},
+            representations: labelmap ? { labelmap } : {},
           };
         }),
         order: [...segmentation.order],
@@ -260,9 +261,14 @@ export function createSegmentationWire(deps: SegmentationWireDeps) {
       entries,
       MASK_IO_CONCURRENCY,
       async ({ maskId, parentImageId, binding, path }) => {
+        // An edit can grow a mask still queued for its write, and growth keeps
+        // the image instance, so the bounds the codec is handed are only known
+        // here: restated in the same tick as the pixels the codec copies.
+        const image = writableMask(parentImageId, binding);
+        wireBindings.get(maskId)!.extent = [...binding.extent] as Extent3D;
         zip.file(
           path,
-          await io.write(format, writableMask(parentImageId, binding), [
+          await io.write(format, image, [
             labelmapDescriptorByMask.value[maskId],
           ])
         );
