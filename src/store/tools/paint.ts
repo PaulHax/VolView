@@ -126,9 +126,6 @@ export const usePaintToolStore = defineStore('paint', () => {
   function resolveStrokeTarget(imageID: string, allocate: boolean) {
     if (![PaintMode.CirclePaint, PaintMode.Erase].includes(activeMode.value))
       return undefined;
-    // Asked of the segment before the target is resolved, since resolving mints
-    // the mask record and its segmentation: a refused stroke leaves neither.
-    if (segmentationStore.editTargetLocked()) return undefined;
     const maskId = allocate
       ? segmentationStore.resolveEditTarget(imageID)
       : segmentationStore.findEditTarget(imageID);
@@ -181,6 +178,10 @@ export const usePaintToolStore = defineStore('paint', () => {
   }
 
   function doPaintStroke(this: _This, axisIndex: 0 | 1 | 2, imageID: string) {
+    // Asked before anything else: cancelling a preview and resolving the target
+    // (which mints the mask and its segmentation) are both side effects a
+    // refused stroke must not have.
+    if (segmentationStore.editTargetLocked()) return;
     useSegmentationEditsStore().beforeEdit();
     const erasing = activeMode.value === PaintMode.Erase;
     const target = resolveStrokeTarget(imageID, !erasing);
