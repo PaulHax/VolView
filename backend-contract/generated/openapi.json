@@ -1708,6 +1708,7 @@
                       "type": "number"
                     },
                     "fillColor": {
+                      "description": "Accepted so an existing producer keeps validating, and ignored: the client draws every rectangle unfilled.",
                       "type": "string"
                     }
                   },
@@ -1731,6 +1732,7 @@
                       "type": "number"
                     },
                     "fillColor": {
+                      "description": "Accepted so an existing producer keeps validating, and ignored: the client draws every rectangle unfilled.",
                       "type": "string"
                     }
                   },
@@ -1754,6 +1756,7 @@
                       "type": "number"
                     },
                     "fillColor": {
+                      "description": "Accepted so an existing producer keeps validating, and ignored: the client draws every rectangle unfilled.",
                       "type": "string"
                     }
                   },
