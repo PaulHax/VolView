@@ -53,6 +53,26 @@ describe('segment type registry', () => {
     expect(registry.getSegment(registry.addSegment())?.name).toBe('Segment 2');
   });
 
+  it('mints the lowest free name again once a deletion or rename frees it', () => {
+    const registry = createSegmentRegistry();
+    const nameOf = (id: string) => registry.getSegment(id)?.name;
+    const [first, second] = [registry.addSegment(), registry.addSegment()];
+    registry.addSegment();
+
+    registry.deleteSegment(first);
+    expect(nameOf(registry.addSegment())).toBe('Segment 1');
+
+    registry.updateSegment(second, { name: 'Liver' });
+    expect(nameOf(registry.addSegment())).toBe('Segment 2');
+    expect(nameOf(registry.addSegment())).toBe('Segment 4');
+
+    registry.addSegment({ name: registry.uniqueName('Liver') });
+    const third = registry.addSegment({ name: registry.uniqueName('Liver') });
+    expect(nameOf(third)).toBe('Liver (3)');
+    registry.deleteSegment(third);
+    expect(registry.uniqueName('Liver ')).toBe('Liver (3)');
+  });
+
   it('cycles the tool colors for minted segments', () => {
     const registry = createSegmentRegistry();
 
