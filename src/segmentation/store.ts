@@ -6,10 +6,7 @@ import type { RGBAColor } from '@kitware/vtk.js/types';
 import { CATEGORICAL_COLORS } from '@/src/config';
 import { NO_NAME } from '@/src/constants';
 import { createMaskFileNamer } from '@/src/segmentation/io/maskFileNaming';
-import {
-  LABELMAP_MAX_VALUE,
-  SEGMENT_VALUE,
-} from '@/src/segmentation/masks/labelValue';
+import { SEGMENT_VALUE } from '@/src/segmentation/masks/labelValue';
 import { allocateMask } from '@/src/segmentation/masks/storage';
 import { createSegmentProjection } from '@/src/segmentation/rendering/projection';
 import { createVoxelAccess } from '@/src/segmentation/masks/voxelAccess';
@@ -19,13 +16,13 @@ import {
 } from '@/src/segmentation/io/stateFile';
 
 export type { LabelmapIO };
-export { LABELMAP_MAX_VALUE };
 import { onImageDeleted } from '@/src/composables/onImageDeleted';
 import { declareManifestRefs } from '@/src/core/manifestRefs';
 import {
   decodeLabelmapSegments,
   importLabelmapImage,
   splitLabelmap,
+  type DecodeOptions,
 } from '@/src/segmentation/io/import';
 import { useIdStore } from '@/src/store/id';
 import { useImageCacheStore } from '@/src/store/image-cache';
@@ -37,6 +34,7 @@ import {
 import {
   DEFAULT_SEGMENTATION_FILL_OPACITY,
   listMasks,
+  makeDefaultSegmentName,
   maskScalars,
   type LabelmapBinding,
   type LabelmapSegment,
@@ -103,6 +101,13 @@ declareManifestRefs('segmentations', (manifest) => {
   });
 });
 
+/**
+ * What a caller says about one source label value. Only `value` identifies the
+ * bin; everything else overrides what the labelmap's own metadata decoded.
+ */
+export type SourceDescription = Pick<LabelmapSegment, 'value'> &
+  Partial<Omit<LabelmapSegment, 'value'>>;
+
 export const useSegmentationStore = defineStore('segmentation', () => {
   const edits = useSegmentationEditsStore();
   const imageCacheStore = useImageCacheStore();
@@ -110,12 +115,12 @@ export const useSegmentationStore = defineStore('segmentation', () => {
 
   const segmentations = reactive<Record<string, Segmentation>>({});
   const convertingLabelmaps = reactive(new Set<DataSelection>());
-  // The conversion running for an image, so a second caller joins it instead
-  // of splitting the same labelmap twice.
-  const conversions = new Map<
-    DataSelection,
-    ReturnType<typeof importLabelmapImage>
-  >();
+  // The conversion running for a child image ONTO ONE PARENT, so a second
+  // caller for that same pair joins it instead of splitting the same labelmap
+  // twice. The parent belongs in the key: the same child going onto another
+  // parent is other work, and joining it would hand that caller masks made on
+  // an image it never named.
+  const conversions = new Map<string, ReturnType<typeof importLabelmapImage>>();
   /**
    * How many bound masks hold each name, so picking a default name probes this
    * rather than walking every mask in the scene. A restore attaches the names
@@ -359,31 +364,74 @@ export const useSegmentationStore = defineStore('segmentation', () => {
   function decodeSegments(
     imageId: DataSelection | undefined,
     image: vtkLabelMap,
-    options: { component?: number; headerMetadata?: Map<string, string> } = {}
+    options: Pick<
+      DecodeOptions,
+      'component' | 'headerMetadata' | 'declared' | 'baseName'
+    > = {}
   ) {
     return decodeLabelmapSegments(imageId, image, {
       ...options,
       // A descriptor-less labelmap reads as the file it arrived in, not as
       // 'Segment N'; the cold restore decodes through here too, so the two
-      // paths keep naming one labelmap alike.
-      baseName: imageId === undefined ? undefined : getSelectionStem(imageId),
+      // paths keep naming one labelmap alike. A caller reading bytes no loaded
+      // image holds says what they arrived as, since there is no selection
+      // here to take a name from.
+      baseName:
+        options.baseName ??
+        (imageId === undefined ? undefined : getSelectionStem(imageId)),
       nextColor: getNextDecodeColor,
     });
+  }
+
+  /**
+   * Product decision: a segment a result DECLARES but leaves EMPTY appears as
+   * an empty row, so 'looked and found nothing' is distinguishable from 'never
+   * looked at all'. The decode only ever sees values the voxels carry, so a
+   * declared value with no voxels reaches the split only by being appended
+   * here. This mirrors the seg.nrrd header path, where overlaySegmentMetadata
+   * appends described values missing from the enumeration 'so nothing
+   * described is lost'; both import paths now keep the same segments, across
+   * the components of one file as well.
+   *
+   * 0 is background, never a segment. A declaration any component covered is
+   * left where that component put it, so appearance stays merged onto the
+   * decoded descriptor rather than duplicated into an empty twin beside it --
+   * `covered` spans every component for exactly that reason, and this runs
+   * only on the last one. The colour cursor turns only for a declaration that
+   * named no colour.
+   */
+  function withDeclaredEmpties(
+    decoded: LabelmapSegment[],
+    bySourceValue: Map<number, Partial<SourceDescription>>,
+    covered: Set<number>
+  ): LabelmapSegment[] {
+    const empties: LabelmapSegment[] = [];
+    bySourceValue.forEach((description, value) => {
+      if (value === 0 || covered.has(value)) return;
+      empties.push({
+        ...description,
+        value,
+        name: description.name ?? makeDefaultSegmentName(value),
+        color: [...(description.color ?? getNextDecodeColor())] as RGBAColor,
+        visible: description.visible ?? true,
+      });
+    });
+    return [...decoded, ...empties];
   }
 
   async function convertImageToLabelmap(
     imageID: DataSelection,
     parentID: DataSelection,
     source?: ProcessingResultSource,
-    descriptions: Array<
-      Pick<LabelmapSegment, 'value'> & Partial<Omit<LabelmapSegment, 'value'>>
-    > = []
+    descriptions: SourceDescription[] = []
   ) {
-    // A second conversion of an image already converting would split it again
-    // and mint a suffixed duplicate of every segment, and the first call's
-    // cleanup would clear the pending flag while the second still ran. Both
-    // callers share the one conversion and see it end when it really ends.
-    const running = conversions.get(imageID);
+    // A second conversion of an image already converting onto the same parent
+    // would split it again and mint a suffixed duplicate of every segment, and
+    // the first call's cleanup would clear the pending flag while the second
+    // still ran. Both callers share the one conversion and see it end when it
+    // really ends.
+    const pair = `${imageID}|${parentID}`;
+    const running = conversions.get(pair);
     if (running) return running;
 
     const bySourceValue = new Map(
@@ -392,12 +440,27 @@ export const useSegmentationStore = defineStore('segmentation', () => {
         cleanUndefined(descriptor),
       ])
     );
+    // Every source value any component of this image carries voxels for. A
+    // declaration is empty only when none of them did.
+    const coveredValues = new Set<number>();
     convertingLabelmaps.add(imageID);
     const conversion = importLabelmapImage(imageID, parentID, {
-      decode: (labelmap, component) =>
-        decodeSegments(imageID, labelmap, { component }) as Promise<
-          LabelmapSegment[]
-        >,
+      // The empties join the descriptor list here, not at the split: the
+      // import pairs the masks the split returns with these descriptors by
+      // position, so the two lists have to be the same one. They wait for the
+      // last component, once every component has said which values it carries.
+      decode: async (labelmap, component, componentCount) => {
+        const last = component === componentCount - 1;
+        const decoded = (await decodeSegments(imageID, labelmap, {
+          component,
+          // The file header's own declarations wait for the last component the
+          // same way, through the same covered values.
+          declared: { covered: coveredValues, last },
+        })) as LabelmapSegment[];
+        decoded.forEach((descriptor) => coveredValues.add(descriptor.value));
+        if (!last) return decoded;
+        return withDeclaredEmpties(decoded, bySourceValue, coveredValues);
+      },
       split: (labelmap, descriptors) => {
         const created = splitLabelmapIntoMasks(
           parentID,
@@ -416,11 +479,11 @@ export const useSegmentationStore = defineStore('segmentation', () => {
         return created.map((segment) => segment.id);
       },
     });
-    conversions.set(imageID, conversion);
+    conversions.set(pair, conversion);
     try {
       return await conversion;
     } finally {
-      conversions.delete(imageID);
+      conversions.delete(pair);
       convertingLabelmaps.delete(imageID);
     }
   }

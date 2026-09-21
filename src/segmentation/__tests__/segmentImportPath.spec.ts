@@ -18,6 +18,8 @@ import { useSegmentationStore } from '@/src/segmentation/store';
 import { useSegmentStore } from '@/src/segmentation/segments';
 import { listMasks } from '@/src/segmentation/model';
 import type vtkLabelMap from '@/src/vtk/LabelMap';
+import { importLabelmapImage } from '@/src/segmentation/io/import';
+import { defer } from '@/src/utils';
 
 /** A record shows the name and color of the type it references. */
 const appearanceOf = (segment: { segmentId: string }) =>
@@ -44,7 +46,7 @@ const store = () => useSegmentationStore();
 
 const offset = (i: number, j: number, k: number) => i + j * 4 + k * 16;
 
-function makeImage(values?: Uint8Array) {
+function makeImage(values?: Uint8Array, components = 1) {
   const image = vtkImageData.newInstance({
     spacing: [1, 1, 1],
     origin: [0, 0, 0],
@@ -52,8 +54,8 @@ function makeImage(values?: Uint8Array) {
   image.setDimensions(DIMENSIONS);
   image.getPointData().setScalars(
     vtkDataArray.newInstance({
-      numberOfComponents: 1,
-      values: values ?? new Uint8Array(VOXEL_COUNT),
+      numberOfComponents: components,
+      values: values ?? new Uint8Array(VOXEL_COUNT * components),
     })
   );
   image.computeTransforms();
@@ -64,9 +66,10 @@ async function seat(
   id: string,
   name: string,
   values?: Uint8Array,
-  headerMetadata?: Map<string, string>
+  headerMetadata?: Map<string, string>,
+  components = 1
 ) {
-  useImageCacheStore().addVTKImageData(makeImage(values), name, {
+  useImageCacheStore().addVTKImageData(makeImage(values, components), name, {
     id,
     headerMetadata,
   });
@@ -176,6 +179,31 @@ describe('the import path answers on the segmentation store', () => {
     );
   });
 
+  // A conversion is joined by the child image AND the parent it is going onto.
+  // Two parents are two conversions: the second caller must be handed its own
+  // parent's masks, not the first parent's.
+  it('converts one child onto two parents at once', async () => {
+    await seat('parent-a', 'CT A');
+    await seat('parent-b', 'CT B');
+    await seat('child-img', 'Tumor.seg.nrrd', labelValues());
+
+    const [ontoA, ontoB] = await Promise.all([
+      store().convertImageToLabelmap('child-img', 'parent-a'),
+      store().convertImageToLabelmap('child-img', 'parent-b'),
+    ]);
+
+    expect(ontoB).not.toBe(ontoA);
+    expect(segmentsOf('parent-a').map((segment) => segment.id)).toEqual(
+      ontoA[0].map((entry) => entry.maskId)
+    );
+    expect(segmentsOf('parent-b').map((segment) => segment.id)).toEqual(
+      ontoB[0].map((entry) => entry.maskId)
+    );
+    expect(
+      segmentsOf('parent-b').map((segment) => appearanceOf(segment).name)
+    ).toEqual(['Tumor 1', 'Tumor 2']);
+  });
+
   it('refuses to convert an image into a labelmap of itself', async () => {
     await seatConvertible();
 
@@ -208,6 +236,49 @@ describe('the import path answers on the segmentation store', () => {
     expect(segmentsOf('parent-img')).toEqual([]);
     expect(boundMasks()).toEqual([]);
   });
+
+  it.each([
+    ['foreground', labelValues()],
+    ['background only', new Uint8Array(VOXEL_COUNT)],
+  ])(
+    'creates no records when the parent is removed during %s decoding',
+    async (_kind, values) => {
+      await seat('parent-img', 'CT');
+      await seat('healthy-img', 'MR');
+      await seat('child-img', 'Tumor.seg.nrrd', values);
+      const decoding = defer<void>();
+      const started = defer<void>();
+
+      const conversion = importLabelmapImage('child-img', 'parent-img', {
+        decode: async () => {
+          started.resolve();
+          await decoding.promise;
+          return values.some(Boolean)
+            ? [1, 2].map((value) => ({
+                value,
+                name: `Tumor ${value}`,
+                color: [255, 0, 0, 255] as [number, number, number, number],
+                visible: true,
+              }))
+            : [];
+        },
+        split: (labelmap, descriptors) =>
+          store()
+            .splitLabelmapIntoMasks('parent-img', labelmap, descriptors)
+            .map(({ id }) => id),
+      });
+      await started.promise;
+
+      useImageCacheStore().removeImage('parent-img');
+      decoding.resolve();
+
+      await expect(conversion).rejects.toThrow(/no longer loaded/i);
+      expect(store().getSegmentationForImage('parent-img')).toBeUndefined();
+      expect(useImageCacheStore().imageById['healthy-img']).toBeDefined();
+      expect(useSegmentStore().segments.segmentList.value).toEqual([]);
+      expect(boundMasks()).toEqual([]);
+    }
+  );
 
   // 'Segment 1' says nothing about what was imported. The file stem is the only
   // name a descriptor-less labelmap carries, and it reaches the panel and the
@@ -274,6 +345,55 @@ describe('the import path answers on the segmentation store', () => {
       { name: 'Tumor 1', color: categorical(0) },
       { name: 'Tumor core', color: [255, 0, 0, 255] },
     ]);
+  });
+});
+
+describe('a .seg.nrrd header declaring a segment it leaves empty', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  /** Liver on value 1, Spleen on value 2, whatever the voxels carry. */
+  const HEADER = new Map([
+    ['Segment0_LabelValue', '1'],
+    ['Segment0_Name', 'Liver'],
+    ['Segment0_Color', '1 0 0'],
+    ['Segment1_LabelValue', '2'],
+    ['Segment1_Name', 'Spleen'],
+    ['Segment1_Color', '0 0 1'],
+  ]);
+
+  const LIVER = { name: 'Liver', color: [255, 0, 0, 255] };
+  const SPLEEN = { name: 'Spleen', color: [0, 0, 255, 255] };
+
+  it('shows the declaration as an empty row', async () => {
+    const values = new Uint8Array(VOXEL_COUNT);
+    values[offset(1, 1, 1)] = 1;
+    await seat('parent-img', 'CT');
+    await seat('child-img', 'Liver.seg.nrrd', values, HEADER);
+
+    await store().convertImageToLabelmap('child-img', 'parent-img');
+
+    expect(describedBy('parent-img')).toEqual([LIVER, SPLEEN]);
+  });
+
+  // A declaration is one bin however many components the file has: a value
+  // some component carried is that component's segment, so it must not come
+  // back a second time as an empty twin of itself, and a value no component
+  // carried is one empty row, not one per component.
+  it('declares it once across the components of one file', async () => {
+    const values = new Uint8Array(VOXEL_COUNT * 2);
+    values[offset(1, 1, 1) * 2] = 1;
+    await seat('parent-img', 'CT');
+    await seat('child-img', 'Liver.seg.nrrd', values, HEADER, 2);
+
+    await store().convertImageToLabelmap('child-img', 'parent-img');
+
+    expect(describedBy('parent-img')).toEqual([LIVER, SPLEEN]);
+    // The declared value no component carried is a real mask record covering
+    // nothing, exactly as it is on the result path.
+    const spleen = segmentsOf('parent-img')[1];
+    expect(store().maskVoxels(spleen.id).scalars()).toHaveLength(0);
   });
 });
 
