@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import { cleanuptotal } from 'wdio-cleanuptotal-service';
 import {
   openAnnotationSegments,
+  segmentNames,
   waitForNamedSegments,
   waitForSegmentContent,
 } from './segmentationTestUtils';
@@ -55,6 +56,8 @@ describe('Labelmap with different direction matrix', () => {
     await openAnnotationSegments();
     await waitForNamedSegments(DOWNLOAD_TIMEOUT);
     await waitForSegmentContent('Right hip', DOWNLOAD_TIMEOUT);
+    // The manifest describes one of the labelmap's values; the rest keep a row.
+    expect((await segmentNames()).length).toBeGreaterThan(1);
 
     await volViewPage.openLayoutMenu(1);
     await volViewPage.selectLayoutOption('Coronal Only');
