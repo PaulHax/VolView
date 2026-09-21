@@ -10,6 +10,7 @@ import {
   extentOf,
   labelValueOf,
   maskValueAt,
+  markedVoxels,
   seatImage,
   seedVoxel,
   store,
@@ -301,5 +302,84 @@ describe('rasterizing a polygon into a bounded mask', () => {
     expect(result.maskId).toBe(named);
     expect(maskValueAt(named, [2, 3, 0])).toBe(labelValueOf(named));
     expect(maskValueAt(active, [2, 3, 0])).toBeFalsy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The voxels a polygon fills are a property of the polygon and the parent
+// image, not of how much of the image its mask currently holds. Triangles with
+// integer vertices are where an edge can cross a scanline exactly on a pixel
+// centre, which is the tie an allocation-dependent fill resolves differently.
+// ---------------------------------------------------------------------------
+
+const GRID: Index3 = [40, 40, 1];
+const GRID_EXTENT = [0, 39, 0, 39, 0, 0] as const;
+
+const TRIANGLES: Vector3[][] = [
+  [
+    [18, 23, 0],
+    [27, 6, 0],
+    [5, 28, 0],
+  ],
+  [
+    [2, 2, 0],
+    [30, 2, 0],
+    [2, 30, 0],
+  ],
+  [
+    [10, 5, 0],
+    [35, 20, 0],
+    [6, 33, 0],
+  ],
+  [
+    [7, 31, 0],
+    [33, 9, 0],
+    [20, 36, 0],
+  ],
+  [
+    [1, 17, 0],
+    [38, 4, 0],
+    [22, 29, 0],
+  ],
+  [
+    [12, 1, 0],
+    [29, 25, 0],
+    [3, 38, 0],
+  ],
+];
+
+describe('rasterizing a polygon whatever the mask already holds', () => {
+  const fillOn = (imageId: string, points: Vector3[], grown: boolean) => {
+    const maskId = addMask(imageId, 'Tumor');
+    const voxels = store().maskVoxels(maskId);
+    voxels.materialize();
+    if (grown) voxels.ensureContains([...GRID_EXTENT]);
+    rasterizePolygon({
+      imageId,
+      segmentId: segmentOfMask(maskId),
+      points,
+      slice: 0,
+      viewAxis: 'Axial',
+    });
+    return markedVoxels(maskId);
+  };
+
+  it('fills the same parent voxels into a fresh and an image-sized mask', async () => {
+    const fills = [];
+    for (const points of TRIANGLES) {
+      setActivePinia(createPinia());
+      // Separate images so neither fill can claim the other's voxels.
+      await seatImage('fresh', { dimensions: GRID });
+      await seatImage('grown', { dimensions: GRID });
+      fills.push({
+        fresh: fillOn('fresh', points, false),
+        grown: fillOn('grown', points, true),
+      });
+    }
+
+    expect(fills.map(({ fresh }) => fresh)).toEqual(
+      fills.map(({ grown }) => grown)
+    );
+    expect(fills.every(({ fresh }) => fresh!.length > 0)).toBe(true);
   });
 });

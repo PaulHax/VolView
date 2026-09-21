@@ -66,16 +66,17 @@ export function resolveRasterizeTarget(
   };
 }
 
+/** A grid over the parent's index space, writing into the mask's own buffer. */
 function createGridAccessor(
-  image: vtkImageData,
-  pixelData: TypedArray,
+  parent: vtkImageData,
+  mask: { image: vtkImageData; pixelData: TypedArray; extent: Extent3D },
   plane: { slice: number; axisIdx: 0 | 1 | 2 }, // i/j/k
   onFilled: (ijk: Vector3) => void
 ): IGrid2D {
   const { slice, axisIdx } = plane;
-  const axisDims = image.getDimensions();
+  const { extent } = mask;
+  const axisDims = parent.getDimensions();
   axisDims.splice(axisIdx, 1);
-  const extent = image.getExtent();
   const convertTo3D = (a: number, b: number) => {
     const point = [a, b];
     point.splice(axisIdx, 0, slice);
@@ -87,9 +88,13 @@ function createGridAccessor(
     setAtUnsafe(d0: number, d1: number, value: number): boolean {
       const ijk = convertTo3D(d0, d1);
       if (containsPoint(extent, ...ijk)) {
-        const offset = image.computeOffsetIndex(ijk);
+        const offset = mask.image.computeOffsetIndex([
+          ijk[0] - extent[0],
+          ijk[1] - extent[2],
+          ijk[2] - extent[4],
+        ]);
         // XXX assumes single-component image
-        pixelData[offset] = value;
+        mask.pixelData[offset] = value;
         onFilled(ijk);
         return true;
       }
@@ -166,14 +171,13 @@ export function rasterizePolygon({
   const extent = [...target.voxels.binding()!.extent] as Extent3D;
   if (isEmptyExtent(extent))
     return { segmentId: target.segmentId, maskId: target.maskId };
+  // Scan conversion stays in parent coordinates: `fillPoly` rounds its edge
+  // intersections by magnitude, so translating first would tie the pixels a
+  // polygon fills to where the mask happens to be allocated.
   const points2D = indexPoints.map((point) => {
-    const local = [
-      point[0] - extent[0],
-      point[1] - extent[2],
-      point[2] - extent[4],
-    ];
-    local.splice(axisIndex, 1);
-    return local as Vector2;
+    const inPlane = [...point];
+    inPlane.splice(axisIndex, 1);
+    return inPlane as Vector2;
   });
 
   // A polygon is aimed at a place, so filling it takes the voxel. Scoped to
@@ -186,15 +190,10 @@ export function rasterizePolygon({
   );
   const mask = target.voxels.image();
   const grid = createGridAccessor(
-    mask,
-    target.voxels.scalars(),
-    { slice: slice - extent[axisIndex * 2], axisIdx: axisIndex },
-    (ijk) =>
-      claimVoxel?.claim(
-        ijk[0] + extent[0],
-        ijk[1] + extent[2],
-        ijk[2] + extent[4]
-      )
+    parent,
+    { image: mask, pixelData: target.voxels.scalars(), extent },
+    { slice, axisIdx: axisIndex },
+    (ijk) => claimVoxel?.claim(ijk[0], ijk[1], ijk[2])
   );
 
   try {
