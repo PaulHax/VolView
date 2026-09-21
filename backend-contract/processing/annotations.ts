@@ -96,7 +96,12 @@ export const annotationLabelSchema = z.strictObject({
       'A hex colour such as `#d60000` or a CSS colour keyword such as `lime`. Any other syntax, including functional forms such as `rgb()` and `hsl()`, is ignored: the label keeps the colour the client already holds for it, and the client tells the user the value was rejected.'
     ),
   strokeWidth: z.number().optional(),
-  fillColor: z.string().optional(),
+  fillColor: z
+    .string()
+    .optional()
+    .describe(
+      'Accepted so an existing producer keeps validating, and ignored: the client draws every rectangle unfilled.'
+    ),
 });
 export type AnnotationLabel = z.infer<typeof annotationLabelSchema>;
 
