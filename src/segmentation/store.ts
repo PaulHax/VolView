@@ -237,13 +237,16 @@ export const useSegmentationStore = defineStore('segmentation', () => {
    */
   function bindDescriptorSegment(
     parentImageId: string,
-    descriptor: LabelmapSegment
+    descriptor: LabelmapSegment,
+    ownSegment = false
   ) {
     const usable = (segmentId: Maybe<string>) =>
       !!segmentId &&
       !!segmentRegistry.getSegment(segmentId) &&
       !maskFor(parentImageId, segmentId);
-    const existing = segmentRegistry.findSegmentByName(descriptor.name);
+    const existing = ownSegment
+      ? undefined
+      : segmentRegistry.findSegmentByName(descriptor.name);
     if (existing && usable(existing.id)) return existing.id;
     // A minted segment takes the file's whole description; a matched one keeps
     // what the registry already says, its visibility and lock included.
@@ -271,6 +274,9 @@ export const useSegmentationStore = defineStore('segmentation', () => {
     options: {
       source?: ProcessingResultSource;
       name?: string;
+      // A descriptor carrying display of its own mints its segment rather than
+      // joining one of the same name, whose display it would otherwise lose.
+      ownSegments?: boolean;
     } = {}
   ) {
     edits.beforeEdit();
@@ -280,7 +286,7 @@ export const useSegmentationStore = defineStore('segmentation', () => {
     splitLabelmap(labelmap, descriptors, (descriptor, extent) => {
       const segment = createMask(
         segmentation.id,
-        bindDescriptorSegment(parentImageId, descriptor)
+        bindDescriptorSegment(parentImageId, descriptor, options.ownSegments)
       );
 
       const binding = createBindingForImage(
