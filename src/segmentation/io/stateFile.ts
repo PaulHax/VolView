@@ -391,6 +391,15 @@ export function createSegmentationWire(deps: SegmentationWireDeps) {
           const storeId = sourceStoreId(item);
           try {
             const { image, headerMetadata } = await readImport(item, storeId);
+            // Bounded conversion indexes a labelmap as single-component, so a
+            // multi-component one would split into shifted, truncated masks.
+            if (image.getPointData().getScalars().getNumberOfComponents() > 1) {
+              skipped.push({
+                name: item.name,
+                reason: 'multi-component labelmap artifacts are not supported',
+              });
+              return undefined;
+            }
             const labelmap = toLabelMap(
               await ensureSameSpace(
                 await loadedImage(dataIDMap[item.parentImage]),

@@ -25,7 +25,8 @@ A mask saved into a zip names its own archive entry with `path`. A sparse
 manifest instead points at a whole label volume: `segmentationArtifacts` names
 that volume, its `dataSourceId` says where the bytes come from, and each mask
 whose `artifactId` points at it is filled from the `sourceValue` it declares.
-Extents are placeholders until the volume is read.
+An artifact is a single-component label volume; one with several components is
+skipped on restore. Extents are placeholders until the volume is read.
 
 ```json
 {

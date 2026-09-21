@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { nextTick } from 'vue';
+import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';
 
 import { Chunk } from '@/src/core/streaming/chunk';
 import DicomChunkImage from '@/src/core/streaming/dicomChunkImage';
@@ -476,3 +477,73 @@ describe.each([true, false])(
     });
   }
 );
+
+describe('a multi-component artifact', () => {
+  /** A vector volume: two interleaved scalars per voxel, on a 4x1x1 grid. */
+  const seatVectorSource = async () => {
+    await seatImage('parent', { dimensions: [4, 1, 1] });
+    const image = await seatImage('source', { dimensions: [4, 1, 1] });
+    image.getPointData().setScalars(
+      vtkDataArray.newInstance({
+        numberOfComponents: 2,
+        values: new Uint8Array([0, 0, 1, 0, 0, 2, 0, 0]),
+      })
+    );
+    return image;
+  };
+
+  const restoreVectorArtifact = async (
+    input: Record<string, unknown>,
+    labelmapSources?: Record<string, { stateId: string; temporary: boolean }>
+  ) => {
+    const image = await seatVectorSource();
+    return store().deserialize({
+      manifest: manifestForImages(['parent', 'source'], {
+        segmentationArtifacts: [
+          {
+            id: 'vector',
+            parentImage: 'parent',
+            name: 'vector.nrrd',
+            ...input,
+          },
+        ],
+      }),
+      stateFiles: [
+        { archivePath: 'vector.vti', file: new File([''], 'vector.vti') },
+      ],
+      dataIDMap: { parent: 'parent', source: 'source' },
+      labelmapSources,
+      io: { write: async () => '', read: async () => ({ image }) },
+    });
+  };
+
+  const expectRejected = (
+    result: Awaited<ReturnType<ReturnType<typeof store>['deserialize']>>
+  ) => {
+    expect(result.skipped).toEqual([
+      {
+        name: 'vector.nrrd',
+        reason: 'multi-component labelmap artifacts are not supported',
+      },
+    ]);
+    expect(result.restoredImportIds).toEqual(new Set());
+    expect(store().imageMasks('parent')).toEqual([]);
+  };
+
+  it('is skipped when it comes from an archive entry', async () => {
+    expectRejected(await restoreVectorArtifact({ path: 'vector.vti' }));
+  });
+
+  it('is skipped when it comes from a data source', async () => {
+    expectRejected(
+      await restoreVectorArtifact(
+        { dataSourceId: 2 },
+        {
+          vector: { stateId: 'source', temporary: false },
+        }
+      )
+    );
+  });
+});
+
+// A manifest's mask ids are its own, and a hand-authored or server-produced
