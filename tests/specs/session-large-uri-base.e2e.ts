@@ -5,6 +5,7 @@ import JSZip from 'jszip';
 import { cleanuptotal } from 'wdio-cleanuptotal-service';
 import { volViewPage } from '../pageobjects/volview.page';
 import { DOWNLOAD_TIMEOUT, TEMP_DIR } from '../../wdio.shared.conf';
+import { openAnnotationSegments, segmentNames } from './segmentationTestUtils';
 
 const writeBufferToFile = async (data: Buffer, fileName: string) => {
   const filePath = path.join(TEMP_DIR, fileName);
@@ -20,7 +21,8 @@ const createNiftiGz = (
   dimY: number,
   dimZ: number,
   datatype: number,
-  bitpix: number
+  bitpix: number,
+  foreground = false
 ) => {
   const bytesPerVoxel = bitpix / 8;
   const header = Buffer.alloc(352);
@@ -57,6 +59,9 @@ const createNiftiGz = (
   header.write('n+1\0', 344, 'binary');
 
   const imageData = Buffer.alloc(dimX * dimY * dimZ * bytesPerVoxel);
+  // The labelmap needs actual content to distinguish decoded mask storage
+  // from the segment catalog published at the start of restoration.
+  if (foreground) imageData[imageData.length / 2] = 1;
   return zlib.gzipSync(Buffer.concat([header, imageData]), { level: 1 });
 };
 
@@ -75,6 +80,20 @@ const createSessionZip = async (
       },
     ],
     datasets: [{ id: '0', dataSourceId: 0 }],
+    // Heap growth is the regression trigger; a single slice avoids allocating
+    // a second large GPU texture for volume rendering in headless browsers.
+    layout: { direction: 'row', items: [{ type: 'slot', slotIndex: 0 }] },
+    layoutSlots: ['axial'],
+    activeView: 'axial',
+    viewByID: {
+      axial: {
+        id: 'axial',
+        type: '2D',
+        name: 'Axial',
+        dataID: '0',
+        options: { orientation: 'Axial' },
+      },
+    },
     segmentGroups: [
       {
         id: 'seg-1',
@@ -110,7 +129,7 @@ const createSessionZip = async (
  * A .volview.zip session with a large Float32 URI-based base image and an
  * embedded .nii.gz labelmap. The import pipeline loads the base image
  * through the shared ITK-wasm worker, growing the WASM heap past 2GB.
- * Then segmentGroupStore.deserialize() calls readImage() for the embedded
+ * Then segmentationStore.deserialize() calls readImage() for the embedded
  * .nii.gz labelmap on the same worker.
  *
  * The .nii.gz format is critical: .vti labelmaps use a separate JS
@@ -137,7 +156,7 @@ describe('Session with large URI base and nii.gz labelmap', function () {
     );
 
     // UInt8 labelmap same dimensions = 256MB raw, embedded in session ZIP
-    const labelmapNiftiGz = createNiftiGz(1024, 1024, 256, 2, 8);
+    const labelmapNiftiGz = createNiftiGz(1024, 1024, 256, 2, 8, true);
     const sessionZip = await createSessionZip(baseFileName, labelmapNiftiGz);
     await writeBufferToFile(sessionZip, sessionFileName);
 
@@ -154,32 +173,20 @@ describe('Session with large URI base and nii.gz labelmap', function () {
       await volViewPage.open(`?urls=[tmp/${sessionFileName}]`);
       await volViewPage.waitForViews(DOWNLOAD_TIMEOUT * 6);
 
-      // Open the segment groups panel so the list renders in the DOM
-      const annotationsTab = await $(
-        'button[data-testid="module-tab-Annotations"]'
+      // Open the segments panel so the list renders in the DOM
+      await openAnnotationSegments();
+
+      // This session contains no shapes. Reveal can only become enabled once
+      // the embedded labelmap has decoded and its foreground mask is attached.
+      const reveal = $(
+        '[data-testid="segment-list"] button[data-testid="reveal-segment-button"]'
       );
-      await annotationsTab.click();
-
-      const segmentGroupsTab = await $('button.v-tab*=Segment Groups');
-      await segmentGroupsTab.waitForClickable();
-      await segmentGroupsTab.click();
-
-      // Wait for the labelmap readImage to either succeed (segment group
-      // appears) or fail (RangeError in console OR error notification).
-      // The deserialization is async and finishes after views render.
-      const notifsBefore = await volViewPage.getNotificationsCount();
 
       await browser.waitUntil(
         async () => {
           if (rangeErrors.length > 0) return true;
-          try {
-            const notifs = await volViewPage.getNotificationsCount();
-            if (notifs > notifsBefore) return true;
-          } catch {
-            // badge may not exist yet
-          }
-          const segmentGroups = await $$('.segment-group-list .v-list-item');
-          return (await segmentGroups.length) >= 1;
+          if ((await volViewPage.getNotificationsCount()) > 0) return true;
+          return (await reveal.isExisting()) && (await reveal.isEnabled());
         },
         {
           timeout: DOWNLOAD_TIMEOUT * 3,
@@ -188,6 +195,9 @@ describe('Session with large URI base and nii.gz labelmap', function () {
       );
 
       expect(rangeErrors).toEqual([]);
+      expect(await volViewPage.getNotificationsCount()).toBe(0);
+      expect(await segmentNames()).toEqual(['Label 1']);
+      expect(await reveal.isEnabled()).toBe(true);
     } finally {
       browser.off('log.entryAdded', onLogEntry);
     }
