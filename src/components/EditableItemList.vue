@@ -200,7 +200,7 @@ const moveBy = async (key: ItemKey, offset: number, event: KeyboardEvent) => {
               @keydown.alt.up.stop.prevent="moveBy(key, -1, $event)"
               @keydown.alt.down.stop.prevent="moveBy(key, 1, $event)"
             >
-              <v-icon size="16">mdi-drag-vertical</v-icon>
+              <v-icon size="16">mdi-drag-horizontal-variant</v-icon>
             </button>
             <v-btn
               v-if="hasMore"
