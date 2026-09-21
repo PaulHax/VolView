@@ -135,6 +135,16 @@ function prepareLeafDataSources(manifest: Manifest, datasetFiles: FileEntry[]) {
   return { dataSources, missingFiles };
 }
 
+// The registry adopts the first segment to claim an id and drops the rest.
+const segmentsRepeatingAnId = (manifest: Manifest) => {
+  const seen = new Set<string>();
+  return (manifest.segments ?? []).filter(({ id }) => {
+    const repeated = seen.has(id);
+    seen.add(id);
+    return repeated;
+  });
+};
+
 export async function completeStateFileRestore(
   manifest: Manifest,
   stateFiles: FileEntry[],
@@ -241,6 +251,9 @@ export async function completeStateFileRestore(
     ...failedMembers,
     ...skippedLabelmaps.map(
       ({ name, reason }) => `- segmentation: ${name} (${reason})`
+    ),
+    ...segmentsRepeatingAnId(manifest).map(
+      ({ name }) => `- segment: ${name} (repeats the id of an earlier segment)`
     ),
   ];
   if (missing.length > 0) {
