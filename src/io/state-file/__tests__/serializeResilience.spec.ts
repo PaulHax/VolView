@@ -103,8 +103,11 @@ describe('state-file serialization resilience', () => {
         { selectionKey: 'dataset-1', sourceSelectionKeys: ['missing'] },
       ],
     } as unknown as Manifest;
-    const normalized = normalizeManifest(manifest, new JSZip());
+    const zip = new JSZip();
+    zip.file('mask.vti', 'voxels');
+    const normalized = normalizeManifest(manifest, zip);
     expect(normalized.manifest.segmentations).toEqual([]);
+    expect(zip.file('mask.vti')).toBeNull();
     expect(normalized.manifest.parentToLayers).toEqual([]);
     expect(normalized.omitted.join('\n')).toMatch(/parent dataset/);
   });
