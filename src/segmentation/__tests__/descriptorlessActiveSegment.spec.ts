@@ -75,8 +75,9 @@ const twoGroupManifest = (activeValue: number): Manifest =>
     )
   );
 
-async function restoreTwoGroups(activeValue: number) {
+async function restoreTwoGroups(activeValue: number, populate = () => {}) {
   setActivePinia(createPinia());
+  populate();
   seat('parent-store', 'CT Chest', new Uint8Array(4 * 4 * 4));
   seat('a-store', 'A.seg.nrrd', makeLabelmapValues());
   seat('b-store', 'B.seg.nrrd', makeLabelmapValues());
@@ -131,6 +132,17 @@ describe('restoring a descriptorless active group', () => {
     await restoreTwoGroups(2);
 
     expect(selectedIndex()).toBe(3);
+  });
+
+  it('leaves a selection the scene already has alone', async () => {
+    let liver = '';
+    await restoreTwoGroups(1, () => {
+      const registry = useSegmentStore().segments;
+      liver = registry.segmentNamed('Liver');
+      registry.selectSegment(liver);
+    });
+
+    expect(useSegmentStore().segments.selectedSegmentId.value).toBe(liver);
   });
 
   it('leaves the active segment alone when no source value matches', async () => {
