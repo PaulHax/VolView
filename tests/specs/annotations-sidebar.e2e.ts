@@ -25,6 +25,20 @@ import {
   waitForNamedSegments,
 } from './segmentationTestUtils';
 
+const placeRectangle = async () => {
+  const test = await setupTest();
+  await volViewPage.activateRectangle();
+  await clickAt(test.centerX - 60, test.centerY - 60);
+  await clickAt(test.centerX + 60, test.centerY + 60);
+  await volViewPage.selectTool('mdi-cursor-default');
+  await waitForCircleCount(
+    test.axialView,
+    2,
+    'Placed rectangle should render both handles'
+  );
+  return test;
+};
+
 // The sidebar sections are stacked rather than tabbed, so the Segments list is
 // reachable whatever tool is active.
 const DRAWING_TOOLS = [
@@ -86,16 +100,7 @@ describe('Annotations sidebar', () => {
   });
 
   it('hides rendered annotations with their segment and preserves individually hidden shapes', async () => {
-    const { axialView, centerX, centerY } = await setupTest();
-    await volViewPage.activateRectangle();
-    await clickAt(centerX - 60, centerY - 60);
-    await clickAt(centerX + 60, centerY + 60);
-    await volViewPage.selectTool('mdi-cursor-default');
-    await waitForCircleCount(
-      axialView,
-      2,
-      'Placed rectangle should render both handles'
-    );
+    const { axialView, centerX, centerY } = await placeRectangle();
     await openAnnotationSegments();
     const row = await segmentRow('Segment 1');
     await row.$('button:has(i.mdi-eye)').click();
@@ -143,6 +148,43 @@ describe('Annotations sidebar', () => {
       2,
       'Showing the child should restore the same rectangle'
     );
+  });
+
+  it('hides the selection outline of a selected annotation with its segment', async () => {
+    const { axialView } = await placeRectangle();
+
+    // BoundingRectangle.vue draws this around the selected annotation.
+    const outline = () => axialView.$('svg rect[stroke="lightgray"]');
+    expect(await outline().isExisting()).toBe(false);
+
+    await openAnnotationSegments();
+    const row = await segmentRow('Segment 1');
+    await openSegmentShapes();
+    await $('[data-testid="segment-shape-row"] .v-checkbox-btn').click();
+    await outline().waitForExist({
+      timeoutMsg: 'Selecting the rectangle should draw its selection outline',
+    });
+
+    await row.$('button:has(i.mdi-eye)').click();
+    await waitForCircleCount(
+      axialView,
+      0,
+      'Hiding the segment should remove its selected rectangle'
+    );
+    await outline().waitForExist({
+      reverse: true,
+      timeoutMsg: 'Hiding the segment should remove the selection outline',
+    });
+
+    await row.$('button:has(i.mdi-eye-off)').click();
+    await waitForCircleCount(
+      axialView,
+      2,
+      'Showing the segment should restore its rectangle'
+    );
+    await outline().waitForExist({
+      timeoutMsg: 'Showing the segment should restore the selection outline',
+    });
   });
 
   it('explains disabled controls and prevents the locked color button from opening the editor', async () => {

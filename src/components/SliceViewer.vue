@@ -197,7 +197,10 @@ import SliceSlider from '@/src/components/SliceSlider.vue';
 import SliceViewerOverlay from '@/src/components/SliceViewerOverlay.vue';
 import { useToolSelectionStore } from '@/src/store/tools/toolSelection';
 import { useAnnotationToolStore, useToolStore } from '@/src/store/tools';
-import { doesToolFrameMatchViewAxis } from '@/src/composables/annotationTool';
+import {
+  doesToolFrameMatchViewAxis,
+  isToolVisible,
+} from '@/src/composables/annotationTool';
 import { useWebGLWatchdog } from '@/src/composables/useWebGLWatchdog';
 import { useSliceConfig } from '@/src/composables/useSliceConfig';
 import VtkSliceViewWindowManipulator from '@/src/components/vtk/VtkSliceViewWindowManipulator.vue';
@@ -289,9 +292,9 @@ const selectionPoints = computed(() => {
       return { store, tool: store.toolByID[sel.id] };
     })
     .filter(
-      ({ tool }) =>
+      ({ store, tool }) =>
         tool.slice === currentSlice.value &&
-        !tool.hidden &&
+        isToolVisible(store, tool) &&
         doesToolFrameMatchViewAxis(viewAxis, tool, currentImageMetadata)
     )
     .flatMap(({ store, tool }) => store.getPoints(tool.id));

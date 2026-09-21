@@ -51,6 +51,19 @@ export const doesToolFrameMatchViewAxis = <Tool extends AnnotationTool>(
   return !!toolAxis && toolAxis.axis === unref(viewAxis);
 };
 
+/**
+ * Whether a shape draws at all, from its own flag and the segment it names.
+ * Everything that renders a shape or its selection outline shares this.
+ */
+export const isToolVisible = (
+  store: AnnotationToolStore,
+  tool: Pick<AnnotationTool, 'hidden' | 'placing' | 'segmentId'>
+) =>
+  !tool.hidden &&
+  // Keep the active placement widget alive until it commits. Completed
+  // shapes inherit the segment's visibility without changing child flags.
+  (tool.placing || store.segments.appearanceOf(tool.segmentId).visible);
+
 export const useCurrentTools = <S extends AnnotationToolStore>(
   toolStore: S,
   viewAxis: Ref<LPSAxis>,
@@ -78,11 +91,7 @@ export const useCurrentTools = <S extends AnnotationToolStore>(
       return (
         tool.imageID === curImageID &&
         doesToolFrameMatchViewAxis(viewAxis, tool, currentImageMetadata) &&
-        !tool.hidden &&
-        // Keep the active placement widget alive until it commits. Completed
-        // shapes inherit the segment's visibility without changing child flags.
-        (tool.placing ||
-          toolStore.segments.appearanceOf(tool.segmentId).visible)
+        isToolVisible(toolStore, tool)
       );
     });
   });
