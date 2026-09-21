@@ -1,14 +1,7 @@
-import {
-  PROSTATEX_DATASET,
-  PROSTATE_SEGMENT_GROUP,
-  PROSTATE_610_LABELMAP_MANIFEST,
-} from './configTestUtils';
-import { downloadFile, writeManifestToFile } from './utils';
+import { PROSTATE_610_LABELMAP_MANIFEST } from './configTestUtils';
+import { writeManifestToFile } from './utils';
 import { volViewPage } from '../pageobjects/volview.page';
-import { DOWNLOAD_TIMEOUT, TEMP_DIR } from '../../wdio.shared.conf';
-import * as path from 'path';
-import * as fs from 'fs';
-import { cleanuptotal } from 'wdio-cleanuptotal-service';
+import { DOWNLOAD_TIMEOUT } from '../../wdio.shared.conf';
 
 /**
  * Regression test for labelmap with different direction matrix than parent image.
@@ -22,9 +15,6 @@ import { cleanuptotal } from 'wdio-cleanuptotal-service';
  */
 describe('Labelmap with different direction matrix', () => {
   it('paint tool works on coronal view', async () => {
-    await downloadFile(PROSTATEX_DATASET.url, PROSTATEX_DATASET.name);
-    await downloadFile(PROSTATE_SEGMENT_GROUP.url, PROSTATE_SEGMENT_GROUP.name);
-
     const config = {
       layouts: {
         'Coronal Only': [['coronal']],
@@ -35,11 +25,7 @@ describe('Labelmap with different direction matrix', () => {
     await writeManifestToFile(PROSTATE_610_LABELMAP_MANIFEST, manifestFileName);
 
     const configFileName = 'different-direction-labelmap-config.json';
-    const configFilePath = path.join(TEMP_DIR, configFileName);
-    await fs.promises.writeFile(configFilePath, JSON.stringify(config));
-    cleanuptotal.addCleanup(async () => {
-      fs.unlinkSync(configFilePath);
-    });
+    await writeManifestToFile(config, configFileName);
 
     const urlParams = `?urls=[tmp/${manifestFileName},tmp/${configFileName}]`;
     await volViewPage.open(urlParams);

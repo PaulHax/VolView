@@ -18,7 +18,7 @@ import type {
 } from '@/src/processing/types';
 import { jobKey } from '@/src/processing/types';
 import { defer } from '@/src/utils';
-import { makeFakeProvider } from './fakeProvider';
+import { jobStatus, makeFakeProvider, resultStateFor } from './fakeProvider';
 import {
   seatDataSource,
   seatVolume,
@@ -66,24 +66,6 @@ const makeProvider = (
 const sampleResults: ProcessingResult[] = [
   { id: 'r1', name: 'out.nrrd', url: 'http://localhost/out.nrrd' },
 ];
-
-const resultStateFor = (state: ProcessingJobStatus['state']) =>
-  state === 'success'
-    ? ('ready' as const)
-    : state === 'error' || state === 'cancelled'
-      ? ('unavailable' as const)
-      : ('waiting' as const);
-
-const jobStatus = (
-  jobId: string,
-  state: ProcessingJobStatus['state'],
-  extra: Partial<ProcessingJobStatus> = {}
-): ProcessingJobStatus => ({
-  jobId,
-  state,
-  resultState: resultStateFor(state),
-  ...extra,
-});
 
 const resultsBundle = (results: ProcessingResult[] = [], missing = 0) => ({
   results,
@@ -1547,6 +1529,27 @@ describe('Providers store — re-discovered job history: slim observability adop
 
     expect(store.jobs.get(keyFor('jr'))?.state).toBe('success');
     expect(provider.getResults).toHaveBeenCalledTimes(1);
+  });
+
+  // Every other request path routes a 401 through classifyError to
+  // markSessionExpired; the history load used to record a per-provider error
+  // string instead, leaving the panel with a Retry that could only 401 again.
+  it('marks the session expired when the job history load 401s', async () => {
+    const listJobHistory = vi.fn().mockRejectedValue(httpError(401));
+    const store = arrange(makeProvider({ listJobHistory }));
+
+    await store.adoptJobHistory();
+
+    expect(store.sessionExpired).toBe(true);
+    const expiry = useMessageStore().messages.find((m) =>
+      /session has expired/i.test(m.title)
+    );
+    expect(expiry?.options.persist).toBe(true);
+    expect(store.jobHistoryError).toBeNull();
+
+    await store.loadAllJobHistory();
+
+    expect(listJobHistory).toHaveBeenCalledTimes(1);
   });
 
   it('a re-discovery listing failure is not fatal (logged, degrades)', async () => {
