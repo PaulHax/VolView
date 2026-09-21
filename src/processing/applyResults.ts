@@ -71,14 +71,14 @@ function segmentResultInScene(
     .some((source) => sameResultSource(source, target));
 }
 
-// `source` is optional on the wire, and without one a re-applied segmentation
-// has no receipt to recognize: after a reload the re-adopted job's Load button
-// imports every mask again. The client already knows the same three facts (the
+// `source` is optional on the wire, and without one a re-applied result has no
+// receipt to recognize: after a reload the re-adopted job's Load button imports
+// every mask, or places every annotation, again. The client already knows the same three facts (the
 // provider and job it submitted, and the result row it is applying), so it
 // mints the key itself. Nothing new travels on the wire; the minted key is
 // scene provenance, stored and restored exactly like a producer's own.
-const segmentResultSource = (
-  intent: SegmentationIntent,
+const resultSourceOf = (
+  intent: SegmentationIntent | AnnotationsIntent,
   context: SubmittedJobContext | undefined
 ): ResultSource | undefined =>
   intent.source ??
@@ -102,8 +102,7 @@ async function loadAsImport(file: ResultFile) {
 
 // Session-restored tools retain their result source, so that durable
 // provenance doubles as an application receipt: re-Loading a job adds nothing.
-function annotationResultInScene(intent: AnnotationsIntent): boolean {
-  const target = intent.source;
+function annotationResultInScene(target: ResultSource | undefined): boolean {
   if (!target) return false;
   return ANNOTATION_TOOL_KINDS.some((kind) =>
     Object.values(annotationToolStore(kind).toolByID).some(({ source }) =>
@@ -305,9 +304,10 @@ const toolPayload = (
 async function applyAnnotations(
   intent: AnnotationsIntent,
   parentSelection: string | undefined,
+  source: ResultSource | undefined,
   fetchResult: FetchProcessingResult
 ): Promise<ApplyIntentOutcome> {
-  if (annotationResultInScene(intent)) return { status: 'applied' };
+  if (annotationResultInScene(source)) return { status: 'applied' };
 
   // Tools are anchored to an image; without one they would be orphans the UI
   // never shows. Opening the file as a dataset is not a fallback either — it is
@@ -365,7 +365,7 @@ async function applyAnnotations(
       // uniform tool type does not carry the per-kind geometry keys.
       const payload = {
         ...geometry,
-        ...toolPayload(core, segmentIds[kind], intent.source),
+        ...toolPayload(core, segmentIds[kind], source),
       };
       store.addTool(payload);
     });
@@ -465,7 +465,7 @@ export async function applyIntent(
         // Session-restored groups retain their result source. Treat that
         // durable provenance as an application receipt so retrying Load is
         // idempotent instead of creating a duplicate group.
-        const source = segmentResultSource(intent, context);
+        const source = resultSourceOf(intent, context);
         if (segmentResultInScene(source, dependencies.segmentWriter))
           return { status: 'applied' };
         if (!parentSelection) {
@@ -491,6 +491,7 @@ export async function applyIntent(
         return await applyAnnotations(
           intent,
           parentSelection,
+          resultSourceOf(intent, context),
           dependencies.fetchResult
         );
       }
