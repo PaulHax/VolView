@@ -23,6 +23,7 @@ import {
   isEmptyExtent,
   maskOffset,
   type Extent3D,
+  type MaskBounds,
   growExtent,
 } from '@/src/segmentation/geometry';
 import {
@@ -36,7 +37,6 @@ import vtkLabelMap from '@/src/vtk/LabelMap';
 import {
   labelmapScalars,
   normalizeLabelmapScalars,
-  type LabelmapScalars,
 } from '@/src/segmentation/io/labelmap';
 
 /** A segment an import created, and the source label value it was split from. */
@@ -107,35 +107,7 @@ function labelValueBounds(labelmap: vtkLabelMap) {
   return bounds;
 }
 
-type LabelmapSweep = {
-  scalars: LabelmapScalars;
-  dimensions: number[] | Int32Array;
-  value: number;
-};
-
-/** Copies one label value's voxels into `mask`, rewritten to `labelValue`. */
-function cropLabelValue(
-  sweep: LabelmapSweep,
-  extent: Extent3D,
-  mask: Uint8Array,
-  labelValue: number
-) {
-  const [di, dj] = sweep.dimensions;
-  const [mi, mj] = extentSize(extent);
-  const bounds = { extent, mi, mj };
-
-  const copyRow = (j: number, k: number) => {
-    const sourceStart = (j + k * dj) * di;
-    const maskStart = maskOffset(bounds, extent[0], j, k);
-    for (let i = extent[0]; i <= extent[1]; i += 1) {
-      if (sweep.scalars[sourceStart + i] !== sweep.value) continue;
-      mask[maskStart + i - extent[0]] = labelValue;
-    }
-  };
-
-  for (let k = extent[4]; k <= extent[5]; k += 1)
-    for (let j = extent[2]; j <= extent[3]; j += 1) copyRow(j, k);
-}
+type CropTarget = MaskBounds & { mask: Uint8Array; labelValue: number };
 
 /** Storage for one descriptor's segment, minted by the caller. */
 export type MaskMinter = (
@@ -154,20 +126,32 @@ export function splitLabelmap(
   mint: MaskMinter
 ) {
   const scalars = labelmapScalars(labelmap);
-  const dimensions = labelmap.getDimensions();
+  const [di, dj, dk] = labelmap.getDimensions();
   const bounds = labelValueBounds(labelmap);
 
+  // Indexed by source value, so the sweep below reads each voxel once however
+  // many labels there are. Two descriptors may state one value.
+  const targets: CropTarget[][] = [];
   descriptors.forEach((descriptor) => {
     const extent = bounds.get(descriptor.value) ?? emptyExtent();
     const { labelValue, mask } = mint(descriptor, extent);
     if (isEmptyExtent(extent)) return;
-    cropLabelValue(
-      { scalars, dimensions, value: descriptor.value },
-      extent,
-      mask,
-      labelValue
-    );
+    const [mi, mj] = extentSize(extent);
+    const target = { extent, mi, mj, mask, labelValue };
+    (targets[descriptor.value] ??= []).push(target);
   });
+
+  const copyRow = (j: number, k: number) => {
+    const rowStart = (j + k * dj) * di;
+    for (let i = 0; i < di; i += 1) {
+      const hits = targets[scalars[rowStart + i]];
+      if (!hits) continue;
+      for (const hit of hits)
+        hit.mask[maskOffset(hit, i, j, k)] = hit.labelValue;
+    }
+  };
+
+  for (let k = 0; k < dk; k += 1) for (let j = 0; j < dj; j += 1) copyRow(j, k);
 }
 
 /** DICOM-SEG carries its own catalog; anything else has to be derived. */
