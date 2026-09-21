@@ -79,6 +79,11 @@ export const createSegmentRegistry = ({
     else idsByName.set(key, [id]);
   };
 
+  // Where the last search under a prefix ended. Every suffix below it is
+  // taken until a name leaves, so a run of mints sharing a stem resumes there
+  // and still lands on the lowest free suffix.
+  const suffixFloors = new Map<string, number>();
+
   const unindexName = (name: string, id: string) => {
     const key = name.trim();
     const ids = idsByName.get(key);
@@ -86,6 +91,7 @@ export const createSegmentRegistry = ({
     const at = ids.indexOf(id);
     if (at !== -1) ids.splice(at, 1);
     if (ids.length === 0) idsByName.delete(key);
+    suffixFloors.clear();
   };
 
   /** Whether a segment already carries this name, ignoring surrounding space. */
@@ -135,23 +141,23 @@ export const createSegmentRegistry = ({
     return segmentList.value.find((type) => matches.includes(type.id));
   };
 
+  const lowestFreeName = (prefix: string, tail: string, first: number) => {
+    let index = suffixFloors.get(prefix) ?? first;
+    while (nameTaken(`${prefix}${index}${tail}`)) index += 1;
+    suffixFloors.set(prefix, index);
+    return `${prefix}${index}${tail}`;
+  };
+
   // The name index and every lookup ignore surrounding space, so the stem has
   // to be trimmed as well: asked for a free name for 'Liver ' while 'Liver' is
   // taken, an untrimmed stem answered 'Liver ' and seated a second row nothing
   // could tell apart from the first.
   const uniqueName = (stem: string) => {
     const base = stem.trim();
-    if (!nameTaken(base)) return base;
-    let index = 2;
-    while (nameTaken(`${base} (${index})`)) index += 1;
-    return `${base} (${index})`;
+    return nameTaken(base) ? lowestFreeName(`${base} (`, ')', 2) : base;
   };
 
-  const defaultName = () => {
-    let index = 1;
-    while (nameTaken(`Segment ${index}`)) index += 1;
-    return `Segment ${index}`;
-  };
+  const defaultName = () => lowestFreeName('Segment ', '', 1);
 
   let nextColorIndex = 0;
   const nextColor = () => {
