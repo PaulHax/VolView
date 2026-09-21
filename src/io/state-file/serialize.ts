@@ -147,6 +147,12 @@ export function normalizeManifest(manifest: Manifest, zip: JSZip) {
     }
     if (!parsed.success || reason) {
       omitted.push(`${name}: ${reason}`);
+      // Voxels of a record reported as omitted do not ship in the archive.
+      if (parsed.success)
+        parsed.data.masks.forEach((mask) => {
+          const path = mask.representations.labelmap?.path;
+          if (path) zip.remove(path);
+        });
       return [];
     }
 
