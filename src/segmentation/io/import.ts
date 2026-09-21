@@ -179,7 +179,7 @@ async function segBuildDescriptors(
 }
 
 /** Distinct nonzero voxel values, ascending: the segment spine. */
-const distinctLabelValues = (image: vtkLabelMap) =>
+export const distinctLabelValues = (image: vtkLabelMap) =>
   [...labelValueBounds(image).keys()].sort((first, second) => first - second);
 
 export type DecodeOptions = {
