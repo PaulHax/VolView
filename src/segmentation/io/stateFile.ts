@@ -287,7 +287,10 @@ export function createSegmentationWire(deps: SegmentationWireDeps) {
     const { imports, segmentations: wireSegmentations } =
       planLabelmapImports(incoming);
     const manifest = { segmentations: wireSegmentations };
-    const maskIdMap: Record<string, string> = {};
+    // Prototype-free: a file's mask ids are its own, so one spelling an
+    // Object.prototype key ('__proto__', 'constructor') must record like any
+    // other id rather than reaching an inherited member.
+    const maskIdMap: Record<string, string> = Object.create(null);
     // Which items reached the scene, by wire id. Each lands as one mask
     // per segment and so has no single store id of its own.
     const restoredImportIds = new Set<string>();

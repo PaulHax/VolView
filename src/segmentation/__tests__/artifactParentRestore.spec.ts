@@ -17,7 +17,10 @@ import { completeStateFileRestore } from '@/src/io/import/processors/restoreStat
 import { useMessageStore } from '@/src/store/messages';
 import { useImageStatsStore } from '@/src/store/image-stats';
 import { useDatasetStore } from '@/src/store/datasets';
+import { useSegmentStore } from '@/src/segmentation/segments';
 import { leafStateId } from '@/src/io/import/dataSource';
+import { ManifestSchema } from '@/src/io/state-file/schema';
+import { SEGMENT_VALUE } from '@/src/segmentation/masks/labelValue';
 import {
   manifestForImages,
   seatImage,
@@ -547,3 +550,73 @@ describe('a multi-component artifact', () => {
 });
 
 // A manifest's mask ids are its own, and a hand-authored or server-produced
+// one may spell an Object.prototype key.
+describe('an artifact-backed mask whose id spells a prototype member', () => {
+  const restoreArtifactMask = async (maskId: string) => {
+    await seatImage('parent', { dimensions: [4, 1, 1] });
+    const image = await seatImage('source', {
+      dimensions: [4, 1, 1],
+      values: new Uint8Array([0, 1, 1, 0]),
+    });
+    const manifest = ManifestSchema.parse(
+      manifestForImages(['parent'], {
+        segments: [{ id: 'tumor', name: 'Tumor', color: [255, 0, 0, 255] }],
+        segmentations: [
+          {
+            id: 'segmentation',
+            name: 'CT',
+            parentImage: 'parent',
+            order: [maskId],
+            masks: [
+              {
+                id: maskId,
+                segmentId: 'tumor',
+                representations: {
+                  labelmap: {
+                    artifactId: 'tumor-labelmap',
+                    sourceValue: 1,
+                    extent: [0, -1, 0, -1, 0, -1],
+                  },
+                },
+              },
+            ],
+          },
+        ],
+        segmentationArtifacts: [
+          {
+            id: 'tumor-labelmap',
+            parentImage: 'parent',
+            name: 'Tumor.vti',
+            path: 'mask.vti',
+          },
+        ],
+      })
+    );
+    const result = await store().deserialize({
+      manifest,
+      stateFiles: [
+        { archivePath: 'mask.vti', file: new File([''], 'mask.vti') },
+      ],
+      dataIDMap: { parent: 'parent' },
+      segmentIdMap: useSegmentStore().deserialize(manifest),
+      io: { write: async () => '', read: async () => ({ image }) },
+    });
+    return { result, mask: store().imageMasks('parent')[0] };
+  };
+
+  it.each(['ordinary-mask', '__proto__'])(
+    'takes the artifact voxels the id %s claims',
+    async (maskId) => {
+      const { result, mask } = await restoreArtifactMask(maskId);
+
+      expect(result.skipped).toEqual([]);
+      expect([...mask.representations.labelmap!.extent]).toEqual([
+        1, 2, 0, 0, 0, 0,
+      ]);
+      expect([...store().maskVoxels(mask.id).scalars()]).toEqual([
+        SEGMENT_VALUE,
+        SEGMENT_VALUE,
+      ]);
+    }
+  );
+});
