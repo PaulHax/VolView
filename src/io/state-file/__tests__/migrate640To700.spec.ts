@@ -14,6 +14,8 @@ import { useSegmentationStore } from '@/src/segmentation/store';
 import { useSegmentStore } from '@/src/segmentation/segments';
 import { DEFAULT_SEGMENTATION_FILL_OPACITY } from '@/src/segmentation/model';
 import { segmentFillAlpha } from '@/src/segmentation/rendering/display';
+import { cssColorToRGBA } from '@/src/segmentation/color';
+import { TOOL_COLORS } from '@/src/config';
 import { usePolygonStore } from '@/src/store/tools/polygons';
 import {
   legacyAxialViewConfig,
@@ -830,6 +832,168 @@ describe('migrate640To700: structural stage', () => {
       ['Hex', [0, 255, 0, 255]],
       ['Hexa', [0, 0, 255, 128]],
     ]);
+  });
+
+  it('gives a label the parser cannot read a palette color', () => {
+    const migrated = migrate({
+      tools: {
+        rectangles: {
+          tools: [],
+          labels: {
+            'lbl-a': { labelName: 'Functional', color: 'rgb(255, 0, 0)' },
+            'lbl-b': { labelName: 'Alpha', color: 'rgba(255, 0, 0, 0.5)' },
+            'lbl-c': { labelName: 'Hue', color: 'hsl(0, 100%, 50%)' },
+          },
+        },
+      },
+    });
+
+    // Opaque black would read as a deliberate choice the session never made.
+    expect(migrated.segments.map((segment: any) => segment.color)).toEqual(
+      TOOL_COLORS.slice(0, 3).map(cssColorToRGBA)
+    );
+  });
+
+  it('keeps the inline appearance of a tool whose label is gone', () => {
+    const migrated = migrate({
+      tools: {
+        rulers: {
+          tools: [
+            {
+              imageID: 'ds-ct',
+              frameOfReference: {
+                planeOrigin: [0, 0, 0],
+                planeNormal: [1, 0, 0],
+              },
+              slice: 0,
+              label: '6',
+              labelName: '',
+              color: '#ff0000',
+              strokeWidth: 7,
+              firstPoint: [0, 0, 0],
+              secondPoint: [1, 1, 0],
+            },
+          ],
+          labels: {
+            '1': { labelName: 'Label 1', color: 'red', strokeWidth: 1 },
+          },
+        },
+      },
+    });
+
+    const [tool] = migrated.tools.rulers.tools;
+    const segment = migrated.segments.find(
+      (entry: any) => entry.id === tool.segmentId
+    );
+    expect(segment).toMatchObject({
+      name: 'Segment 1',
+      color: [255, 0, 0, 255],
+      strokeWidth: 7,
+    });
+    expect(() => ManifestSchema.parse(migrated)).not.toThrow();
+  });
+
+  it('shares one segment across tool types of equal lost appearance', () => {
+    const orphan = (extra: Record<string, unknown>) => ({
+      imageID: 'ds-ct',
+      frameOfReference: { planeOrigin: [0, 0, 1], planeNormal: [0, 0, 1] },
+      slice: 1,
+      firstPoint: [1, 1, 1],
+      secondPoint: [4, 4, 1],
+      ...extra,
+    });
+
+    const migrated = migrate({
+      tools: {
+        rulers: {
+          tools: [orphan({ color: '#ff0000', strokeWidth: 7 })],
+          labels: {},
+        },
+        rectangles: {
+          tools: [
+            orphan({ color: '#ff0000', strokeWidth: 7 }),
+            orphan({ color: '#ff0000', strokeWidth: 2 }),
+          ],
+          labels: {},
+        },
+      },
+    });
+
+    const [ruler] = migrated.tools.rulers.tools;
+    const [sameWidth, otherWidth] = migrated.tools.rectangles.tools;
+    expect(sameWidth.segmentId).toBe(ruler.segmentId);
+    expect(otherWidth.segmentId).not.toBe(ruler.segmentId);
+    expect(migrated.segments.map((segment: any) => segment.name)).toEqual([
+      'Segment 1',
+      'Segment 2',
+    ]);
+  });
+
+  it('mints a segment for a tool that never carried a label', () => {
+    const migrated = migrate({
+      tools: {
+        polygons: {
+          tools: [
+            {
+              imageID: 'ds-ct',
+              frameOfReference: {
+                planeOrigin: [0, 0, 2],
+                planeNormal: [0, 0, 1],
+              },
+              slice: 2,
+              points: [
+                [1, 1, 2],
+                [5, 1, 2],
+                [3, 5, 2],
+              ],
+            },
+          ],
+          labels: {},
+        },
+      },
+    });
+
+    expect(migrated.segments).toEqual([
+      {
+        id: expect.any(String),
+        name: 'Segment 1',
+        color: cssColorToRGBA(TOOL_COLORS[0]),
+      },
+    ]);
+    expect(migrated.tools.polygons.tools[0].segmentId).toBe(
+      migrated.segments[0].id
+    );
+  });
+
+  it('does not hand a minted segment a name a label already uses', () => {
+    const migrated = migrate({
+      tools: {
+        rulers: {
+          tools: [
+            {
+              imageID: 'ds-ct',
+              frameOfReference: {
+                planeOrigin: [0, 0, 1],
+                planeNormal: [0, 0, 1],
+              },
+              slice: 1,
+              color: '#ff0000',
+              firstPoint: [1, 1, 1],
+              secondPoint: [4, 4, 1],
+            },
+          ],
+          labels: { 'lbl-a': { labelName: 'Segment 1', color: 'blue' } },
+        },
+      },
+    });
+
+    expect(migrated.segments.map((segment: any) => segment.name)).toEqual([
+      'Segment 1',
+      'Segment 2',
+    ]);
+    expect(migrated.tools.rulers.tools[0].segmentId).toBe(
+      migrated.segments[1].id
+    );
   });
 
   it('migrates ruler labels into the one segment list', () => {

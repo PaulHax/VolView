@@ -1,6 +1,7 @@
 import { pipe } from '@/src/utils/functional';
 import { emptyExtent } from '@/src/segmentation/geometry';
-import { cssColorToRGBA } from '@/src/segmentation/color';
+import { cssColorToRGBA, tryCssColorToRGBA } from '@/src/segmentation/color';
+import { TOOL_COLORS } from '@/src/config';
 import {
   dataSourcesById,
   summarizeDataSource,
@@ -485,6 +486,67 @@ const migrate640To700 = (inputManifest: any) => {
     };
   });
 
+  const toolKeys = ['rulers', 'rectangles', 'polygons'];
+
+  let nextPaletteIndex = 0;
+  const nextPaletteColor = () => {
+    const color = cssColorToRGBA(TOOL_COLORS[nextPaletteIndex]);
+    nextPaletteIndex = (nextPaletteIndex + 1) % TOOL_COLORS.length;
+    return color;
+  };
+
+  // Legacy colors were any CSS string, and one this parser does not know would
+  // resolve to opaque black, which reads as a deliberate choice. Take the
+  // palette color a freshly minted segment would have instead.
+  const segmentColor = (css: string | undefined) =>
+    tryCssColorToRGBA(css ?? '') ?? nextPaletteColor();
+
+  const labelNames = new Set(
+    toolKeys.flatMap((key) =>
+      Object.entries(manifest.tools?.[key]?.labels ?? {}).map(
+        ([labelId, label]: [string, any]) => label.labelName || labelId
+      )
+    )
+  );
+
+  // Mirrors the name a shape placed against an empty registry mints.
+  let segmentNumber = 0;
+  const defaultSegmentName = () => {
+    do {
+      segmentNumber += 1;
+    } while (
+      labelNames.has(`Segment ${segmentNumber}`) ||
+      segmentIdByName.has(`Segment ${segmentNumber}`)
+    );
+    return `Segment ${segmentNumber}`;
+  };
+
+  // A tool whose label the session no longer holds kept drawing in its inline
+  // appearance, so one segment per distinct appearance carries it onward.
+  const segmentIdByAppearance = new Map<string, string>();
+  const appearanceSegmentId = (
+    into: any[],
+    color: string | undefined,
+    strokeWidth: number | undefined
+  ) => {
+    const key = `${color ?? ''}|${strokeWidth ?? ''}`;
+    const existing = segmentIdByAppearance.get(key);
+    if (existing !== undefined) return existing;
+    const name = defaultSegmentName();
+    const segmentId = addSegment(
+      into,
+      uniqueId(`tool-${segmentIdByAppearance.size + 1}`),
+      {
+        name,
+        color: segmentColor(color),
+        ...(strokeWidth === undefined ? {} : { strokeWidth }),
+      }
+    );
+    segmentIdByAppearance.set(key, segmentId);
+    segmentIdByName.set(name, segmentId);
+    return segmentId;
+  };
+
   // Every label becomes a segment, referenced or not: the picker offered it
   // before and goes on offering it.
   const toolSegmentIds = (key: string, into: any[]) => {
@@ -500,7 +562,7 @@ const migrate640To700 = (inputManifest: any) => {
         segmentIdByName.get(name) ??
         addSegment(into, uniqueId(`${key}-${labelId}`), {
           name,
-          color: cssColorToRGBA(color ?? ''),
+          color: segmentColor(color),
           ...(strokeWidth === undefined ? {} : { strokeWidth }),
         });
       segmentIdByLabel.set(labelId, segmentId);
@@ -511,17 +573,17 @@ const migrate640To700 = (inputManifest: any) => {
       (tool: any) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { label, labelName, color, strokeWidth, ...rest } = tool;
-        const segmentId = segmentIdByLabel.get(label);
-        return segmentId === undefined ? rest : { ...rest, segmentId };
+        const segmentId =
+          segmentIdByLabel.get(label) ??
+          appearanceSegmentId(into, color, strokeWidth);
+        return { ...rest, segmentId };
       }
     );
 
     delete entry.labels;
   };
 
-  ['rulers', 'rectangles', 'polygons'].forEach((key) =>
-    toolSegmentIds(key, segments)
-  );
+  toolKeys.forEach((key) => toolSegmentIds(key, segments));
 
   const segmentations = [...recordsByParent.entries()].map(
     ([parentImage, records]) => ({

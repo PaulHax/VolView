@@ -102,7 +102,11 @@ describe('annotation tool source', () => {
     const migrated = migrateManifest(old);
     expect(migrated.version).toBe(MANIFEST_VERSION);
     expect(() => ManifestSchema.parse(migrated)).not.toThrow();
-    expect(migrated.tools.rulers.tools[0]).toEqual(ruler());
+    // An unlabelled tool gains the segment its appearance mints, nothing else.
+    expect(migrated.tools.rulers.tools[0]).toEqual({
+      ...ruler(),
+      segmentId: migrated.segments[0].id,
+    });
   });
 });
 
