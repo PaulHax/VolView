@@ -101,6 +101,7 @@ export type SegmentationWireDeps = {
     options?: {
       source?: ProcessingResultSource;
       name?: string;
+      ownSegments?: boolean;
     }
   ) => SegmentMask[];
 };
@@ -479,6 +480,11 @@ export function createSegmentationWire(deps: SegmentationWireDeps) {
           {
             source: item.source,
             name: item.name,
+            // Migrated groups never merge, and this one's display would be
+            // dropped by a same-named segment another image already minted.
+            ownSegments: Object.values(item.display).some(
+              (value) => value !== undefined
+            ),
           }
         );
         const activeIndex = descriptors.findIndex(

@@ -7,6 +7,7 @@ import { leafStateId } from '@/src/io/import/dataSource';
 import { completeStateFileRestore } from '@/src/io/import/processors/restoreStateFile';
 import { migrateManifest } from '@/src/io/state-file/migrations';
 import { ManifestSchema, type Manifest } from '@/src/io/state-file/schema';
+import { MANIFEST_VERSION } from '@/src/io/state-file/serialize';
 import { useImageCacheStore } from '@/src/store/image-cache';
 import { useSegmentationStore } from '@/src/segmentation/store';
 import { useSegmentStore } from '@/src/segmentation/segments';
@@ -149,5 +150,64 @@ describe('restoring a descriptorless active group', () => {
     await restoreTwoGroups(7);
 
     expect(useSegmentStore().segments.selectedSegmentId.value).toBeUndefined();
+  });
+});
+
+// Two images, each with a descriptorless group of the same name, so both
+// decode the same segment names. The second group was hidden in the old file.
+const twoImageManifest = (): Manifest =>
+  ManifestSchema.parse({
+    version: MANIFEST_VERSION,
+    dataSources: [
+      { id: 1, type: 'uri', uri: BASE_URI, name: 'CT Chest' },
+      { id: 2, type: 'uri', uri: `${BASE_URI}/mr`, name: 'MR Chest' },
+      { id: 3, type: 'uri', uri: `${BASE_URI}/a`, name: 'Mask.nrrd' },
+      { id: 4, type: 'uri', uri: `${BASE_URI}/b`, name: 'Mask.nrrd' },
+    ],
+    datasets: [
+      { id: 'ds-ct', dataSourceId: 1 },
+      { id: 'ds-mr', dataSourceId: 2 },
+    ],
+    segmentationArtifacts: [
+      {
+        id: 'sg-a',
+        name: 'Mask',
+        parentImage: 'ds-ct',
+        dataSourceId: 3,
+        pendingDecode: true,
+      },
+      {
+        id: 'sg-b',
+        name: 'Mask',
+        parentImage: 'ds-mr',
+        dataSourceId: 4,
+        pendingDecode: true,
+        pendingVisibility: false,
+      },
+    ],
+  });
+
+describe('restoring same-named descriptorless groups on two images', () => {
+  it('keeps the display the second group migrated with', async () => {
+    setActivePinia(createPinia());
+    seat('ct-store', 'CT Chest', new Uint8Array(4 * 4 * 4));
+    seat('mr-store', 'MR Chest', new Uint8Array(4 * 4 * 4));
+    seat('a-store', 'Mask.nrrd', makeLabelmapValues());
+    seat('b-store', 'Mask.nrrd', makeLabelmapValues());
+
+    await completeStateFileRestore(twoImageManifest(), [], {
+      'ds-ct': 'ct-store',
+      'ds-mr': 'mr-store',
+      [leafStateId(3)]: 'a-store',
+      [leafStateId(4)]: 'b-store',
+    });
+
+    const registry = useSegmentStore().segments;
+    const visibleOn = (imageId: string) =>
+      listMasks(useSegmentationStore().getSegmentationForImage(imageId)!).map(
+        (mask) => registry.appearanceOf(mask.segmentId).visible
+      );
+    expect(visibleOn('ct-store')).toEqual([true, true]);
+    expect(visibleOn('mr-store')).toEqual([false, false]);
   });
 });
