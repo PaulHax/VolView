@@ -1,6 +1,7 @@
 import {
   ANNOTATION_TOOL_KINDS,
   RESULT_INTENTS,
+  currentResultIntentName,
   type AnnotationLabel,
   type AnnotationToolKind,
   type KnownResultIntent,
@@ -499,8 +500,8 @@ export async function applyIntent(
 // the producer's row to fix.
 function reportUnroutableIntent(result: ProcessingResult) {
   if (!result.intent) return;
-  const nameIsKnown = (RESULT_INTENTS as readonly string[]).includes(
-    result.intent
+  const nameIsKnown = (RESULT_INTENTS as readonly unknown[]).includes(
+    currentResultIntentName(result.intent)
   );
   surfaceWarning(
     `Did not load ${result.name}`,
