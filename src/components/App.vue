@@ -86,6 +86,7 @@ import {
 } from '@/src/utils/token';
 import { defaultImageMetadata } from '@/src/core/progressiveImage';
 import VtkRenderWindowParent from '@/src/components/vtk/VtkRenderWindowParent.vue';
+import { useViewConfigStore } from '@/src/store/view-configs';
 import { useSyncWindowing } from '@/src/composables/useSyncWindowing';
 import { readLaunchParams } from '@/src/utils/urlParams';
 
@@ -114,6 +115,7 @@ export default defineComponent({
     // --- sync handling --- //
 
     useSyncWindowing();
+    useViewConfigStore();
 
     // --- file handling --- //
 

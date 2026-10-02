@@ -180,6 +180,7 @@ export const useWindowingStore = defineStore('windowing', () => {
   };
 
   return {
+    configs,
     runtimeConfigWindowLevel,
     getConfig,
     updateConfig,

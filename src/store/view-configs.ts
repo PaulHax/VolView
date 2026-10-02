@@ -9,6 +9,24 @@ import useCinePlaybackStore from './view-configs/cine-playback';
 import { useViewStore } from './views';
 import { StateFile, ViewConfig } from '../io/state-file/schema';
 
+// Oblique viewers own these synthetic view IDs for their four renderers.
+const ownedViewIDs = (viewID: string) =>
+  ['', '-axial', '-coronal', '-sagittal', '-multi-oblique'].map(
+    (suffix) => viewID + suffix
+  );
+
+const copyConfigs = <T>(
+  configs: Record<string, Record<string, T>>,
+  sourceID: string,
+  targetID: string,
+  update: (viewID: string, dataID: string, config: T) => void
+) => {
+  Object.entries(configs[sourceID] ?? {}).forEach(([dataID, config]) => {
+    // Configs contain JSON values; clones keep nested camera/coloring state independent.
+    update(targetID, dataID, JSON.parse(JSON.stringify(config)) as T);
+  });
+};
+
 /**
  * This store saves view configuration that is associated with a specific
  * view. The key is a synthetic id generated from the view ID and data ID.
@@ -23,12 +41,14 @@ export const useViewConfigStore = defineStore('viewConfig', () => {
   const viewStore = useViewStore();
 
   const removeView = (viewID: string) => {
-    viewSliceStore.removeView(viewID);
-    windowingStore.removeView(viewID);
-    layerColoringStore.removeView(viewID);
-    viewCameraStore.removeView(viewID);
-    volumeColoringStore.removeView(viewID);
-    cinePlaybackStore.removeView(viewID);
+    ownedViewIDs(viewID).forEach((id) => {
+      viewSliceStore.removeView(id);
+      windowingStore.removeView(id);
+      layerColoringStore.removeView(id);
+      viewCameraStore.removeView(id);
+      volumeColoringStore.removeView(id);
+      cinePlaybackStore.removeView(id);
+    });
   };
 
   const removeData = (dataID: string, viewID?: string) => {
@@ -83,9 +103,65 @@ export const useViewConfigStore = defineStore('viewConfig', () => {
     });
   };
 
-  viewStore.LayoutViewReplacedEvent.on((oldViewID) => {
-    removeView(oldViewID);
+  viewStore.ViewSplitEvent.on((sourceID, targetID) => {
+    const sourceIDs = ownedViewIDs(sourceID);
+    ownedViewIDs(targetID).forEach((id, index) => {
+      const source = sourceIDs[index];
+      copyConfigs(
+        viewSliceStore.configs,
+        source,
+        id,
+        viewSliceStore.updateConfig
+      );
+      copyConfigs(
+        windowingStore.configs,
+        source,
+        id,
+        windowingStore.updateConfig
+      );
+      copyConfigs(
+        layerColoringStore.configs,
+        source,
+        id,
+        layerColoringStore.updateConfig
+      );
+      copyConfigs(
+        viewCameraStore.configs,
+        source,
+        id,
+        (viewID, dataID, config) => {
+          viewCameraStore.updateConfig(viewID, dataID, config);
+          viewCameraStore.setAutoFitState(
+            viewID,
+            dataID,
+            viewCameraStore.getAutoFitState(source, dataID)
+          );
+          if (viewCameraStore.isCameraInitialized(source, dataID)) {
+            viewCameraStore.markCameraAsInitialized(viewID, dataID);
+          }
+        }
+      );
+      copyConfigs(
+        volumeColoringStore.configs,
+        source,
+        id,
+        volumeColoringStore.updateConfig
+      );
+      copyConfigs(
+        cinePlaybackStore.configs,
+        source,
+        id,
+        (viewID, dataID, config) => {
+          cinePlaybackStore.updateConfig(viewID, dataID, {
+            ...config,
+            playing: false,
+          });
+        }
+      );
+    });
   });
+
+  viewStore.ViewRemovedEvent.on(removeView);
 
   return {
     removeView,

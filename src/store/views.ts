@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, markRaw, reactive, ref, watch } from 'vue';
 import { createEventHook } from '@vueuse/core';
 import type { Maybe } from '@/src/types';
-import type { Layout, LayoutItem } from '@/src/types/layout';
+import type { Layout, LayoutDirection, LayoutItem } from '@/src/types/layout';
 import { useIdStore } from '@/src/store/id';
 import type { ViewInfo, ViewInfoInit, ViewType } from '@/src/types/views';
 import { DefaultNamedLayouts, getAvailableViews } from '@/src/config';
@@ -14,6 +14,11 @@ import type { Manifest, StateFile } from '../io/state-file/schema';
 import { onImageDeleted } from '@/src/composables/onImageDeleted';
 import { declareManifestRefs } from '@/src/core/manifestRefs';
 import { isRecord } from '@/src/utils';
+import {
+  getLayoutSlots,
+  splitLayoutSlot,
+  removeLayoutSlot,
+} from '@/src/utils/layoutEditing';
 
 // The manifest references this store's remove cascade keeps clean (see the
 // onImageDeleted registration below), declared for the dev-only save backstop.
@@ -115,6 +120,8 @@ export const useViewStore = defineStore('view', () => {
   // Triggers whenever a view in the layout is replaced.
   // [beforeViewID, afterViewID]
   const LayoutViewReplacedEvent = markRaw(createEventHook<[string, string]>());
+  const ViewSplitEvent = markRaw(createEventHook<[string, string]>());
+  const ViewRemovedEvent = markRaw(createEventHook<[string]>());
 
   const parsedDefaultLayouts = parseNamedLayouts(DefaultNamedLayouts);
 
@@ -206,7 +213,8 @@ export const useViewStore = defineStore('view', () => {
   }
 
   function addView(viewInit: ViewInfoInit) {
-    const id = idStore.nextId();
+    let id = idStore.nextId();
+    while (viewByID[id]) id = idStore.nextId();
 
     const view = {
       id,
@@ -233,6 +241,62 @@ export const useViewStore = defineStore('view', () => {
     }
 
     delete viewByID[id];
+    ViewRemovedEvent.trigger(id);
+  }
+
+  function getViewLayoutBounds(id: string) {
+    return getLayoutSlots(layout.value).find(
+      (slot) => layoutSlots.value[slot.slotIndex] === id
+    );
+  }
+
+  function getViewForSlot(slotIndex: number) {
+    if (maximizedView.value) return maximizedView.value;
+    return getView(layoutSlots.value[slotIndex]);
+  }
+
+  function splitView(id: string, direction: LayoutDirection) {
+    const view = getView(id);
+    const slotIndex = layoutSlots.value.indexOf(id);
+    if (!view || !layoutViews.value.some((peer) => peer.id === id)) return null;
+
+    const newID = addView(
+      JSON.parse(
+        JSON.stringify({
+          name: view.name,
+          type: view.type,
+          dataID: view.dataID,
+          options: view.options,
+        })
+      ) as ViewInfoInit
+    );
+    layoutSlots.value.push(newID);
+    ViewSplitEvent.trigger(id, newID);
+    applyLayoutChange(
+      splitLayoutSlot(
+        layout.value,
+        slotIndex,
+        layoutSlots.value.length - 1,
+        direction
+      ),
+      { layoutName: null }
+    );
+    return newID;
+  }
+
+  function closeView(id: string) {
+    if (
+      layoutViews.value.length <= 1 ||
+      !layoutViews.value.some((view) => view.id === id)
+    )
+      return false;
+    const slotIndex = layoutSlots.value.indexOf(id);
+    const nextLayout = removeLayoutSlot(layout.value, slotIndex);
+    layoutSlots.value.splice(slotIndex, 1);
+    applyLayoutChange(nextLayout, { layoutName: null });
+    delete viewByID[id];
+    ViewRemovedEvent.trigger(id);
+    return true;
   }
 
   function applyLayoutChange(
@@ -376,6 +440,7 @@ export const useViewStore = defineStore('view', () => {
     if (manifest.viewByID) {
       viewIDs.value.forEach((key) => {
         delete viewByID[key];
+        ViewRemovedEvent.trigger(key);
       });
 
       Object.entries(manifest.viewByID).forEach(([id, view]) => {
@@ -420,7 +485,7 @@ export const useViewStore = defineStore('view', () => {
   });
 
   return {
-    visibleLayout: computed<Layout>(() => {
+    visibleLayout: computed(() => {
       if (maximizedView.value)
         return {
           direction: 'column',
@@ -438,6 +503,10 @@ export const useViewStore = defineStore('view', () => {
     namedLayouts,
     currentLayoutName,
     getView,
+    getViewForSlot,
+    getViewLayoutBounds,
+    splitView,
+    closeView,
     getAllViews,
     getViewsForData,
     replaceView,
@@ -456,5 +525,7 @@ export const useViewStore = defineStore('view', () => {
     bindViewsToData,
     ViewDataChangeEvent,
     LayoutViewReplacedEvent,
+    ViewSplitEvent,
+    ViewRemovedEvent,
   };
 });

@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { ref, toRefs, provide, markRaw, effectScope, onUnmounted } from 'vue';
+import {
+  ref,
+  toRefs,
+  provide,
+  markRaw,
+  effectScope,
+  onUnmounted,
+  computed,
+} from 'vue';
 import { storeToRefs } from 'pinia';
 import vtkInteractorStyleManipulator from '@kitware/vtk.js/Interaction/Style/InteractorStyleManipulator';
 import { useVtkView } from '@/src/core/vtk/useVtkView';
@@ -55,7 +63,15 @@ const { interactorStyle } = useVtkInteractorStyle(
 
 // bind slice and window configs
 // resizeToFit camera controls
-const autoFit = useAutoFitState(view.renderer.getActiveCamera());
+const autoFitEnabled = computed({
+  get: () => viewCameraStore.getAutoFitState(viewID.value, imageID.value),
+  set: (enabled: boolean) =>
+    viewCameraStore.setAutoFitState(viewID.value, imageID.value, enabled),
+});
+const autoFit = useAutoFitState(
+  view.renderer.getActiveCamera(),
+  autoFitEnabled
+);
 
 function autoFitImage() {
   if (!autoFit.autoFit.value) return;
