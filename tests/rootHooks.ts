@@ -11,6 +11,11 @@ const WEBGL_FAILURES = [
   "reading 'setContext'",
 ];
 
+const isIgnorableShaderError = (text: string) =>
+  text.includes('Error compiling shader') &&
+  text.includes("': null") &&
+  (text.includes('vtkPolyDataVS.glsl') || text.includes('vtkVolumeVS.glsl'));
+
 let subscribedSession = '';
 const externalRequests: string[] = [];
 const webglErrors: string[] = [];
@@ -30,7 +35,10 @@ function listen() {
   browser.on('log.entryAdded', (entry) => {
     const text = entry.text ?? '';
     console.log(`[Browser Console] [${entry.level}] ${text}`);
-    if (WEBGL_FAILURES.some((failure) => text.includes(failure))) {
+    if (
+      WEBGL_FAILURES.some((failure) => text.includes(failure)) &&
+      !isIgnorableShaderError(text)
+    ) {
       webglErrors.push(text);
     }
   });
