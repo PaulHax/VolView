@@ -19,6 +19,7 @@ export const useViewCameraStore = defineStore('viewCamera', () => {
   const imageStore = useImageStore();
   const configs = reactive<DoubleKeyRecord<CameraConfig>>({});
   const initializedCameras = reactive<DoubleKeyRecord<boolean>>({});
+  const autoFitStates = reactive<DoubleKeyRecord<boolean>>({});
 
   const getConfig = (viewID: Maybe<string>, dataID: Maybe<string>) =>
     getDoubleKeyRecord(configs, viewID, dataID);
@@ -59,18 +60,34 @@ export const useViewCameraStore = defineStore('viewCamera', () => {
     return !!getDoubleKeyRecord(initializedCameras, viewID, dataID);
   };
 
+  const getAutoFitState = (viewID: Maybe<string>, dataID: Maybe<string>) =>
+    getDoubleKeyRecord(autoFitStates, viewID, dataID) ?? true;
+
+  const setAutoFitState = (
+    viewID: Maybe<string>,
+    dataID: Maybe<string>,
+    enabled: boolean
+  ) => {
+    if (viewID && dataID) {
+      (autoFitStates[viewID] ??= {})[dataID] = enabled;
+    }
+  };
+
   const removeView = (viewID: string) => {
     deleteFirstKey(configs, viewID);
     deleteFirstKey(initializedCameras, viewID);
+    deleteFirstKey(autoFitStates, viewID);
   };
 
   const removeData = (dataID: string, viewID?: string) => {
     if (viewID) {
       deleteEntry(configs, viewID, dataID);
       deleteEntry(initializedCameras, viewID, dataID);
+      deleteEntry(autoFitStates, viewID, dataID);
     } else {
       deleteSecondKey(configs, dataID);
       deleteSecondKey(initializedCameras, dataID);
+      deleteSecondKey(autoFitStates, dataID);
     }
   };
 
@@ -138,6 +155,8 @@ export const useViewCameraStore = defineStore('viewCamera', () => {
     isSync,
     serialize,
     deserialize,
+    getAutoFitState,
+    setAutoFitState,
     markCameraAsInitialized,
     isCameraInitialized,
   };

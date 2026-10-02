@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import ViewTypeSwitcher from '@/src/components/ViewTypeSwitcher.vue';
 import CurrentImageProvider from '@/src/components/CurrentImageProvider.vue';
 import { IMAGE_DRAG_MEDIA_TYPE } from '@/src/constants';
 import { resolveSlotRendering } from '@/src/core/viewTypes';
@@ -74,6 +75,14 @@ function onDrop(event: DragEvent) {
     <CurrentImageProvider :image-id="rendering.renderImageID">
       <component :is="rendering.component" :view-id="viewId" />
     </CurrentImageProvider>
+    <div
+      v-if="!rendering.renderImageID"
+      class="empty-view-controls"
+      @click.stop
+      @dblclick.stop
+    >
+      <ViewTypeSwitcher :view-id="viewId" :image-id="null" />
+    </div>
   </div>
 </template>
 
@@ -83,6 +92,12 @@ function onDrop(event: DragEvent) {
   box-sizing: border-box;
 }
 
+.empty-view-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 11;
+}
 .overlay {
   position: absolute;
   top: 0;
