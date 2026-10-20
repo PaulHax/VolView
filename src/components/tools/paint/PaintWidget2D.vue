@@ -9,7 +9,6 @@ import {
   watchEffect,
   inject,
   ref,
-  watch,
 } from 'vue';
 import vtkPlaneManipulator from '@kitware/vtk.js/Widgets/Manipulators/PlaneManipulator';
 import { vec3 } from 'gl-matrix';
@@ -156,14 +155,11 @@ export default defineComponent({
 
     let checkIfPointerInView = false;
     const pointerInView = ref(false);
-    watch(
-      [() => paintStore.brushSize, imageMetadata, viewAxisIndex, pointerInView],
-      () => {
-        if (pointerInView.value && imageId.value) {
-          paintStore.setSliceAxis(viewAxisIndex.value, imageId.value);
-        }
+    watchEffect(() => {
+      if (pointerInView.value && imageId.value) {
+        paintStore.setSliceAxis(viewAxisIndex.value, imageId.value);
       }
-    );
+    });
     const cursorStyles = view.widgetManager.getCursorStyles();
     watchEffect(() => {
       widget.setSampling(sampling.value);

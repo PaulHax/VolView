@@ -97,10 +97,7 @@
             </v-item-group>
           </v-row>
 
-          <div
-            class="paint-parameters"
-            :tabindex="brushDisabledReason ? 0 : undefined"
-          >
+          <div :tabindex="brushDisabledReason ? 0 : undefined">
             <v-tooltip
               :eager="false"
               :disabled="!brushDisabledReason"
@@ -109,7 +106,7 @@
             >
               {{ brushDisabledReason }}
             </v-tooltip>
-            <div class="brush-size-control">
+            <div class="d-flex align-center ga-1">
               <span
                 class="control-label text-body-2 text-no-wrap"
                 :tabindex="brushDisabledReason ? undefined : 0"
@@ -132,6 +129,7 @@
                 :model-value="brushSize"
                 @update:model-value="setBrushSize"
                 density="compact"
+                min-width="0"
                 hide-details
                 thumb-label
                 min="1"
@@ -139,56 +137,59 @@
                 step="1"
               />
             </div>
-            <span class="control-label text-body-2 text-no-wrap">
-              <v-icon size="small">mdi-chart-histogram</v-icon>Threshold
-            </span>
-            <v-range-slider
-              v-if="currentImageStats"
-              v-threshold-thumb-labels
-              class="threshold-control"
-              :disabled="!!brushDisabledReason"
-              v-model="threshold"
-              :min="currentImageStats.scalarMin"
-              :max="currentImageStats.scalarMax"
-              :step="thresholdStepGranularity"
-            >
-              <template #prepend>
-                <v-text-field
-                  aria-label="Minimum threshold"
-                  :disabled="!!brushDisabledReason"
-                  :model-value="thresholdRange[0].toFixed(2)"
-                  @input="setMinThreshold($event.target.value)"
-                  variant="underlined"
-                  class="threshold-input pl-2 opacity-70"
-                  style="width: 80px"
-                  density="compact"
-                  hide-details
-                  hide-spin-buttons
-                  type="number"
-                  precision="2"
-                  :min="currentImageStats.scalarMin"
-                  :max="thresholdRange[1]"
-                />
-              </template>
-              <template #append>
-                <v-text-field
-                  aria-label="Maximum threshold"
-                  :disabled="!!brushDisabledReason"
-                  :model-value="thresholdRange[1].toFixed(2)"
-                  @input="setMaxThreshold($event.target.value)"
-                  variant="underlined"
-                  class="threshold-input pl-2 opacity-70"
-                  style="width: 80px"
-                  density="compact"
-                  hide-details
-                  hide-spin-buttons
-                  type="number"
-                  precision="2"
-                  :min="thresholdRange[0]"
-                  :max="currentImageStats.scalarMax"
-                />
-              </template>
-            </v-range-slider>
+            <div class="d-flex align-center ga-3">
+              <span class="control-label text-body-2 text-no-wrap">
+                <v-icon size="small">mdi-chart-histogram</v-icon>Threshold
+              </span>
+              <v-range-slider
+                v-if="currentImageStats"
+                v-threshold-thumb-labels
+                class="threshold-control"
+                min-width="0"
+                :disabled="!!brushDisabledReason"
+                v-model="threshold"
+                :min="currentImageStats.scalarMin"
+                :max="currentImageStats.scalarMax"
+                :step="thresholdStepGranularity"
+              >
+                <template #prepend>
+                  <v-text-field
+                    aria-label="Minimum threshold"
+                    :disabled="!!brushDisabledReason"
+                    :model-value="thresholdRange[0].toFixed(2)"
+                    @input="setMinThreshold($event.target.value)"
+                    variant="underlined"
+                    class="threshold-input pl-2 opacity-70"
+                    style="width: 80px"
+                    density="compact"
+                    hide-details
+                    hide-spin-buttons
+                    type="number"
+                    precision="2"
+                    :min="currentImageStats.scalarMin"
+                    :max="thresholdRange[1]"
+                  />
+                </template>
+                <template #append>
+                  <v-text-field
+                    aria-label="Maximum threshold"
+                    :disabled="!!brushDisabledReason"
+                    :model-value="thresholdRange[1].toFixed(2)"
+                    @input="setMaxThreshold($event.target.value)"
+                    variant="underlined"
+                    class="threshold-input pl-2 opacity-70"
+                    style="width: 80px"
+                    density="compact"
+                    hide-details
+                    hide-spin-buttons
+                    type="number"
+                    precision="2"
+                    :min="thresholdRange[0]"
+                    :max="currentImageStats.scalarMax"
+                  />
+                </template>
+              </v-range-slider>
+            </div>
           </div>
           <div class="paint-switches mb-2">
             <div
@@ -409,19 +410,6 @@ const controlPanels = computed({
   min-width: 110px;
   height: 56px;
   width: 110px;
-}
-
-.paint-parameters,
-.brush-size-control {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  column-gap: 12px;
-  align-items: center;
-}
-
-.brush-size-control {
-  grid-column: 1 / -1;
-  column-gap: 4px;
 }
 
 .threshold-input :deep(input) {

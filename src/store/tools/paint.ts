@@ -5,7 +5,7 @@ import type { Manifest, StateFile } from '@/src/io/state-file/schema';
 import type { Maybe } from '@/src/types';
 import { useImageStatsStore } from '@/src/store/image-stats';
 import { SEGMENT_VALUE } from '@/src/segmentation/masks/labelValue';
-import { computed, ref, unref, watch } from 'vue';
+import { computed, ref, unref, watch, watchEffect } from 'vue';
 import { watchImmediate } from '@vueuse/core';
 import { vec3 } from 'gl-matrix';
 import type vtkImageData from '@kitware/vtk.js/Common/DataModel/ImageData';
@@ -66,9 +66,9 @@ export const usePaintToolStore = defineStore('paint', () => {
     getBrushSizeLimit(currentImageMetadata.value.dimensions)
   );
 
-  watch([currentImageData, brushSizeMax], ([image, max]) => {
-    if (image && brushSize.value > max) {
-      usePaintToolStore().setBrushSize(max);
+  watchEffect(() => {
+    if (currentImageData.value && brushSize.value > brushSizeMax.value) {
+      brushSize.value = brushSizeMax.value;
     }
   });
 
