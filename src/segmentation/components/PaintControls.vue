@@ -109,20 +109,36 @@
             >
               {{ brushDisabledReason }}
             </v-tooltip>
-            <span class="control-label text-body-2 text-no-wrap">
-              <v-icon size="small">mdi-diameter-outline</v-icon>Size
-            </span>
-            <v-slider
-              name="Brush size"
-              :disabled="!!brushDisabledReason"
-              :model-value="brushSize"
-              @update:model-value="setBrushSize"
-              density="compact"
-              hide-details
-              min="1"
-              :max="brushSizeMax"
-              step="1"
-            />
+            <div class="brush-size-control">
+              <span
+                class="control-label text-body-2 text-no-wrap"
+                :tabindex="brushDisabledReason ? undefined : 0"
+              >
+                <v-icon size="small">mdi-diameter-outline</v-icon>Size
+                <v-icon size="x-small">mdi-information-outline</v-icon>
+                <v-tooltip
+                  :eager="false"
+                  :disabled="!!brushDisabledReason"
+                  activator="parent"
+                  location="top"
+                >
+                  Brush diameter in voxels at the image's finest spacing. Size 1
+                  paints one voxel.
+                </v-tooltip>
+              </span>
+              <v-slider
+                name="Brush size"
+                :disabled="!!brushDisabledReason"
+                :model-value="brushSize"
+                @update:model-value="setBrushSize"
+                density="compact"
+                hide-details
+                thumb-label
+                min="1"
+                :max="brushSizeMax"
+                step="1"
+              />
+            </div>
             <span class="control-label text-body-2 text-no-wrap">
               <v-icon size="small">mdi-chart-histogram</v-icon>Threshold
             </span>
@@ -395,11 +411,17 @@ const controlPanels = computed({
   width: 110px;
 }
 
-.paint-parameters {
+.paint-parameters,
+.brush-size-control {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   column-gap: 12px;
   align-items: center;
+}
+
+.brush-size-control {
+  grid-column: 1 / -1;
+  column-gap: 4px;
 }
 
 .threshold-input :deep(input) {
