@@ -7,6 +7,7 @@ import { projectRoot } from './tests/e2eTestUtils';
 import { AUX_PORT, BASE_URL, TEST_PORT } from './tests/e2ePorts';
 import { TEST_DATASETS } from './tests/datasets';
 import { DATASET_CACHE, downloadDatasets } from './tests/downloadDatasets';
+import { installWebGLDiagnostics } from './tests/webglDiagnostics';
 
 // Fixed capture viewport (Playwright's default).
 export const CONTENT_VIEWPORT = { width: 1280, height: 720 } as const;
@@ -194,9 +195,10 @@ export const config: Options.Testrunner = {
     _capabilities:
       | Capabilities.RequestedStandaloneCapabilities
       | Capabilities.RequestedMultiremoteCapabilities,
-    _specs: string[],
+    specs: string[],
     browser: any
   ) {
+    await installWebGLDiagnostics(browser, TEMP_DIR, specs);
     await applyTestViewport(browser);
   },
 

@@ -13,6 +13,7 @@ jobs:
     env:
       DOWNLOAD_TIMEOUT: 90000
       VITE_SHOW_SAMPLE_DATA: true
+      VOLVIEW_WEBGL_DIAGNOSTICS: 1
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,18 +36,7 @@ jobs:
           path: .tmp/datasets
           key: e2e-datasets-${{ hashFiles('tests/datasets.ts') }}
           restore-keys: e2e-datasets-
-      - name: Install xvfb (linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get install xvfb
-      - name: Run E2E on chrome (linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: xvfb-run --server-args="-screen 0, 1400x1000x24" --auto-servernum npm run test:e2e:chrome
-      - name: Set screen resolution (windows)
-        if: matrix.os == 'windows-latest'
-        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
-        shell: pwsh
-      - name: Run E2E on chrome (non-linux)
-        if: matrix.os != 'ubuntu-latest'
+      - name: Run E2E on chrome
         run: npm run test:e2e:chrome
       - name: Archive test results
         if: success() || failure()

@@ -97,7 +97,10 @@
             </v-item-group>
           </v-row>
 
-          <div :tabindex="brushDisabledReason ? 0 : undefined">
+          <div
+            data-testid="paint-parameters"
+            :tabindex="brushDisabledReason ? 0 : undefined"
+          >
             <v-tooltip
               :eager="false"
               :disabled="!brushDisabledReason"

@@ -13,8 +13,9 @@ if (IS_CI) {
   );
 }
 
-if (!IS_CI && !process.env.HEADED) {
-  chromeArgs.push('--headless=new', '--enable-unsafe-swiftshader');
+if (!process.env.HEADED) {
+  chromeArgs.push('--headless=new');
+  if (!IS_CI) chromeArgs.push('--enable-unsafe-swiftshader');
 }
 
 export const config = {
