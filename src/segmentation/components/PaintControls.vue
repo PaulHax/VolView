@@ -120,7 +120,7 @@
               density="compact"
               hide-details
               min="1"
-              max="50"
+              :max="brushSizeMax"
               step="1"
             />
             <span class="control-label text-body-2 text-no-wrap">
@@ -303,6 +303,7 @@ watch(paintToolActive, (active) => {
 const { setProcessControlsOpen } = paintStore;
 const {
   brushSize,
+  brushSizeMax,
   processControlsOpen,
   isPaintingModeActive,
   thresholdRange,
