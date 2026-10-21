@@ -1,4 +1,4 @@
-name: WebGL software mode comparison
+name: WebGL startup validation
 on:
   pull_request:
 
@@ -12,14 +12,14 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        order: [driver-first, webgl-first]
+        order: [automatic-then-webgl, webgl-then-automatic]
     name: Headed Ubuntu (${{ matrix.order }})
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       VITE_SHOW_SAMPLE_DATA: true
       CHROME_VERSION: 155.0.8059.84
-      WEBGL_STARTUP_SPEC: ./tests/specs/save-large-labelmap.e2e.ts
+      WEBGL_STARTUP_SPEC: ./tests/specs/annotation-mints-segment.e2e.ts
       HEADED: 1
       CI: true
     steps:
@@ -46,7 +46,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: webgl-software-mode-${{ matrix.order }}-attempt-${{ github.run_attempt }}
+          name: webgl-startup-validation-${{ matrix.order }}-attempt-${{ github.run_attempt }}
           path: |
             .tmp/webgl-startup
             .tmp/runs

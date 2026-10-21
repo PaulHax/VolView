@@ -10,6 +10,8 @@ const sequences = {
   'swiftshader-first': ['swiftshader', 'automatic'],
   'driver-first': ['swiftshader', 'swiftshader-webgl'],
   'webgl-first': ['swiftshader-webgl', 'swiftshader'],
+  'automatic-then-webgl': ['automatic', 'swiftshader-webgl'],
+  'webgl-then-automatic': ['swiftshader-webgl', 'automatic'],
 };
 const order = process.argv[2];
 if (!Object.hasOwn(sequences, order)) {
