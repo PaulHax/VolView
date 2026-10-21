@@ -13,12 +13,25 @@ const sequences = {
   'automatic-then-webgl': ['automatic', 'swiftshader-webgl'],
   'webgl-then-automatic': ['swiftshader-webgl', 'automatic'],
 };
+const displaySequences = {
+  'headless-then-headed': ['headless', 'headed'],
+  'headed-then-headless': ['headed', 'headless'],
+};
 const order = process.argv[2];
-if (!Object.hasOwn(sequences, order)) {
-  throw new Error(`Unknown renderer order: ${order}`);
+const displayComparison = Object.hasOwn(displaySequences, order);
+if (!displayComparison && !Object.hasOwn(sequences, order)) {
+  throw new Error(`Unknown comparison order: ${order}`);
 }
-const sequence = sequences[order];
+const sequence = displayComparison
+  ? displaySequences[order].map((displayMode) => ({
+      renderer: 'swiftshader-webgl',
+      displayMode,
+    }))
+  : sequences[order].map((renderer) => ({ renderer }));
 const diagnosticsEnabled = process.env.WEBGL_STARTUP_DIAGNOSTICS !== '0';
+if (displayComparison && diagnosticsEnabled) {
+  throw new Error('Display comparisons require WEBGL_STARTUP_DIAGNOSTICS=0.');
+}
 
 const directory = resolve('.tmp/webgl-startup', order);
 if (existsSync(directory)) {
@@ -35,8 +48,8 @@ const spec =
   process.env.WEBGL_STARTUP_SPEC ??
   './tests/specs/annotation-mints-segment.e2e.ts';
 
-for (const [index, renderer] of sequence.entries()) {
-  const phase = `${index + 1}-${renderer}`;
+for (const [index, { renderer, displayMode }] of sequence.entries()) {
+  const phase = `${index + 1}-${displayMode ?? renderer}`;
   const phaseDirectory = resolve(directory, phase);
   await mkdir(phaseDirectory);
   const port = basePort + index * 2;
@@ -53,19 +66,39 @@ for (const [index, renderer] of sequence.entries()) {
     CHROME_LOG_FILE: resolve(phaseDirectory, 'chrome.log'),
   };
   if (!diagnosticsEnabled) delete env.CHROME_LOG_FILE;
+  delete env.WEBGL_STARTUP_DISPLAY;
+  if (displayComparison) {
+    env.WEBGL_STARTUP_DISPLAY = displayMode;
+    delete env.DISPLAY;
+    delete env.WAYLAND_DISPLAY;
+    delete env.XAUTHORITY;
+    delete env.HEADLESS;
+    delete env.HEADED;
+    env[displayMode === 'headless' ? 'HEADLESS' : 'HEADED'] = '1';
+  }
+  const wdioArguments = [
+    './node_modules/@wdio/cli/bin/wdio.js',
+    'run',
+    './wdio.webgl-startup.conf.ts',
+  ];
+  const command = displayMode === 'headed' ? 'xvfb-run' : process.execPath;
+  const args =
+    displayMode === 'headed'
+      ? [
+          '--server-args=-screen 0, 1400x1000x24',
+          '--auto-servernum',
+          process.execPath,
+          ...wdioArguments,
+        ]
+      : wdioArguments;
   await writeFile(
     resolve(phaseDirectory, 'phase.json'),
-    `${JSON.stringify({ order, phase, renderer, spec, diagnosticsEnabled, startedAt, port, display: env.DISPLAY, chromeVersion: env.CHROME_VERSION, runnerImage: { os: env.ImageOS, version: env.ImageVersion } }, null, 2)}\n`
+    `${JSON.stringify({ order, phase, renderer, displayMode: displayMode ?? null, spec, diagnosticsEnabled, startedAt, port, display: env.DISPLAY ?? null, command, args, chromeVersion: env.CHROME_VERSION, runnerImage: { os: env.ImageOS, version: env.ImageVersion } }, null, 2)}\n`
   );
-  const child = spawn(
-    process.execPath,
-    [
-      './node_modules/@wdio/cli/bin/wdio.js',
-      'run',
-      './wdio.webgl-startup.conf.ts',
-    ],
-    { env, stdio: ['ignore', 'pipe', 'pipe'] }
-  );
+  const child = spawn(command, args, {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
   const stopSampling = diagnosticsEnabled
     ? startResourceSampling(
         resolve(phaseDirectory, 'resources.jsonl'),
@@ -97,6 +130,7 @@ for (const [index, renderer] of sequence.entries()) {
   results.push({
     phase,
     renderer,
+    displayMode: displayMode ?? null,
     spec,
     startedAt,
     completedAt: new Date().toISOString(),
