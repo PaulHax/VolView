@@ -1,4 +1,5 @@
 import { statSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { config as chromeConfig } from './wdio.chrome.conf';
 import { TEMP_DIR } from './wdio.shared.conf';
@@ -17,6 +18,19 @@ if (
 }
 
 const existingBefore = chromeConfig.before;
+const renderer = process.env.WEBGL_STARTUP_RENDERER;
+if (renderer !== 'automatic' && renderer !== 'swiftshader') {
+  throw new Error('WEBGL_STARTUP_RENDERER must be automatic or swiftshader.');
+}
+const phaseDirectory = process.env.WEBGL_STARTUP_PHASE_DIRECTORY;
+if (
+  !phaseDirectory ||
+  !statSync(phaseDirectory, { throwIfNoEntry: false })?.isDirectory()
+) {
+  throw new Error(
+    'WEBGL_STARTUP_PHASE_DIRECTORY must name the evidence directory.'
+  );
+}
 
 export const config = {
   ...chromeConfig,
@@ -29,6 +43,14 @@ export const config = {
     );
     if (process.env.HEADLESS === '1') args.push('--headless=new');
     args.push('--enable-logging', '--v=1');
+    if (renderer === 'swiftshader') {
+      args.push('--use-gl=angle', '--use-angle=swiftshader');
+    }
+    if (args.some((argument) => argument.startsWith('--user-data-dir'))) {
+      throw new Error(
+        'Each session must use a fresh ChromeDriver-created profile.'
+      );
+    }
 
     return {
       ...capability,
@@ -44,8 +66,20 @@ export const config = {
       },
     };
   }),
+  beforeSession: async (_config, capabilities, specs) => {
+    await writeFile(
+      resolve(phaseDirectory, 'launch.json'),
+      `${JSON.stringify({ renderer, specs, capabilities }, null, 2)}\n`,
+      { flag: 'wx' }
+    );
+  },
   before: [
     async (_capabilities, specs, browser) => {
+      await writeFile(
+        resolve(phaseDirectory, 'session.json'),
+        `${JSON.stringify({ renderer, specs, sessionId: browser.sessionId, profile: browser.capabilities.chrome?.userDataDir, capabilities: browser.capabilities }, null, 2)}\n`,
+        { flag: 'wx' }
+      );
       await installWebGLDiagnostics(browser, TEMP_DIR, specs);
     },
     ...(Array.isArray(existingBefore)

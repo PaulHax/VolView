@@ -1,4 +1,4 @@
-name: WebGL startup order
+name: WebGL renderer startup
 on:
   pull_request:
 
@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        order: [adaptive-first, rendering-first]
+        order: [automatic-first, swiftshader-first]
     name: Headed Ubuntu (${{ matrix.order }})
     runs-on: ubuntu-24.04
     timeout-minutes: 20
