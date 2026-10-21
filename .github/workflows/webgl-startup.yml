@@ -1,4 +1,4 @@
-name: WebGL large-volume rendering
+name: WebGL software mode comparison
 on:
   pull_request:
 
@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        order: [automatic-first, swiftshader-first]
+        order: [driver-first, webgl-first]
     name: Headed Ubuntu (${{ matrix.order }})
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -46,7 +46,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: webgl-large-volume-${{ matrix.order }}-attempt-${{ github.run_attempt }}
+          name: webgl-software-mode-${{ matrix.order }}-attempt-${{ github.run_attempt }}
           path: |
             .tmp/webgl-startup
             .tmp/runs

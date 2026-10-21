@@ -8,6 +8,8 @@ import { startResourceSampling } from './sample-webgl-resources.mjs';
 const sequences = {
   'automatic-first': ['automatic', 'swiftshader'],
   'swiftshader-first': ['swiftshader', 'automatic'],
+  'driver-first': ['swiftshader', 'swiftshader-webgl'],
+  'webgl-first': ['swiftshader-webgl', 'swiftshader'],
 };
 const order = process.argv[2];
 if (!Object.hasOwn(sequences, order)) {

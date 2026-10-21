@@ -19,8 +19,14 @@ if (
 
 const existingBefore = chromeConfig.before;
 const renderer = process.env.WEBGL_STARTUP_RENDERER;
-if (renderer !== 'automatic' && renderer !== 'swiftshader') {
-  throw new Error('WEBGL_STARTUP_RENDERER must be automatic or swiftshader.');
+if (
+  renderer !== 'automatic' &&
+  renderer !== 'swiftshader' &&
+  renderer !== 'swiftshader-webgl'
+) {
+  throw new Error(
+    'WEBGL_STARTUP_RENDERER must be automatic, swiftshader or swiftshader-webgl.'
+  );
 }
 const phaseDirectory = process.env.WEBGL_STARTUP_PHASE_DIRECTORY;
 if (
@@ -43,8 +49,8 @@ export const config = {
     );
     if (process.env.HEADLESS === '1') args.push('--headless=new');
     args.push('--enable-logging', '--v=1');
-    if (renderer === 'swiftshader') {
-      args.push('--use-gl=angle', '--use-angle=swiftshader');
+    if (renderer !== 'automatic') {
+      args.push('--use-gl=angle', `--use-angle=${renderer}`);
     }
     if (args.some((argument) => argument.startsWith('--user-data-dir'))) {
       throw new Error(
