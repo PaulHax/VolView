@@ -1,0 +1,52 @@
+name: WebGL startup order
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    if: github.repository == 'PaulHax/VolView' && github.head_ref == 'webgl-startup-order'
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        order: [adaptive-first, rendering-first]
+    name: Headed Ubuntu (${{ matrix.order }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      VITE_SHOW_SAMPLE_DATA: true
+      CHROME_VERSION: 155.0.8059.84
+      HEADED: 1
+      CI: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Cache test datasets
+        uses: actions/cache@v4
+        with:
+          path: .tmp/datasets
+          key: e2e-datasets-${{ hashFiles('tests/datasets.ts') }}
+          restore-keys: e2e-datasets-
+      - name: Install Xvfb
+        run: sudo apt-get install xvfb
+      - name: Build
+        run: npm run build
+      - name: Run ordered browser sessions
+        run: xvfb-run --server-args="-screen 0, 1400x1000x24" --auto-servernum node scripts/run-webgl-startup.mjs "${{ matrix.order }}"
+      - name: Preserve results and browser logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webgl-startup-${{ matrix.order }}-attempt-${{ github.run_attempt }}
+          path: |
+            .tmp/webgl-startup
+            .tmp/runs
+          retention-days: 7
