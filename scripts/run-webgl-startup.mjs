@@ -3,6 +3,7 @@ import { createWriteStream, existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { finished } from 'node:stream/promises';
+import { startResourceSampling } from './sample-webgl-resources.mjs';
 
 const sequences = {
   'automatic-first': ['automatic', 'swiftshader'],
@@ -25,7 +26,9 @@ if (!Number.isInteger(basePort) || basePort < 1024 || basePort > 65529) {
 }
 const results = [];
 const profiles = new Set();
-const spec = './tests/specs/annotation-mints-segment.e2e.ts';
+const spec =
+  process.env.WEBGL_STARTUP_SPEC ??
+  './tests/specs/annotation-mints-segment.e2e.ts';
 
 for (const [index, renderer] of sequence.entries()) {
   const phase = `${index + 1}-${renderer}`;
@@ -57,6 +60,10 @@ for (const [index, renderer] of sequence.entries()) {
     ],
     { env, stdio: ['ignore', 'pipe', 'pipe'] }
   );
+  const stopSampling = startResourceSampling(
+    resolve(phaseDirectory, 'resources.jsonl'),
+    child.pid
+  );
   for (const stream of [child.stdout, child.stderr]) {
     stream.on('data', (chunk) => {
       process.stdout.write(chunk);
@@ -66,7 +73,7 @@ for (const [index, renderer] of sequence.entries()) {
   const outcome = await new Promise((accept, reject) => {
     child.once('error', reject);
     child.once('close', (code, signal) => accept({ code, signal }));
-  });
+  }).finally(stopSampling);
   log.end();
   await finished(log);
   const sessionPath = resolve(phaseDirectory, 'session.json');
