@@ -2,6 +2,7 @@ import { config as chromeConfig } from './wdio.chrome.conf';
 
 export const config = {
   ...chromeConfig,
+  autoXvfb: false,
   capabilities: chromeConfig.capabilities.map((capability) => ({
     ...capability,
     ...(process.env.CHROME_VERSION
@@ -10,7 +11,10 @@ export const config = {
     'goog:chromeOptions': {
       ...capability['goog:chromeOptions'],
       args: [
-        ...capability['goog:chromeOptions'].args,
+        ...capability['goog:chromeOptions'].args.filter(
+          (argument) => !argument.startsWith('--headless')
+        ),
+        '--headless=new',
         '--use-gl=angle',
         '--use-angle=swiftshader-webgl',
       ],
