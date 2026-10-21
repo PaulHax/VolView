@@ -18,6 +18,7 @@ if (
 }
 
 const existingBefore = chromeConfig.before;
+const diagnosticsEnabled = process.env.WEBGL_STARTUP_DIAGNOSTICS !== '0';
 const renderer = process.env.WEBGL_STARTUP_RENDERER;
 if (
   renderer !== 'automatic' &&
@@ -48,7 +49,7 @@ export const config = {
       (argument) => !argument.startsWith('--headless')
     );
     if (process.env.HEADLESS === '1') args.push('--headless=new');
-    args.push('--enable-logging', '--v=1');
+    if (diagnosticsEnabled) args.push('--enable-logging', '--v=1');
     if (renderer !== 'automatic') {
       args.push('--use-gl=angle', `--use-angle=${renderer}`);
     }
@@ -75,7 +76,7 @@ export const config = {
   beforeSession: async (_config, capabilities, specs) => {
     await writeFile(
       resolve(phaseDirectory, 'launch.json'),
-      `${JSON.stringify({ renderer, specs, capabilities }, null, 2)}\n`,
+      `${JSON.stringify({ renderer, specs, diagnosticsEnabled, capabilities }, null, 2)}\n`,
       { flag: 'wx' }
     );
   },
@@ -86,7 +87,9 @@ export const config = {
         `${JSON.stringify({ renderer, specs, sessionId: browser.sessionId, profile: browser.capabilities.chrome?.userDataDir, capabilities: browser.capabilities }, null, 2)}\n`,
         { flag: 'wx' }
       );
-      await installWebGLDiagnostics(browser, TEMP_DIR, specs);
+      if (diagnosticsEnabled) {
+        await installWebGLDiagnostics(browser, TEMP_DIR, specs);
+      }
     },
     ...(Array.isArray(existingBefore)
       ? existingBefore

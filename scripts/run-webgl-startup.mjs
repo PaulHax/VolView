@@ -18,6 +18,7 @@ if (!Object.hasOwn(sequences, order)) {
   throw new Error(`Unknown renderer order: ${order}`);
 }
 const sequence = sequences[order];
+const diagnosticsEnabled = process.env.WEBGL_STARTUP_DIAGNOSTICS !== '0';
 
 const directory = resolve('.tmp/webgl-startup', order);
 if (existsSync(directory)) {
@@ -43,7 +44,7 @@ for (const [index, renderer] of sequence.entries()) {
   const startedAt = new Date().toISOString();
   const env = {
     ...process.env,
-    VOLVIEW_WEBGL_DIAGNOSTICS: '1',
+    VOLVIEW_WEBGL_DIAGNOSTICS: diagnosticsEnabled ? '1' : '0',
     VOLVIEW_E2E_PORT: String(port),
     VOLVIEW_E2E_AUX_PORT: String(port + 1),
     WEBGL_STARTUP_SPEC: spec,
@@ -51,9 +52,10 @@ for (const [index, renderer] of sequence.entries()) {
     WEBGL_STARTUP_PHASE_DIRECTORY: phaseDirectory,
     CHROME_LOG_FILE: resolve(phaseDirectory, 'chrome.log'),
   };
+  if (!diagnosticsEnabled) delete env.CHROME_LOG_FILE;
   await writeFile(
     resolve(phaseDirectory, 'phase.json'),
-    `${JSON.stringify({ order, phase, renderer, spec, startedAt, port, display: env.DISPLAY, chromeVersion: env.CHROME_VERSION, runnerImage: { os: env.ImageOS, version: env.ImageVersion } }, null, 2)}\n`
+    `${JSON.stringify({ order, phase, renderer, spec, diagnosticsEnabled, startedAt, port, display: env.DISPLAY, chromeVersion: env.CHROME_VERSION, runnerImage: { os: env.ImageOS, version: env.ImageVersion } }, null, 2)}\n`
   );
   const child = spawn(
     process.execPath,
@@ -64,10 +66,12 @@ for (const [index, renderer] of sequence.entries()) {
     ],
     { env, stdio: ['ignore', 'pipe', 'pipe'] }
   );
-  const stopSampling = startResourceSampling(
-    resolve(phaseDirectory, 'resources.jsonl'),
-    child.pid
-  );
+  const stopSampling = diagnosticsEnabled
+    ? startResourceSampling(
+        resolve(phaseDirectory, 'resources.jsonl'),
+        child.pid
+      )
+    : undefined;
   for (const stream of [child.stdout, child.stderr]) {
     stream.on('data', (chunk) => {
       process.stdout.write(chunk);
@@ -85,7 +89,10 @@ for (const [index, renderer] of sequence.entries()) {
     ? JSON.parse(await readFile(sessionPath, 'utf8'))
     : null;
   const profile = session?.profile;
-  const profileVerified = typeof profile === 'string' && !profiles.has(profile);
+  const profileVerified =
+    typeof profile === 'string' &&
+    profile.trim().length > 0 &&
+    !profiles.has(profile);
   if (profile) profiles.add(profile);
   results.push({
     phase,
