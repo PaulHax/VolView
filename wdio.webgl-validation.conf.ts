@@ -12,7 +12,7 @@ export const config = {
       args: [
         ...capability['goog:chromeOptions'].args,
         '--use-gl=angle',
-        '--use-angle=swiftshader',
+        '--use-angle=swiftshader-webgl',
       ],
       ...(process.env.CHROME_BINARY
         ? { binary: process.env.CHROME_BINARY }

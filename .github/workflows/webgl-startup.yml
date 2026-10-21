@@ -1,4 +1,4 @@
-name: WebGL startup validation
+name: WebGL-only full-suite validation
 on:
   pull_request:
 
@@ -6,20 +6,14 @@ permissions:
   contents: read
 
 jobs:
-  compare:
+  validate:
     if: github.repository == 'PaulHax/VolView' && github.head_ref == 'webgl-startup-order'
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        order: [automatic-then-webgl, webgl-then-automatic]
-    name: Headed Ubuntu (${{ matrix.order }})
+    name: Headed Ubuntu (WebGL-only full suite)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       VITE_SHOW_SAMPLE_DATA: true
       CHROME_VERSION: 155.0.8059.84
-      WEBGL_STARTUP_SPEC: ./tests/specs/annotation-mints-segment.e2e.ts
       HEADED: 1
       CI: true
     steps:
@@ -40,14 +34,42 @@ jobs:
         run: sudo apt-get install xvfb
       - name: Build
         run: npm run build
-      - name: Run ordered browser sessions
-        run: xvfb-run --server-args="-screen 0, 1400x1000x24" --auto-servernum node scripts/run-webgl-startup.mjs "${{ matrix.order }}"
-      - name: Preserve results and browser logs
+      - name: Record validation configuration
+        run: |
+          node --import tsx --input-type=module <<'NODE'
+          import { mkdir, writeFile } from 'node:fs/promises';
+          import { config } from './wdio.webgl-validation.conf.ts';
+          import { DOWNLOAD_TIMEOUT } from './wdio.shared.conf.ts';
+          await mkdir('.tmp/webgl-validation', { recursive: true });
+          await writeFile('.tmp/webgl-validation/metadata.json', JSON.stringify({
+            recordedAt: new Date().toISOString(),
+            runner: {
+              os: process.env.RUNNER_OS,
+              architecture: process.env.RUNNER_ARCH,
+              imageOS: process.env.ImageOS,
+              imageVersion: process.env.ImageVersion,
+            },
+            runId: process.env.GITHUB_RUN_ID,
+            attempt: process.env.GITHUB_RUN_ATTEMPT,
+            workflowSha: process.env.GITHUB_SHA,
+            requestedCapabilities: config.capabilities,
+            specs: config.specs,
+            maxInstances: config.maxInstances,
+            downloadTimeout: DOWNLOAD_TIMEOUT,
+            waitforTimeout: config.waitforTimeout,
+            connectionRetryTimeout: config.connectionRetryTimeout,
+            connectionRetryCount: config.connectionRetryCount,
+            mochaTimeout: config.mochaOpts?.timeout,
+          }, null, 2) + '\n', { flag: 'wx' });
+          NODE
+      - name: Run full browser suite
+        run: xvfb-run --server-args="-screen 0, 1400x1000x24" --auto-servernum npx wdio run ./wdio.webgl-validation.conf.ts
+      - name: Preserve results and configuration
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: webgl-startup-validation-${{ matrix.order }}-attempt-${{ github.run_attempt }}
+          name: webgl-only-validation-ubuntu-attempt-${{ github.run_attempt }}
           path: |
-            .tmp/webgl-startup
+            .tmp/webgl-validation
             .tmp/runs
           retention-days: 7
