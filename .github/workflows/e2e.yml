@@ -4,6 +4,7 @@ on:
 
 jobs:
   test:
+    if: github.repository != 'PaulHax/VolView' || github.head_ref != 'webgl-startup-order'
     strategy:
       fail-fast: false
       matrix:
