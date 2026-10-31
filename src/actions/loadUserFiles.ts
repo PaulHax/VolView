@@ -34,6 +34,7 @@ import { useViewStore } from '@/src/store/views';
 const BASE_MODALITY_TYPES = {
   CT: { priority: 3 },
   MR: { priority: 3 },
+  OPT: { priority: 3 },
   US: { priority: 2 },
   DX: { priority: 1 },
 } as const;
@@ -48,7 +49,8 @@ function findBaseDicom(loadableDataSources: Array<LoadableResult>) {
   const baseDicomVolumes = dicoms
     .map((dicomSource) => {
       const volumeInfo = dicomStore.volumeInfo[dicomSource.dataID];
-      const modality = volumeInfo?.Modality as keyof typeof BASE_MODALITY_TYPES;
+      const modality =
+        volumeInfo?.Modality?.trim() as keyof typeof BASE_MODALITY_TYPES;
       if (modality in BASE_MODALITY_TYPES)
         return {
           dicomSource,
@@ -135,7 +137,9 @@ function filterMatchingNames(
     .filter(({ name }) => {
       if (!name) return false;
       const hasExtension = isSegmentation(extension, name);
-      const nameMatchesPrimary = name.startsWith(primaryNamePrefix);
+      const nameMatchesPrimary =
+        name.startsWith(primaryNamePrefix) &&
+        /^[._-]/.test(name.slice(primaryNamePrefix.length));
       return hasExtension && nameMatchesPrimary;
     })
     .map(({ importResult }) => importResult);
@@ -270,6 +274,26 @@ export type DataSourceImporter = (
   sources: DataSource[]
 ) => Promise<ImportDataSourcesResult[]>;
 
+export function showImportedData(results: ImportResult[]) {
+  const loadDataStore = useLoadDataStore();
+
+  const primaryDataSource = findBaseDataSource(
+    results,
+    loadDataStore.segmentationExtension,
+    loadDataStore.layerExtension
+  );
+  if (!primaryDataSource || !isVolumeResult(primaryDataSource)) return;
+
+  useViewStore().setDataForAllViews(toDataSelection(primaryDataSource));
+  autoLayerDicoms(primaryDataSource, results);
+  autoLayerByName(primaryDataSource, results, loadDataStore.layerExtension);
+  loadSegmentations(
+    primaryDataSource,
+    results,
+    loadDataStore.segmentationExtension
+  );
+}
+
 type LoadDataSourcesOutcome = {
   datasetIds: string[];
   hadErrors: boolean;
@@ -305,27 +329,7 @@ function loadDataSourcesWithOutcome(
       .every((view) => !view.dataID);
 
     if (succeeded.length && shouldShowData) {
-      const primaryDataSource = findBaseDataSource(
-        succeeded,
-        loadDataStore.segmentationExtension,
-        loadDataStore.layerExtension
-      );
-
-      if (isVolumeResult(primaryDataSource)) {
-        const selection = toDataSelection(primaryDataSource);
-        viewStore.setDataForAllViews(selection);
-        autoLayerDicoms(primaryDataSource, succeeded);
-        autoLayerByName(
-          primaryDataSource,
-          succeeded,
-          loadDataStore.layerExtension
-        );
-        loadSegmentations(
-          primaryDataSource,
-          succeeded,
-          loadDataStore.segmentationExtension
-        );
-      } // else must be primaryDataSource.type === 'model', which are not dealt with here yet
+      showImportedData(succeeded);
     }
 
     // Every error importDataSources returns is unreported by contract
@@ -386,16 +390,28 @@ export function loadVolumeDataSources(sources: DataSource[]) {
   );
 }
 
+let pendingFileInput: HTMLInputElement | undefined;
+
 export function openFileDialog() {
   return new Promise<File[]>((resolve) => {
+    pendingFileInput?.remove();
     const fileEl = document.createElement('input');
+    pendingFileInput = fileEl;
     fileEl.setAttribute('type', 'file');
     fileEl.setAttribute('multiple', 'multiple');
     fileEl.setAttribute('accept', '*');
-    fileEl.addEventListener('change', () => {
-      const files = [...(fileEl.files ?? [])];
-      resolve(files);
-    });
+    fileEl.hidden = true;
+    fileEl.addEventListener(
+      'change',
+      () => {
+        const files = [...(fileEl.files ?? [])];
+        fileEl.remove();
+        if (pendingFileInput === fileEl) pendingFileInput = undefined;
+        resolve(files);
+      },
+      { once: true }
+    );
+    document.body.appendChild(fileEl);
     fileEl.click();
   });
 }
@@ -410,7 +426,10 @@ export async function loadUserPromptedFiles() {
   return loadFiles(files);
 }
 
-function urlsToDataSources(urls: string[], names: string[] = []): DataSource[] {
+export function urlsToDataSources(
+  urls: string[],
+  names: string[] = []
+): DataSource[] {
   return urls.map((url, idx) => {
     const defaultName =
       basename(parseUrl(url, window.location.href).pathname) || url;

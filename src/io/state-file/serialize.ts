@@ -232,6 +232,7 @@ export function normalizeManifest(manifest: Manifest, zip: JSZip) {
     'isActiveViewMaximized',
     'viewByID',
     'layout',
+    'currentLayoutName',
     'layoutSlots',
   ]);
   const invalidViewByID =
@@ -247,6 +248,7 @@ export function normalizeManifest(manifest: Manifest, zip: JSZip) {
   // is assembled from the parsed pieces, so nothing is validated (or
   // deep-copied) twice.
   const optionalRoots = [
+    'layerDisplay',
     'tools',
     'segments',
     'selectedSegment',
@@ -255,6 +257,7 @@ export function normalizeManifest(manifest: Manifest, zip: JSZip) {
     'viewByID',
     'primarySelection',
     'layout',
+    'currentLayoutName',
     'layoutSlots',
   ] as const;
   const optionalEntries = optionalRoots.flatMap((key) => {

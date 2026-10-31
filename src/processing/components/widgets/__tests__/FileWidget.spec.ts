@@ -46,7 +46,8 @@ describe('FileWidget optional source refs', () => {
       global,
     });
 
-    expect(wrapper.get('.key-text').text()).toBe('Active dataset');
+    expect(wrapper.get('.key-text').text()).toBe('inputVolume');
+    expect(wrapper.get('.source-caption').text()).toBe('Active dataset');
     expect(wrapper.get('.input-key').text()).toContain('mdi-image-outline');
     expect(wrapper.get('.input-value').text()).not.toContain(
       'mdi-image-outline'
@@ -57,7 +58,8 @@ describe('FileWidget optional source refs', () => {
   it('renders an absent optional annotations input as an intentional omission', () => {
     const wrapper = mountWidget(false);
 
-    expect(wrapper.get('.key-text').text()).toBe('Annotations (optional)');
+    expect(wrapper.get('.key-text').text()).toBe('inputAnnotations (optional)');
+    expect(wrapper.get('.source-caption').text()).toBe('Annotations');
     expect(wrapper.get('.input-value').text()).toBe('Not provided');
     expect(wrapper.text()).not.toMatch(/place a ruler/i);
     expect(wrapper.get('.input-value').classes()).not.toContain('text-error');
@@ -66,7 +68,8 @@ describe('FileWidget optional source refs', () => {
   it('keeps the placement instruction for a required annotations input', () => {
     const wrapper = mountWidget(true);
 
-    expect(wrapper.get('.key-text').text()).toBe('Annotations');
+    expect(wrapper.get('.key-text').text()).toBe('inputAnnotations');
+    expect(wrapper.get('.source-caption').text()).toBe('Annotations');
     expect(wrapper.get('.input-value').classes()).toContain('text-error');
     expect(wrapper.get('.input-value').text()).toMatch(/place a ruler/i);
   });
@@ -97,7 +100,7 @@ describe('FileWidget segmentation inputs', () => {
     (multiple) => {
       const wrapper = mountLabelmap(labelmapParam({ multiple }));
 
-      expect(wrapper.get('.key-text').text()).toBe(
+      expect(wrapper.get('.source-caption').text()).toBe(
         'Segmentation on active dataset'
       );
     }
@@ -109,7 +112,7 @@ describe('FileWidget segmentation inputs', () => {
       { boundType: 'labelmap' }
     );
 
-    expect(wrapper.get('.key-text').text()).toBe(
+    expect(wrapper.get('.source-caption').text()).toBe(
       'Segmentation on active dataset'
     );
   });
@@ -119,7 +122,7 @@ describe('FileWidget segmentation inputs', () => {
       labelmapParam({ accepts: ['image'], multiple: true })
     );
 
-    expect(wrapper.get('.key-text').text()).toBe('Active dataset');
+    expect(wrapper.get('.source-caption').text()).toBe('Active dataset');
   });
 
   it.each([false, true])(
@@ -131,6 +134,41 @@ describe('FileWidget segmentation inputs', () => {
 
       expect(wrapper.get('.input-value').text()).toBe(
         'Paint a segment on the current image first.'
+      );
+    }
+  );
+});
+
+describe('FileWidget ordered image inputs', () => {
+  it('labels a layer slot and shows its bound volume name', () => {
+    const wrapper = mountLabelmap(labelmapParam({ accepts: ['image'] }), {
+      binding: 'bound',
+      imageIndex: 2,
+      boundName: 'Perfusion volume',
+    });
+
+    expect(wrapper.get('.source-caption').text()).toBe('Image layer 2');
+    expect(wrapper.get('.input-value').text()).toBe('Perfusion volume');
+  });
+
+  it.each([false, true])(
+    'renders an absent layer with required=%s',
+    (required) => {
+      const wrapper = mountLabelmap(
+        labelmapParam({ accepts: ['image'], required }),
+        {
+          binding: 'no-layer',
+          imageIndex: 1,
+        }
+      );
+
+      expect(wrapper.get('.input-value').text()).toBe(
+        required
+          ? 'Attach another image layer to the active dataset first.'
+          : 'Not provided'
+      );
+      expect(wrapper.get('.input-value').classes().includes('text-error')).toBe(
+        required
       );
     }
   );

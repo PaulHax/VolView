@@ -37,7 +37,7 @@ Use a 2D array of view type strings to specify both the grid layout and which vi
 }
 ```
 
-Available view type strings: `"axial"`, `"coronal"`, `"sagittal"`, `"volume"`, `"oblique"`
+Available view type strings: `"axial"`, `"coronal"`, `"sagittal"`, `"volume"`, `"oblique"`, `"enface"`
 
 ### 2. Simple Grid (gridSize)
 
@@ -111,6 +111,7 @@ View object properties:
 - 2D views: `type: "2D"`, `orientation: "Axial" | "Coronal" | "Sagittal"`, `name` (optional)
 - 3D views: `type: "3D"`, `viewDirection` (optional), `viewUp` (optional), `name` (optional)
 - Oblique views: `type: "Oblique"`, `name` (optional)
+- En face views: `type: "EnFace"`, `name` (optional)
 
 ### Multiple Layouts Example
 
@@ -147,7 +148,12 @@ Use `disabledViewTypes` to prevent certain view types from being available in th
 }
 ```
 
-This removes the specified view types from the dropdown menu and replaces them in the default layout with allowed types. Valid values: `"2D"`, `"3D"`, `"Oblique"`
+Valid values: `"2D"`, `"3D"`, `"Oblique"`, `"EnFace"`.
+
+Disabled types are replaced in the default layout with allowed types. Disabled 2D,
+3D and Oblique types are removed from the view type dropdown. A disabled En face
+option stays visible with a tooltip explaining that the current configuration
+disables it.
 
 ## Segments
 
@@ -248,25 +254,19 @@ hdf5, iwi.cbor, mha, nii, nii.gz, nrrd, vtk
 
 ## Automatic Layers and Segmentations by File Name
 
-When loading multiple files, VolView can automatically associate related images based on file naming patterns.
-Example: `base.[extension].nrrd` will match `base.nii`.
+When loading non-DICOM images together from disk, a ZIP archive, or URL parameters, VolView can associate them by filename.
 
-The extension must appear anywhere in the filename after splitting by dots, and the filename must start with the same prefix as the base image (everything before the first dot). Files matching `base.[extension]...` will be associated with a base image named `base.*`.
+A matching filename must contain the configured extension as a dot-separated part. It must also start with the base image's prefix (everything before the first dot), followed by a dot, dash, or underscore.
 
-**Ordering:** When multiple layers match a base image, they are sorted alphabetically by filename and added to the stack in that order. To control the stacking order explicitly, you could use numeric prefixes in your filenames. Matching segmentation files each add their labels as segments to the base image's one segmentation.
+For `segmentationExtension: "seg"` and a base image named `patient001.nrrd`:
 
-For example, with a base image `patient001.nrrd`:
-
-- Layers (sorted alphabetically): `patient001.layer.1.pet.nii`, `patient001.layer.2.ct.mha`, `patient001.layer.3.overlay.vtk`
-- Segmentations: `patient001.seg.1.tumor.nii.gz`, `patient001.seg.2.lesion.mha`
-
-Both features default to `''` which disables them.
+- `patient001.seg.nii.gz` matches, even though the image formats differ.
+- `patient001-tumor.seg.nrrd` and `patient001_tumor.seg.nrrd` both match.
+- `patient0012.seg.nrrd` does not match because the base prefix is followed by a digit.
 
 ### Segmentations
 
-Use `segmentationExtension` to automatically import the labels of matching non-DICOM images as segments.
-For example, `myFile.seg.nrrd` adds its labels as segments on `myFile.nii`.
-Defaults to `''` which disables matching.
+`segmentationExtension` defaults to `seg`, so matching works without a configuration file. Each matching file adds its labels as segments to the base image's one segmentation. Set this option to `''` to disable matching, or use another value for a different naming convention.
 
 ```json
 {
@@ -278,8 +278,7 @@ Defaults to `''` which disables matching.
 
 ### Layering
 
-Use `layerExtension` to automatically layer matching non-DICOM images on top of the base image. For example, `myImage.layer.nii` is layered on top of `myImage.nii`.
-Defaults to `''` which disables matching.
+`layerExtension` defaults to `''`, which disables matching. Set it to a naming marker such as `layer` to load matching images as layers above the base image:
 
 ```json
 {
@@ -288,6 +287,8 @@ Defaults to `''` which disables matching.
   }
 }
 ```
+
+Matching layers are sorted alphabetically by filename and added to the stack in that order. Numeric filename parts can control this order: for `patient001.nrrd`, `patient001.layer.1.pet.nii` is added before `patient001.layer.2.ct.mha`.
 
 ## Renamed `io` Keys
 

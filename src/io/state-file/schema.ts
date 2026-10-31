@@ -1,3 +1,4 @@
+import { DEFAULT_LAYER_PRESET } from '@/src/vtk/LayerColorPresets';
 import JSZip from 'jszip';
 import { z } from 'zod';
 import type { Vector3 } from '@kitware/vtk.js/types';
@@ -20,11 +21,13 @@ import type {
   SliceConfig,
   WindowLevelConfig,
   LayersConfig,
+  LayerDisplayConfig,
   VolumeColorConfig,
   CinePlaybackViewConfig,
 } from '@/src/store/view-configs/types';
 import type { LPSAxis } from '@/src/types/lps';
 import type { Segment as SegmentModel } from '@/src/segmentation/segment';
+import type { EnFaceViewConfig } from '@/src/enface/store';
 import type {
   ColorBy,
   ColorTransferFunction,
@@ -32,7 +35,6 @@ import type {
   OpacityGaussians,
   OpacityPoints,
   OpacityNodes,
-  ColoringConfig,
   CVRConfig,
   BlendConfig,
 } from '@/src/types/views';
@@ -137,8 +139,11 @@ const Vector3 = z.tuple([
 ]) satisfies z.ZodType<Vector3>;
 
 type AutoRangeKeys = keyof typeof WLAutoRanges;
+
 const WindowLevelConfig = z
   .object({
+    preset: z.string().default('Grayscale'),
+    visibility: z.boolean().default(true),
     width: z.number().optional(),
     level: z.number().optional(),
     auto: z.string() as z.ZodType<AutoRangeKeys>,
@@ -169,6 +174,7 @@ const SliceConfig = z.object({
 }) satisfies z.ZodType<SliceConfig>;
 
 const CameraConfig = z.object({
+  autoFit: z.boolean().optional(),
   parallelScale: z.number().optional(),
   position: Vector3.optional(),
   focalPoint: Vector3.optional(),
@@ -228,12 +234,6 @@ const ColorTransferFunction = z.object({
   mappingRange: z.tuple([z.number(), z.number()]),
 }) satisfies z.ZodType<ColorTransferFunction>;
 
-const ColoringConfig = z.object({
-  colorBy: ColorBy,
-  transferFunction: ColorTransferFunction,
-  opacityFunction: OpacityFunction,
-}) satisfies z.ZodType<ColoringConfig>;
-
 const CVRConfig = z.object({
   enabled: z.boolean(),
   lightFollowsCamera: z.boolean(),
@@ -260,16 +260,33 @@ const BlendConfig = z.object({
   visibility: z.boolean(),
 }) satisfies z.ZodType<BlendConfig>;
 
+const LayerColorTransferFunction = ColorTransferFunction.extend({
+  preset: z.string().default(DEFAULT_LAYER_PRESET),
+});
+
 const LayersConfig = z.object({
-  colorBy: ColorBy,
-  transferFunction: ColorTransferFunction,
+  transferFunction: LayerColorTransferFunction,
   opacityFunction: OpacityFunction,
   blendConfig: BlendConfig,
+  transparentBackground: z.boolean().default(true),
 }) satisfies z.ZodType<LayersConfig>;
+
+const LayerDisplayConfig = LayerColorTransferFunction.extend({
+  opacity: z.number(),
+  visibility: z.boolean().default(true),
+  transparentBackground: z.boolean().default(true),
+}) satisfies z.ZodType<LayerDisplayConfig>;
 
 const CinePlaybackViewConfig = z.object({
   frame: z.number(),
 }) satisfies z.ZodType<CinePlaybackViewConfig>;
+
+const EnFaceViewConfig = z.object({
+  axis: z.union([z.literal(0), z.literal(1), z.literal(2)]),
+  method: z.enum(['mean', 'max', 'sum']),
+  depthStart: z.number().int().nonnegative(),
+  depthEnd: z.number().int().nonnegative().nullable(),
+}) satisfies z.ZodType<EnFaceViewConfig>;
 
 const ViewConfig = z.object({
   window: WindowLevelConfig.optional(),
@@ -278,6 +295,7 @@ const ViewConfig = z.object({
   camera: CameraConfig.optional(),
   volumeColorConfig: VolumeColorConfig.optional(),
   cinePlayback: CinePlaybackViewConfig.optional(),
+  enFace: EnFaceViewConfig.optional(),
 });
 
 export type ViewConfig = z.infer<typeof ViewConfig>;
@@ -285,7 +303,12 @@ export type ViewConfig = z.infer<typeof ViewConfig>;
 const View = z.object({
   id: z.string(),
   name: z.string(),
-  type: z.union([z.literal('2D'), z.literal('3D'), z.literal('Oblique')]),
+  type: z.union([
+    z.literal('2D'),
+    z.literal('3D'),
+    z.literal('Oblique'),
+    z.literal('EnFace'),
+  ]),
   dataID: z.string().optional().nullable(),
   options: z.record(z.string(), z.string()).optional(),
   config: z.record(z.string(), ViewConfig).optional(),
@@ -515,8 +538,10 @@ export const ManifestSchema = z.object({
   viewByID: z.record(z.string(), View).optional(),
   primarySelection: z.string().optional(),
   layout: Layout.optional(),
+  currentLayoutName: z.string().nullable().optional(),
   layoutSlots: z.array(z.string()).optional(),
   parentToLayers: ParentToLayers.optional(),
+  layerDisplay: z.record(z.string(), LayerDisplayConfig).optional(),
 });
 
 export type Manifest = z.infer<typeof ManifestSchema>;

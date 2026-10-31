@@ -2,8 +2,15 @@
   <div class="file-widget">
     <div class="input-key text-caption text-medium-emphasis">
       <v-icon size="16">{{ kind.icon }}</v-icon>
-      <span class="key-text">
-        {{ kind.caption }}{{ param.required ? '' : ' (optional)' }}
+      <span>
+        <span class="key-text">
+          {{ fieldLabel(param) }}{{ param.required ? '' : ' (optional)' }}
+        </span>
+        <span
+          v-if="fieldLabel(param) !== kind.caption"
+          class="source-caption"
+          >{{ kind.caption }}</span
+        >
       </span>
     </div>
     <div
@@ -30,6 +37,7 @@
 import { computed } from 'vue';
 import type { VolViewTaskParameter, InputValue } from '@/backend-contract';
 import { TYPE_TAG_ANNOTATIONS, TYPE_TAG_LABELMAP } from '@/backend-contract';
+import { fieldLabel } from '@/src/processing/engine/formModel';
 import {
   bindingStateMessage,
   type SourceRefBindingState,
@@ -43,6 +51,7 @@ const props = defineProps<{
   binding?: SourceRefBindingState;
   boundName?: string;
   boundType?: BoundSourceRefType;
+  imageIndex?: number;
   warning?: string;
 }>();
 
@@ -80,7 +89,15 @@ const kind = computed(() => {
       ? props.param.accepts[0]
       : undefined;
   const type = props.boundType ?? declared;
-  return (type ? KINDS[type] : undefined) ?? IMAGE_KIND;
+  const declaredKind = type ? KINDS[type] : undefined;
+  if (declaredKind) return declaredKind;
+  return props.imageIndex && props.imageIndex > 0
+    ? {
+        ...IMAGE_KIND,
+        caption: `Image layer ${props.imageIndex}`,
+        noun: 'layer' as const,
+      }
+    : IMAGE_KIND;
 });
 
 const OPTIONAL_UNBOUND_STATES = new Set<SourceRefBindingState>([
@@ -88,6 +105,7 @@ const OPTIONAL_UNBOUND_STATES = new Set<SourceRefBindingState>([
   'no-segmentation',
   'no-annotations',
   'no-reference-input',
+  'no-layer',
 ]);
 
 // Missing optional inputs are an intentional task state, not an instruction
@@ -116,19 +134,28 @@ const boundDisplayName = computed(() =>
 <style scoped>
 .file-widget {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-columns: fit-content(50%) minmax(0, 1fr);
   column-gap: 20px;
   align-items: start;
   padding: 2px 0;
 }
 .input-key {
   display: flex;
-  align-items: center;
+  min-width: 0;
+  align-items: flex-start;
   gap: 6px;
   line-height: 20px;
 }
 .input-key :deep(.v-icon) {
   flex: 0 0 auto;
+}
+.input-key > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.key-text,
+.source-caption {
+  display: block;
 }
 .input-value {
   min-width: 0;
