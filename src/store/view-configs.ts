@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import { getLayerId } from '@/src/utils/layers';
 
 import useViewSliceStore from './view-configs/slicing';
 import { useWindowingStore } from './view-configs/windowing';
@@ -6,7 +7,7 @@ import useLayerColoringStore from './view-configs/layers';
 import useViewCameraStore from './view-configs/camera';
 import useVolumeColoringStore from './view-configs/volume-coloring';
 import useCinePlaybackStore from './view-configs/cine-playback';
-import { useViewStore } from './views';
+import { useEnFaceViewStore } from '@/src/enface/store';
 import { StateFile, ViewConfig } from '../io/state-file/schema';
 
 /**
@@ -20,7 +21,7 @@ export const useViewConfigStore = defineStore('viewConfig', () => {
   const viewCameraStore = useViewCameraStore();
   const volumeColoringStore = useVolumeColoringStore();
   const cinePlaybackStore = useCinePlaybackStore();
-  const viewStore = useViewStore();
+  const enFaceViewStore = useEnFaceViewStore();
 
   const removeView = (viewID: string) => {
     viewSliceStore.removeView(viewID);
@@ -29,6 +30,7 @@ export const useViewConfigStore = defineStore('viewConfig', () => {
     viewCameraStore.removeView(viewID);
     volumeColoringStore.removeView(viewID);
     cinePlaybackStore.removeView(viewID);
+    enFaceViewStore.removeView(viewID);
   };
 
   const removeData = (dataID: string, viewID?: string) => {
@@ -38,6 +40,7 @@ export const useViewConfigStore = defineStore('viewConfig', () => {
     viewCameraStore.removeData(dataID, viewID);
     volumeColoringStore.removeData(dataID, viewID);
     cinePlaybackStore.removeData(dataID, viewID);
+    enFaceViewStore.removeData(dataID, viewID);
   };
 
   const serialize = (stateFile: StateFile) => {
@@ -47,6 +50,7 @@ export const useViewConfigStore = defineStore('viewConfig', () => {
     viewCameraStore.serialize(stateFile);
     volumeColoringStore.serialize(stateFile);
     cinePlaybackStore.serialize(stateFile);
+    enFaceViewStore.serialize(stateFile);
   };
 
   const deserialize = (
@@ -68,24 +72,41 @@ export const useViewConfigStore = defineStore('viewConfig', () => {
     viewCameraStore.deserialize(viewID, updatedConfig);
     volumeColoringStore.deserialize(viewID, updatedConfig);
     cinePlaybackStore.deserialize(viewID, updatedConfig);
+    enFaceViewStore.deserialize(viewID, updatedConfig);
   };
 
   const deserializeAll = (
     manifest: StateFile['manifest'],
     dataIDMap: Record<string, string>
   ) => {
-    if (!manifest.viewByID) return;
+    // Layer images are rebuilt after view settings are restored.
+    const configIDMap = { ...dataIDMap };
+    manifest.parentToLayers?.forEach(
+      ({ selectionKey, sourceSelectionKeys }) => {
+        const parent = dataIDMap[selectionKey];
+        if (!parent) return;
+        sourceSelectionKeys.forEach((sourceKey) => {
+          const source = dataIDMap[sourceKey];
+          if (!source) return;
+          configIDMap[getLayerId(selectionKey, sourceKey)] = getLayerId(
+            parent,
+            source
+          );
+        });
+      }
+    );
 
-    Object.entries(manifest.viewByID).forEach(([viewID, view]) => {
+    layerColoringStore.deserializeDisplayConfigs(
+      manifest.layerDisplay ?? {},
+      configIDMap
+    );
+
+    Object.entries(manifest.viewByID ?? {}).forEach(([viewID, view]) => {
       if (view.config) {
-        deserialize(viewID, view.config, dataIDMap);
+        deserialize(viewID, view.config, configIDMap);
       }
     });
   };
-
-  viewStore.LayoutViewReplacedEvent.on((oldViewID) => {
-    removeView(oldViewID);
-  });
 
   return {
     removeView,

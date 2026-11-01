@@ -79,6 +79,10 @@ export function createVolumeThumbnailer(size: number) {
     background: [0.2, 0.3, 0.4],
   });
   scene.setContainer(container);
+  const apiRenderWindow =
+    scene.getApiSpecificRenderWindow() as vtkOpenGLRenderWindow;
+  // The detached capture needs enough resolution for preset tiles on HiDPI displays.
+  apiRenderWindow.setSize(300, 300);
 
   const pipeline = createRenderingPipeline();
   const { actor, mapper } = pipeline;
@@ -109,7 +113,7 @@ export function createVolumeThumbnailer(size: number) {
       }
     },
     resetCameraWithOrientation(direction: Vector3, up: Vector3) {
-      const image = mapper.getInputData() as vtkImageData | null;
+      const image = mapper.getInputData<vtkImageData | null>();
       if (image) {
         const camera = renderer.getActiveCamera();
         const bounds = image.getBounds();
@@ -134,8 +138,6 @@ export function createVolumeThumbnailer(size: number) {
       renderer.removeVolume(actor);
       // scene.delete() deletes the API specific render window, so the context
       // can only be handed back afterwards
-      const apiRenderWindow =
-        scene.getApiSpecificRenderWindow() as vtkOpenGLRenderWindow;
       const loseContext = beginContextRelease(apiRenderWindow);
       const interactor = scene.getInteractor();
       const renderWindow = scene.getRenderWindow();

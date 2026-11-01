@@ -4,6 +4,7 @@ import { createEventHook } from '@vueuse/core';
 import type { Maybe } from '@/src/types';
 import type { Layout, LayoutItem } from '@/src/types/layout';
 import { useIdStore } from '@/src/store/id';
+import { useViewConfigStore } from '@/src/store/view-configs';
 import type { ViewInfo, ViewInfoInit, ViewType } from '@/src/types/views';
 import { DefaultNamedLayouts, getAvailableViews } from '@/src/config';
 import {
@@ -96,6 +97,19 @@ function generateLayoutFromGrid(size: [number, number]): Layout {
   };
 }
 
+function sameLayout(a: Layout, b: Layout): boolean {
+  return (
+    a.direction === b.direction &&
+    a.items.length === b.items.length &&
+    a.items.every((item, index) => {
+      const other = b.items[index];
+      if (item.type === 'slot')
+        return other.type === 'slot' && item.slotIndex === other.slotIndex;
+      return other.type === 'layout' && sameLayout(item, other);
+    })
+  );
+}
+
 function needsViewReplacement(existingView: ViewInfo, nextView: ViewInfoInit) {
   if (existingView.type !== nextView.type) return true;
 
@@ -120,7 +134,6 @@ export const useViewStore = defineStore('view', () => {
 
   const defaultNamedLayoutEntries = Object.entries(parsedDefaultLayouts);
   const firstLayout = defaultNamedLayoutEntries[0][1];
-  const firstLayoutName = defaultNamedLayoutEntries[0][0];
 
   const layout = ref<Layout>(firstLayout.layout);
   // which assigns view IDs to layout slots
@@ -132,7 +145,18 @@ export const useViewStore = defineStore('view', () => {
     ref<Record<string, { layout: Layout; views: ViewInfoInit[] }>>(
       parsedDefaultLayouts
     );
-  const currentLayoutName = ref<Maybe<string>>(firstLayoutName);
+  // A named layout is current when switching to it would only rename views.
+  const currentLayoutName = computed(
+    () =>
+      Object.entries(namedLayouts.value).find(
+        ([, named]) =>
+          sameLayout(named.layout, layout.value) &&
+          named.views.every((viewInit, index) => {
+            const view = viewByID[layoutSlots.value[index]];
+            return view && !needsViewReplacement(view, viewInit);
+          })
+      )?.[0]
+  );
 
   const isActiveViewMaximized = ref(false);
   const maximizedView = computed(() => {
@@ -206,7 +230,9 @@ export const useViewStore = defineStore('view', () => {
   }
 
   function addView(viewInit: ViewInfoInit) {
-    const id = idStore.nextId();
+    let id = idStore.nextId();
+    // Restored views retain their saved IDs without advancing the ID generator.
+    while (id in viewByID) id = idStore.nextId();
 
     const view = {
       id,
@@ -227,6 +253,7 @@ export const useViewStore = defineStore('view', () => {
     const newViewId = addView(viewInfo);
     layoutSlots.value[slotIndex] = newViewId;
     LayoutViewReplacedEvent.trigger(id, newViewId);
+    useViewConfigStore().removeView(id);
 
     if (activeView.value === id) {
       setActiveView(newViewId);
@@ -238,14 +265,9 @@ export const useViewStore = defineStore('view', () => {
   function applyLayoutChange(
     newLayout: Layout,
     options?: {
-      layoutName?: Maybe<string>;
       updateSlots?: (viewCount: number) => void;
     }
   ) {
-    if (options?.layoutName !== undefined) {
-      currentLayoutName.value = options.layoutName;
-    }
-
     isActiveViewMaximized.value = false;
 
     if (options?.updateSlots) {
@@ -269,7 +291,6 @@ export const useViewStore = defineStore('view', () => {
   }
 
   function setLayoutFromGrid(gridSize: [number, number]) {
-    currentLayoutName.value = null;
     setLayout(generateLayoutFromGrid(gridSize));
   }
 
@@ -283,7 +304,6 @@ export const useViewStore = defineStore('view', () => {
       throw new Error(`Named layout "${name}" not found`);
     }
     applyLayoutChange(namedLayout.layout, {
-      layoutName: name,
       updateSlots: () => {
         namedLayout.views.forEach((viewInit, index) => {
           if (index < layoutSlots.value.length) {
@@ -374,7 +394,9 @@ export const useViewStore = defineStore('view', () => {
     }
 
     if (manifest.viewByID) {
+      const viewConfigs = useViewConfigStore();
       viewIDs.value.forEach((key) => {
+        viewConfigs.removeView(key);
         delete viewByID[key];
       });
 

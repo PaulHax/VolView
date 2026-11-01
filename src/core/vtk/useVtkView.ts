@@ -11,13 +11,14 @@ import vtkRenderWindowInteractor from '@kitware/vtk.js/Rendering/Core/RenderWind
 import vtkRenderer from '@kitware/vtk.js/Rendering/Core/Renderer';
 import vtkOpenGLRenderWindow from '@kitware/vtk.js/Rendering/OpenGL/RenderWindow';
 import vtkWidgetManager from '@kitware/vtk.js/Widgets/Core/WidgetManager';
+import type { Bounds } from '@kitware/vtk.js/types';
 import { useElementSize } from '@vueuse/core';
 import {
   inject,
   MaybeRef,
   onScopeDispose,
   unref,
-  watchEffect,
+  watch,
   watchPostEffect,
 } from 'vue';
 
@@ -37,7 +38,7 @@ export function useWebGLRenderWindow(
 
     renderWindowView.setContainer(el);
     onCleanup(() => {
-      renderWindowView.setContainer(null as unknown as HTMLElement);
+      renderWindowView.setContainer(null);
     });
   });
 
@@ -86,11 +87,32 @@ export function useWidgetManager(renderer: vtkRenderer) {
   return manager;
 }
 
-export function useVtkView(container: MaybeRef<Maybe<HTMLElement>>): View {
+type VtkViewOptions = {
+  separateImageLayer?: boolean;
+  clippingBounds?: MaybeRef<Bounds | undefined>;
+};
+
+export function useVtkView(
+  container: MaybeRef<Maybe<HTMLElement>>,
+  { separateImageLayer = false, clippingBounds }: VtkViewOptions = {}
+): View {
   const parent = inject(VtkRenderWindowParentContext, null);
   const renderer = vtkRenderer.newInstance();
   const renderWindow = vtkRenderWindow.newInstance();
   renderWindow.addRenderer(renderer);
+
+  // Separate passes composite segmentations and widgets over the image layers,
+  // while retaining order-independent transparency within each renderer.
+  const imageRenderer = separateImageLayer
+    ? vtkRenderer.newInstance({ interactive: false })
+    : renderer;
+  if (separateImageLayer) {
+    imageRenderer.setActiveCamera(renderer.getActiveCamera());
+    imageRenderer.setBackground(0, 0, 0);
+    renderer.setLayer(1);
+    renderWindow.setNumberOfLayers(2);
+    renderWindow.addRenderer(imageRenderer);
+  }
 
   let disposed = false;
 
@@ -156,6 +178,11 @@ export function useVtkView(container: MaybeRef<Maybe<HTMLElement>>): View {
   onVTKEvent(renderer, 'onModified', () => {
     requestRender();
   });
+  if (separateImageLayer) {
+    onVTKEvent(imageRenderer, 'onModified', () => {
+      requestRender();
+    });
+  }
 
   // set size
   const setSize = (width: number, height: number) => {
@@ -164,7 +191,7 @@ export function useVtkView(container: MaybeRef<Maybe<HTMLElement>>): View {
     const scaledWidth = Math.max(1, width * globalThis.devicePixelRatio);
     const scaledHeight = Math.max(1, height * globalThis.devicePixelRatio);
     renderWindowView.setSize(scaledWidth, scaledHeight);
-    renderer.resetCameraClippingRange();
+    imageRenderer.resetCameraClippingRange(unref(clippingBounds));
 
     parent?.renderWindowView.resizeFromChildRenderWindows();
     parent?.renderWindow.render();
@@ -172,15 +199,17 @@ export function useVtkView(container: MaybeRef<Maybe<HTMLElement>>): View {
   };
 
   const { width, height } = useElementSize(container);
-  watchEffect(() => {
-    setSize(width.value, height.value);
-  });
+  watch([width, height], ([w, h]) => setSize(w, h), { immediate: true });
 
   // cleanup
   onScopeDispose(() => {
     deferredRender.cancel();
 
     renderWindow.removeRenderer(renderer);
+    if (separateImageLayer) {
+      renderWindow.removeRenderer(imageRenderer);
+      imageRenderer.delete();
+    }
 
     renderer.delete();
     renderWindow.delete();
@@ -189,6 +218,7 @@ export function useVtkView(container: MaybeRef<Maybe<HTMLElement>>): View {
 
   return {
     renderer,
+    imageRenderer,
     renderWindow,
     interactor,
     renderWindowView,
