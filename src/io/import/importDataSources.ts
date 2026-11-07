@@ -12,6 +12,7 @@ import {
   ImportDataSourcesResult,
   asIntermediateResult,
   StateFileSetupResult,
+  isVolumeResult,
 } from '@/src/io/import/common';
 import {
   DataSource,
@@ -29,9 +30,12 @@ import handleRemoteManifest from '@/src/io/import/processors/remoteManifest';
 import {
   restoreStateFile,
   completeStateFileRestore,
+  type RestoreOptions,
 } from '@/src/io/import/processors/restoreStateFile';
 import updateFileMimeType from '@/src/io/import/processors/updateFileMimeType';
-import handleConfig from '@/src/io/import/processors/handleConfig';
+import handleConfig, {
+  InvalidConfigError,
+} from '@/src/io/import/processors/handleConfig';
 import {
   applyPreStateConfig,
   applyPostStateConfig,
@@ -49,6 +53,8 @@ import { useDatasetStore } from '@/src/store/datasets';
 import { useDICOMStore } from '@/src/store/datasets-dicom';
 import { useMessageStore } from '@/src/store/messages';
 import { shouldSkipImportSource } from '@/src/io/import/shouldSkipImportSource';
+import { useCurrentImage } from '@/src/composables/useCurrentImage';
+import type { SegmentConfigScope } from '@/src/segmentation/segments';
 
 const unhandledResource: ImportHandler = (dataSource) => {
   return asErrorResult(new Error('Failed to handle resource'), dataSource);
@@ -66,16 +72,14 @@ const handleCollections: ImportHandler = (dataSource) => {
   return asIntermediateResult(sources);
 };
 
-function isSelectable(result: ImportResult): result is LoadableVolumeResult {
-  return result.type === 'data' && result.dataType === 'image';
-}
-
 const applyConfigsPostState = (
-  results: Array<ConfigResult>
+  results: Array<ConfigResult>,
+  imageIds: string[],
+  scope: SegmentConfigScope
 ): (ConfigResult | ErrorResult)[] =>
   results.map((result) => {
     try {
-      applyPostStateConfig(result.config);
+      applyPostStateConfig(result.config, imageIds, { scope });
       return result;
     } catch (err) {
       return asErrorResult(ensureError(err), result.dataSource);
@@ -122,7 +126,13 @@ async function importDicomChunkSources(sources: ChunkSource[]) {
   );
 }
 
-type ImportPolicy = 'application' | 'volume-data';
+type ImportPolicy =
+  | {
+      kind: 'application';
+      restore: RestoreProcessors;
+      standaloneImageIds: string[];
+    }
+  | { kind: 'volume-data' };
 
 /**
  * The two halves of a state-file restore: the handler that reads the manifest
@@ -148,6 +158,7 @@ async function processImportQueue(
   const configResults: ConfigResult[] = [];
   const stateFileSetups: StateFileSetupResult[] = [];
   const results: ImportDataSourcesResult[] = [];
+  let configScope: SegmentConfigScope = 'standalone';
 
   const enqueue = (sources: DataSource[]) =>
     sources
@@ -159,6 +170,16 @@ async function processImportQueue(
 
   let queue = enqueue(dataSources);
 
+  const enqueueChildren = (sources: DataSource[]) => {
+    const [chunks, otherSources] = partition(
+      (source) => source.type === 'chunk',
+      sources
+    );
+    chunkSources.push(...chunks);
+    if (chunks.length || sources.length === 0) configScope = 'with-data';
+    queue.push(...enqueue(otherSources));
+  };
+
   while (queue.length) {
     const { index } = await asyncSelect(queue.map((item) => item.promise));
     const { promise, source } = queue[index];
@@ -167,18 +188,12 @@ async function processImportQueue(
 
     switch (result.type) {
       case 'stateFileSetup':
+        configScope = 'with-data';
         stateFileSetups.push(result);
       // fallthrough to handle dataSources
-      case 'intermediate': {
-        const [chunks, otherSources] = partition(
-          (ds) => ds.type === 'chunk',
-          result.dataSources
-        );
-        chunkSources.push(...chunks);
-
-        queue.push(...enqueue(otherSources));
+      case 'intermediate':
+        enqueueChildren(result.dataSources);
         break;
-      }
       case 'config':
         configResults.push(result);
         try {
@@ -188,8 +203,15 @@ async function processImportQueue(
         }
         break;
       case 'ok':
-      case 'error':
       case 'data':
+        configScope = 'with-data';
+        results.push(result);
+        break;
+      case 'error':
+        // A recognized config failure keeps standalone scope; an unknown or
+        // failed data source must not redirect its companion config to focus.
+        if (!(result.error instanceof InvalidConfigError))
+          configScope = 'with-data';
         results.push(result);
         break;
       default:
@@ -197,13 +219,69 @@ async function processImportQueue(
     }
   }
 
-  return { chunkSources, configResults, stateFileSetups, results };
+  return { chunkSources, configResults, stateFileSetups, results, configScope };
 }
+
+async function completeStateFileSetups(
+  stateFileSetups: StateFileSetupResult[],
+  restore: RestoreProcessors,
+  loadableResults: LoadableResult[],
+  failedLeaves: RestoreOptions['failedLeaves']
+) {
+  const stateIDToStoreID = buildStateIDToStoreID(loadableResults);
+  // Leaf stateIDs covered by a consolidated notice that actually ran: only
+  // their errors may be suppressed by the import pipeline.
+  const reportedStateIDs = new Set<string>();
+  for (const setup of stateFileSetups) {
+    try {
+      await restore.completeStateFileRestore(
+        setup.manifest,
+        setup.stateFiles,
+        stateIDToStoreID,
+        {
+          missingFiles: setup.missingFiles,
+          failedLeaves,
+          migration: setup.migration,
+        }
+      );
+      setup.dataSources.forEach((src) => {
+        findStateFileLeaves(src).forEach((leaf) =>
+          reportedStateIDs.add(leaf.stateID)
+        );
+      });
+      setup.missingFiles.forEach(({ stateID }) =>
+        reportedStateIDs.add(stateID)
+      );
+    } catch (err) {
+      // Auto-degrade to an ephemeral open: a mid-restore throw leaves the
+      // already-loaded bases as plain datasets and the session's attached set
+      // stays empty, so a later save prunes every launch-composition entry.
+      // Restore steps already applied (layout, view bindings) are not rolled
+      // back. One notice here; this setup's leaf errors stay unflagged so the
+      // generic load-error dialog still names them.
+      useMessageStore().addWarning(
+        'Could not restore the saved session; opened its images instead',
+        { details: ensureError(err).message }
+      );
+    }
+  }
+  return reportedStateIDs;
+}
+
+// Config imported with data targets its loaded images; standalone config keeps
+// the image whose view started the import.
+const configTargetImageIds = (
+  scope: SegmentConfigScope,
+  loadables: readonly LoadableResult[],
+  standaloneImageIds: string[]
+) =>
+  scope === 'with-data'
+    ? loadables.filter(isVolumeResult).map(({ dataID }) => dataID)
+    : standaloneImageIds;
 
 async function importDataSourcesWithPolicy(
   dataSources: DataSource[],
-  policy: ImportPolicy,
-  restore: RestoreProcessors = appRestoreProcessors()
+  policy: ImportPolicy
 ): Promise<ImportDataSourcesResult[]> {
   const cleanupHandlers: Array<() => void> = [];
   const onCleanup = (fn: () => void) => {
@@ -217,13 +295,13 @@ async function importDataSourcesWithPolicy(
     fetchFileCache: new Map<string, File>(),
     onCleanup,
     importDataSources: (sources: DataSource[]) =>
-      importDataSourcesWithPolicy(sources, policy, restore),
+      importDataSourcesWithPolicy(sources, policy),
   };
 
   // State files first: a manifest's top-level `segments` is also a config key.
   const applicationHandlers =
-    policy === 'application'
-      ? [restore.restoreStateFile, handleConfig, handleRemoteManifest]
+    policy.kind === 'application'
+      ? [policy.restore.restoreStateFile, handleConfig, handleRemoteManifest]
       : [];
 
   const handlers = [
@@ -252,7 +330,7 @@ async function importDataSourcesWithPolicy(
     unhandledResource,
   ];
 
-  const { chunkSources, configResults, stateFileSetups, results } =
+  const { chunkSources, configResults, stateFileSetups, results, configScope } =
     await processImportQueue(dataSources, handlers, importContext);
 
   cleanup();
@@ -291,42 +369,27 @@ async function importDataSourcesWithPolicy(
       }))
     );
 
-  const stateIDToStoreID = buildStateIDToStoreID(loadableResults);
-  // Leaf stateIDs covered by a consolidated notice that actually ran — only
-  // their errors may be suppressed below.
-  const reportedStateIDs = new Set<string>();
-  for (const setup of stateFileSetups) {
-    try {
-      await restore.completeStateFileRestore(
-        setup.manifest,
-        setup.stateFiles,
-        stateIDToStoreID,
-        setup.missingFiles,
-        failedLeaves
-      );
-      setup.dataSources.forEach((src) => {
-        findStateFileLeaves(src).forEach((leaf) =>
-          reportedStateIDs.add(leaf.stateID)
-        );
-      });
-      setup.missingFiles.forEach(({ stateID }) =>
-        reportedStateIDs.add(stateID)
-      );
-    } catch (err) {
-      // Auto-degrade to an ephemeral open: a mid-restore throw leaves the
-      // already-loaded bases as plain datasets and the session's attached set
-      // stays empty, so a later save prunes every launch-composition entry.
-      // Restore steps already applied (layout, view bindings) are not rolled
-      // back. One notice here; this setup's leaf errors stay unflagged so the
-      // generic load-error dialog still names them.
-      useMessageStore().addWarning(
-        'Could not restore the saved session; opened its images instead',
-        { details: ensureError(err).message }
-      );
-    }
-  }
+  let reportedStateIDs = new Set<string>();
+  if (policy.kind === 'application') {
+    reportedStateIDs = await completeStateFileSetups(
+      stateFileSetups,
+      policy.restore,
+      loadableResults,
+      failedLeaves
+    );
 
-  results.push(...applyConfigsPostState(configResults));
+    results.push(
+      ...applyConfigsPostState(
+        configResults,
+        configTargetImageIds(
+          configScope,
+          loadableResults,
+          policy.standaloneImageIds
+        ),
+        configScope
+      )
+    );
+  }
 
   // A failed state-file leaf is already counted in the restore's consolidated
   // missing-content notice, so this layer owns its reporting: it returns as an
@@ -348,13 +411,20 @@ export function importDataSources(
   dataSources: DataSource[],
   restore: RestoreProcessors = appRestoreProcessors()
 ): Promise<ImportDataSourcesResult[]> {
-  return importDataSourcesWithPolicy(dataSources, 'application', restore);
+  const initiatingImageId = useCurrentImage('global').currentImageID.value;
+  // Standalone config belongs to the initiating image, even if focus changes
+  // while reading it. An explicit empty target updates only future defaults.
+  return importDataSourcesWithPolicy(dataSources, {
+    kind: 'application',
+    restore,
+    standaloneImageIds: initiatingImageId ? [initiatingImageId] : [],
+  });
 }
 
 export function importVolumeDataSources(
   dataSources: DataSource[]
 ): Promise<ImportDataSourcesResult[]> {
-  return importDataSourcesWithPolicy(dataSources, 'volume-data');
+  return importDataSourcesWithPolicy(dataSources, { kind: 'volume-data' });
 }
 
 export function toDataSelection(loadable: LoadableVolumeResult) {
@@ -363,6 +433,6 @@ export function toDataSelection(loadable: LoadableVolumeResult) {
 }
 
 export function convertSuccessResultToDataSelection(result: ImportResult) {
-  if (!isSelectable(result)) return null;
+  if (!isVolumeResult(result)) return null;
   return toDataSelection(result);
 }

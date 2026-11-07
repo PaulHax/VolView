@@ -267,7 +267,8 @@ function loadSegmentations(
     const loadable = toDataSelection(ds);
     segmentationStore.startLabelmapConversion(
       loadable,
-      toDataSelection(primaryDataSource)
+      toDataSelection(primaryDataSource),
+      { seedDefaults: true }
     );
   });
 }

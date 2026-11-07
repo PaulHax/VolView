@@ -16,7 +16,10 @@ import { ACTIONS } from '@/src/constants';
 import type { Action, Binding } from '@/src/constants';
 
 import { surfaceWarning, useMessageStore } from '@/src/store/messages';
-import { useSegmentStore } from '@/src/segmentation/segments';
+import {
+  useSegmentStore,
+  type SegmentConfigScope,
+} from '@/src/segmentation/segments';
 import {
   parseStatedColor,
   rejectedColorsMessage,
@@ -226,18 +229,6 @@ const reportUnparseableColors = (
   if (message) addError(message);
 };
 
-// An omitted section leaves the registry alone; an empty record or null
-// clears what an earlier config contributed to it.
-const applySegments = (
-  manifest: Config,
-  addError: (message: string) => void
-) => {
-  const configured = manifest.segments;
-  if (configured === undefined) return;
-  if (configured) reportUnparseableColors(configured, addError);
-  useSegmentStore().segments.replaceConfigSegments(configured);
-};
-
 const applyLayout = (manifest: Config) => {
   if (!manifest.layouts) return;
 
@@ -332,8 +323,19 @@ export const applyPreStateConfig = async (manifest: Config) => {
 
 export const applyPostStateConfig = (
   manifest: Config,
-  addError: (message: string) => void = (message) =>
-    useMessageStore().addError(message)
+  imageIds: string[],
+  {
+    addError = (message: string) => useMessageStore().addError(message),
+    scope = 'standalone',
+  }: {
+    addError?: (message: string) => void;
+    scope?: SegmentConfigScope;
+  } = {}
 ) => {
-  applySegments(manifest, addError);
+  // An omitted section leaves the registry alone; an empty record or null
+  // clears what an earlier config contributed to it.
+  const configured = manifest.segments;
+  if (configured === undefined) return;
+  if (configured) reportUnparseableColors(configured, addError);
+  useSegmentStore().replaceConfigSegments(configured, imageIds, scope);
 };
