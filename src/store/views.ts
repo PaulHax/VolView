@@ -461,7 +461,7 @@ export const useViewStore = defineStore('view', () => {
   });
 
   return {
-    visibleLayout: computed<Layout>(() => {
+    visibleLayout: computed(() => {
       if (maximizedView.value)
         return {
           direction: 'column',

@@ -20,6 +20,14 @@ const migrateOrPass =
     return inputManifest;
   };
 
+const legacyViewDataId = (config: any, primarySelection: any) => {
+  const configKeys = Object.keys(config || {});
+  if (configKeys.length === 0) return null;
+  return primarySelection && configKeys.includes(primarySelection)
+    ? primarySelection
+    : configKeys[0];
+};
+
 const migrate501To600 = (inputManifest: any) => {
   const manifest = JSON.parse(JSON.stringify(inputManifest));
 
@@ -57,16 +65,10 @@ const migrate501To600 = (inputManifest: any) => {
         migratedView.type = 'Oblique';
       }
 
-      const configKeys = Object.keys(migratedView.config || {});
-      const primarySelection = manifest.primarySelection;
-
-      migratedView.dataID = null;
-      if (configKeys.length > 0) {
-        migratedView.dataID =
-          primarySelection && configKeys.includes(primarySelection)
-            ? primarySelection
-            : configKeys[0];
-      }
+      migratedView.dataID = legacyViewDataId(
+        migratedView.config,
+        manifest.primarySelection
+      );
 
       manifest.viewByID[migratedView.id] = migratedView;
     });

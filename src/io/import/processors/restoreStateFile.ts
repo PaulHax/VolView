@@ -35,14 +35,32 @@ type LeafSource =
   | { type: 'uri'; uri: string; name: string; mime?: string }
   | { type: 'file'; file: File; fileType: string };
 
+type LeafSourceContext = {
+  byId: Record<number, DataSourceType>;
+  datasetFilePath: Record<string, string> | undefined;
+  pathToFile: Record<string, File>;
+  onMissingFile?: (path: string) => void;
+};
+
+function resolveFileLeaf(
+  src: Extract<DataSourceType, { type: 'file' }>,
+  { datasetFilePath, pathToFile, onMissingFile }: LeafSourceContext
+): LeafSource[] {
+  const filePath = datasetFilePath?.[src.fileId];
+  const file = filePath ? pathToFile[filePath] : undefined;
+  if (file) {
+    return [{ type: 'file', file, fileType: src.fileType }];
+  }
+  // Missing members must be reported even if surviving files resolve the dataset.
+  onMissingFile?.(filePath ?? String(src.fileId));
+  return [];
+}
+
 function resolveToLeafSources(
   id: number,
-  byId: Record<number, DataSourceType>,
-  datasetFilePath: Record<string, string> | undefined,
-  pathToFile: Record<string, File>,
-  onMissingFile?: (path: string) => void
+  context: LeafSourceContext
 ): LeafSource[] {
-  const src = byId[id];
+  const src = context.byId[id];
   if (!src) return [];
 
   switch (src.type) {
@@ -56,37 +74,15 @@ function resolveToLeafSources(
         },
       ];
 
-    case 'file': {
-      const filePath = datasetFilePath?.[src.fileId];
-      const file = filePath ? pathToFile[filePath] : undefined;
-      if (file) {
-        return [{ type: 'file', file, fileType: src.fileType }];
-      }
-      // Recorded for the consolidated missing-content notice — the dataset's
-      // SURVIVING files may still resolve it, and a partial restore must not
-      // pass silently.
-      onMissingFile?.(filePath ?? String(src.fileId));
-      return [];
-    }
+    case 'file':
+      return resolveFileLeaf(src, context);
 
     case 'archive':
-      return resolveToLeafSources(
-        src.parent,
-        byId,
-        datasetFilePath,
-        pathToFile,
-        onMissingFile
-      );
+      return resolveToLeafSources(src.parent, context);
 
     case 'collection':
       return src.sources.flatMap((sourceId) =>
-        resolveToLeafSources(
-          sourceId,
-          byId,
-          datasetFilePath,
-          pathToFile,
-          onMissingFile
-        )
+        resolveToLeafSources(sourceId, context)
       );
 
     default:
@@ -156,13 +152,12 @@ function prepareLeafDataSources(manifest: Manifest, datasetFiles: FileEntry[]) {
     ...datasets,
     ...planLabelmapSources(manifest).leaves,
   ].flatMap((ds) => {
-    const sources = resolveToLeafSources(
-      ds.dataSourceId,
+    const sources = resolveToLeafSources(ds.dataSourceId, {
       byId,
-      manifest.datasetFilePath,
+      datasetFilePath: manifest.datasetFilePath,
       pathToFile,
-      (path) => missingFiles.push({ stateID: ds.id, path })
-    );
+      onMissingFile: (path) => missingFiles.push({ stateID: ds.id, path }),
+    });
 
     const seen = new Set<string>();
     const uniqueSources = sources.filter((src) => {
