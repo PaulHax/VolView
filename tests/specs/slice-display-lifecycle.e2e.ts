@@ -41,10 +41,13 @@ async function showBaseInAllViews() {
   await $('[data-testid="module-tab-Data"]').click();
   await waitForModuleTransitions();
   const card = $(`.image-list-card*=${baseName}`);
-  await card.$('[data-testid="dataset-menu-button"]').click();
-  await $('.v-menu.v-overlay--active .v-overlay__content').waitForStable();
-  await $('.v-list-item*=Show in all views').click();
-  await browser.keys('Escape');
+  const menu = await volViewPage.openMenu(
+    card.$('[data-testid="dataset-menu-button"]')
+  );
+  const showInAllViews = menu.$('.v-list-item*=Show in all views');
+  await showInAllViews.waitForClickable();
+  await showInAllViews.click();
+  await menu.waitForDisplayed({ reverse: true });
 }
 
 async function setBaseRange(minimum: number, maximum: number) {

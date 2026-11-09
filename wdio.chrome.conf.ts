@@ -34,6 +34,7 @@ export const config = {
       browserVersion: '157.0.8103.26',
       // this overrides the default chrome download directory with our temporary one
       'goog:chromeOptions': {
+        binary: process.env.CHROME_PATH,
         args: chromeArgs,
         prefs: {
           directory_upgrade: true,
