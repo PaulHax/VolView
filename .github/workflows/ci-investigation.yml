@@ -58,9 +58,23 @@ jobs:
       - name: Run the selected diagnostic sequence
         shell: bash
         run: |
-          npx wdio run wdio.investigation.conf.ts
           mkdir -p .tmp/ci-investigation
-          mv .tmp/runs .tmp/ci-investigation/sequence
+          result=0
+          for position in first second; do
+            if [[ "$position" == first ]]; then
+              legacy='${{ matrix.legacy }}'
+            elif [[ '${{ matrix.legacy }}' == 1 ]]; then
+              legacy=''
+            else
+              legacy=1
+            fi
+            echo "Lifecycle comparison: position=$position legacy=$legacy"
+            if ! CI_LEGACY_MENU="$legacy" npx wdio run wdio.investigation.conf.ts; then
+              result=1
+            fi
+            mv .tmp/runs ".tmp/ci-investigation/$position"
+          done
+          exit "$result"
       - name: Preserve diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4

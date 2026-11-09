@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { execFile } from 'node:child_process';
+import { cpus } from 'node:os';
 import { join } from 'node:path';
 import { config as original } from './wdio.chrome.conf';
 import { TEMP_DIR } from './wdio.shared.conf';
@@ -109,6 +110,15 @@ export const config = {
     record({ event: 'test-start', title: test.title });
   },
   async before(...hookArgs: Parameters<BeforeHook>) {
+    const processors = cpus();
+    record({
+      event: 'worker-environment',
+      platform: process.platform,
+      architecture: process.arch,
+      processors: processors.length,
+      models: [...new Set(processors.map(({ model }) => model))],
+      chrome: browser.capabilities.browserVersion,
+    });
     for (const command of [
       'execute',
       'executeAsync',
@@ -169,7 +179,7 @@ export const config = {
         attributes: true,
         attributeFilter: ['aria-selected', 'class'],
       });
-      if (!new URLSearchParams(location.search).has('axis')) return;
+      const traceGlCalls = new URLSearchParams(location.search).has('axis');
       const getContext = HTMLCanvasElement.prototype.getContext;
       const instrumented = new WeakSet<object>();
       HTMLCanvasElement.prototype.getContext = function (
@@ -191,6 +201,7 @@ export const config = {
             renderer?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER
           ),
         });
+        if (!traceGlCalls) return context;
         this.addEventListener('webglcontextlost', (event) =>
           log('context-lost', {
             status: (event as WebGLContextEvent).statusMessage,
