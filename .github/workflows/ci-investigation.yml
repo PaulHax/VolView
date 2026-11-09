@@ -12,12 +12,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15]
+        include:
+          - os: ubuntu-latest
+            prefix: ''
+          - os: macos-latest
+            prefix: '1'
+          - os: macos-15
+            prefix: ''
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     env:
       VITE_SHOW_SAMPLE_DATA: true
       DOWNLOAD_TIMEOUT: 90000
+      CI_ORIGINAL_PREFIX: ${{ matrix.prefix }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,8 +37,16 @@ jobs:
         run: node scripts/investigate-browser-setup.mjs
       - name: Verify restore readiness with pending mask decoding
         run: npx vitest run src/components/__tests__/restorePanelReadiness.spec.ts src/io/import/__tests__/restoreViewContent.spec.ts
+      - name: Cache datasets for the original test sequence
+        if: matrix.prefix == '1'
+        uses: actions/cache@v4
+        with:
+          path: .tmp/datasets
+          key: e2e-datasets-${{ hashFiles('tests/datasets.ts') }}
+          restore-keys: e2e-datasets-
       - run: npx vite build
       - name: Verify the menu failure control and successful wait
+        if: matrix.prefix != '1'
         run: |
           npx wdio run wdio.investigation.conf.ts --spec tests/specs/menu-readiness-probe.e2e.ts --mochaOpts.grep "CI menu readiness"
           mkdir -p .tmp/ci-investigation
@@ -43,6 +58,7 @@ jobs:
             npx wdio run wdio.investigation.conf.ts
             mkdir -p .tmp/ci-investigation
             mv .tmp/runs .tmp/ci-investigation/attempt-$attempt
+            if [ "$CI_ORIGINAL_PREFIX" = 1 ]; then break; fi
           done
       - name: Preserve diagnostic evidence
         if: always()

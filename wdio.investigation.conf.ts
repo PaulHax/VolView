@@ -1,10 +1,15 @@
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { config as original } from './wdio.chrome.conf';
 import { TEMP_DIR } from './wdio.shared.conf';
 
 let nextCommand = 0;
+const originalPrefix = process.env.CI_ORIGINAL_PREFIX === '1';
+const prefixSpecs = readdirSync('tests/specs')
+  .filter((name) => name.endsWith('.e2e.ts') && name <= 'label-outline.e2e.ts')
+  .sort()
+  .map((name) => `./tests/specs/${name}`);
 let sampled = false;
 type BeforeHook = Exclude<NonNullable<typeof original.before>, unknown[]>;
 const record = (event: Record<string, unknown>) => {
@@ -72,21 +77,29 @@ function sampleChrome(command: string) {
 
 export const config = {
   ...original,
-  specs: [
-    './tests/specs/image-segmentation-sets.e2e.ts',
-    './tests/specs/label-outline.e2e.ts',
-    './tests/specs/menu-readiness-probe.e2e.ts',
-    './tests/specs/slice-display-lifecycle.e2e.ts',
-  ],
+  specs: originalPrefix
+    ? prefixSpecs
+    : [
+        './tests/specs/image-segmentation-sets.e2e.ts',
+        './tests/specs/label-outline.e2e.ts',
+        './tests/specs/menu-readiness-probe.e2e.ts',
+        './tests/specs/slice-display-lifecycle.e2e.ts',
+      ],
   maxInstances: 1,
   mochaOpts: {
     ...original.mochaOpts,
-    grep: 'Bounded label outlines|Image segmentation sets|CI menu readiness|keeps base and overlay rendering live',
+    ...(originalPrefix
+      ? { bail: true }
+      : {
+          grep: 'Bounded label outlines|Image segmentation sets|CI menu readiness|keeps base and overlay rendering live',
+        }),
   },
   // These selected cases create synthetic data and need no downloaded datasets.
-  onPrepare() {
-    mkdirSync(TEMP_DIR, { recursive: true });
-  },
+  onPrepare: originalPrefix
+    ? original.onPrepare
+    : function prepareSyntheticData() {
+        mkdirSync(TEMP_DIR, { recursive: true });
+      },
   async before(...hookArgs: Parameters<BeforeHook>) {
     for (const command of [
       'execute',
