@@ -14,19 +14,26 @@ jobs:
     env:
       VITE_SHOW_SAMPLE_DATA: true
       DOWNLOAD_TIMEOUT: 90000
+      CI_ORIGINAL_PREFIX: '1'
+      CI_NO_PAGE_INSTRUMENTATION: '1'
       CI_FIXTURE_DIAGNOSTIC_DIR: .tmp/ci-investigation/fixture-requests
+      ORIGINAL_REV: 55dc25a8bf7aea46815b554da11b40880ebd19a2
     steps:
       - uses: actions/checkout@v4
+      - name: Restore original failing application and tests
+        run: |
+          git fetch --no-tags origin "$ORIGINAL_REV"
+          git restore --source="$ORIGINAL_REV" --worktree -- src tests
+          # Only the server-side request logger is retained under tests.
+          git restore --source="$GITHUB_SHA" --worktree -- tests/fixtures/vtkFixtureServer.mjs
+          git diff --exit-code "$ORIGINAL_REV" -- src tests ':!tests/fixtures/vtkFixtureServer.mjs'
+          git diff --stat "$ORIGINAL_REV"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: node scripts/install-e2e-browser.mjs
-      - name: Reproduce browser availability failure with cached Chrome
-        run: node scripts/investigate-browser-setup.mjs
-      - name: Verify restore readiness with pending mask decoding
-        run: npx vitest run src/components/__tests__/restorePanelReadiness.spec.ts src/io/import/__tests__/restoreViewContent.spec.ts
       - name: Cache original lead-in datasets
         uses: actions/cache@v4
         with:
@@ -34,24 +41,17 @@ jobs:
           key: e2e-datasets-${{ hashFiles('tests/datasets.ts') }}
           restore-keys: e2e-datasets-
       - run: npx vite build
-      - name: Verify pending clickability wait during real entry on Apple Metal
-        timeout-minutes: 5
-        run: |
-          npx wdio run wdio.investigation.conf.ts --spec tests/specs/menu-readiness-probe.e2e.ts --mochaOpts.grep "CI menu readiness"
-          mkdir -p .tmp/ci-investigation
-          mv .tmp/runs .tmp/ci-investigation/menu-proof
-      - name: Replay original 27-spec lead-in with renderer and host stall capture
+      - name: Replay original source and 27-spec lead-in without page instrumentation
         timeout-minutes: 30
-        env:
-          CI_ORIGINAL_PREFIX: '1'
         run: |
           npx wdio run wdio.investigation.conf.ts
-          mv .tmp/runs .tmp/ci-investigation/original-prefix
+          mkdir -p .tmp/ci-investigation
+          mv .tmp/runs .tmp/ci-investigation/original-source-prefix
       - name: Preserve diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-investigation-macos-latest-${{ github.run_attempt }}
+          name: ci-investigation-original-source-macos-latest-${{ github.run_attempt }}
           path: |
             .tmp/ci-investigation
             .tmp/runs

@@ -210,6 +210,8 @@ export const config = {
       );
     }
     for (const hook of [original.before].flat()) await hook?.(...hookArgs);
+    // Keep the original page free of observer/WebGL wrappers in the pristine replay.
+    if (process.env.CI_NO_PAGE_INSTRUMENTATION === '1') return;
     await browser.addInitScript(() => {
       const log = (event: string, details = {}) =>
         console.info(
