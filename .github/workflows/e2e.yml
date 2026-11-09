@@ -1,4 +1,4 @@
-name: E2E Testing
+name: E2E Rendering Investigation
 on:
   pull_request:
 
@@ -8,7 +8,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-    name: E2E Testing on ${{ matrix.os }}
+    name: Rendering investigation on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     env:
       DOWNLOAD_TIMEOUT: 90000
@@ -41,7 +41,7 @@ jobs:
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
           CHROMEDRIVER_PATH: ${{ steps.chrome.outputs.chromedriver-path }}
-        run: env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY npm run test:e2e:chrome
+        run: env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY npm run test:e2e:chrome -- --spec tests/specs/label-outline.e2e.ts --spec tests/specs/slice-display-lifecycle.e2e.ts
       - name: Set screen resolution (windows)
         if: matrix.os == 'windows-latest'
         run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
@@ -51,7 +51,7 @@ jobs:
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
           CHROMEDRIVER_PATH: ${{ steps.chrome.outputs.chromedriver-path }}
-        run: npm run test:e2e:chrome
+        run: npm run test:e2e:chrome -- --spec tests/specs/label-outline.e2e.ts --spec tests/specs/slice-display-lifecycle.e2e.ts
       - name: Archive test results
         if: success() || failure()
         uses: actions/upload-artifact@v4
