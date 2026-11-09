@@ -6,6 +6,7 @@ import { TEMP_DIR } from './wdio.shared.conf';
 
 let nextCommand = 0;
 const originalPrefix = process.env.CI_ORIGINAL_PREFIX === '1';
+const lifecycleOnly = process.env.CI_LIFECYCLE_ONLY === '1';
 const prefixSpecs = readdirSync('tests/specs')
   .filter((name) => name.endsWith('.e2e.ts') && name <= 'label-outline.e2e.ts')
   .sort()
@@ -77,22 +78,26 @@ function sampleChrome(command: string) {
 
 export const config = {
   ...original,
-  specs: originalPrefix
-    ? prefixSpecs
-    : [
-        './tests/specs/image-segmentation-sets.e2e.ts',
-        './tests/specs/label-outline.e2e.ts',
-        './tests/specs/menu-readiness-probe.e2e.ts',
-        './tests/specs/slice-display-lifecycle.e2e.ts',
-      ],
+  specs: lifecycleOnly
+    ? ['./tests/specs/slice-display-lifecycle.e2e.ts']
+    : originalPrefix
+      ? prefixSpecs
+      : [
+          './tests/specs/image-segmentation-sets.e2e.ts',
+          './tests/specs/label-outline.e2e.ts',
+          './tests/specs/menu-readiness-probe.e2e.ts',
+          './tests/specs/slice-display-lifecycle.e2e.ts',
+        ],
   maxInstances: 1,
   mochaOpts: {
     ...original.mochaOpts,
-    ...(originalPrefix
-      ? { bail: true }
-      : {
-          grep: 'Bounded label outlines|Image segmentation sets|CI menu readiness|keeps base and overlay rendering live',
-        }),
+    ...(lifecycleOnly
+      ? { grep: 'Slice display lifecycle' }
+      : originalPrefix
+        ? { bail: true }
+        : {
+            grep: 'Bounded label outlines|Image segmentation sets|CI menu readiness|keeps base and overlay rendering live',
+          }),
   },
   // These selected cases create synthetic data and need no downloaded datasets.
   onPrepare: originalPrefix
@@ -100,6 +105,9 @@ export const config = {
     : function prepareSyntheticData() {
         mkdirSync(TEMP_DIR, { recursive: true });
       },
+  beforeTest(test: { title: string }) {
+    record({ event: 'test-start', title: test.title });
+  },
   async before(...hookArgs: Parameters<BeforeHook>) {
     for (const command of [
       'execute',

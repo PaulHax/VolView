@@ -15,6 +15,11 @@ import {
 } from './utils';
 
 const baseName = 'slice-lifecycle-base.mha';
+const traceLifecycle = (stage: string) =>
+  console.info(
+    '[CI lifecycle]',
+    JSON.stringify({ stage, time: new Date().toISOString() })
+  );
 const baseRange = (endpoint: 'min' | 'max') =>
   $(`[data-testid="base-image-range-${endpoint}"] input`);
 const visibility = (image: 'base-image' | 'layer') =>
@@ -38,9 +43,18 @@ const coloredPixelCount = (data: Buffer) =>
   ).length;
 
 async function showBaseInAllViews() {
+  traceLifecycle('show-base:start');
   await $('[data-testid="module-tab-Data"]').click();
   await waitForModuleTransitions();
   const card = $(`.image-list-card*=${baseName}`);
+  if (process.env.CI_LEGACY_MENU === '1') {
+    await card.$('[data-testid="dataset-menu-button"]').click();
+    await $('.v-menu.v-overlay--active .v-overlay__content').waitForStable();
+    await $('.v-list-item*=Show in all views').click();
+    await browser.keys('Escape');
+    traceLifecycle('show-base:end');
+    return;
+  }
   const menu = await volViewPage.openMenu(
     card.$('[data-testid="dataset-menu-button"]')
   );
@@ -48,6 +62,7 @@ async function showBaseInAllViews() {
   await showInAllViews.waitForClickable();
   await showInAllViews.click();
   await menu.waitForDisplayed({ reverse: true });
+  traceLifecycle('show-base:end');
 }
 
 async function setBaseRange(minimum: number, maximum: number) {
@@ -259,8 +274,11 @@ describe('Slice display lifecycle', () => {
   });
 
   it('keeps base and overlay rendering live through repeated layout replacement', async () => {
+    traceLifecycle('open-display:start');
     await openDisplay();
+    traceLifecycle('open-display:end');
     const fourUp = await captureSlicePixels();
+    traceLifecycle('initial-pixels:end');
     const errors: string[] = [];
 
     const onLog = ({ text }: { text: string | null }) => {
@@ -276,18 +294,23 @@ describe('Slice display lifecycle', () => {
     browser.on('log.entryAdded', onLog);
     try {
       for (let cycle = 0; cycle < 2; cycle++) {
+        traceLifecycle(`${cycle}:maximize:start`);
         await (await volViewPage.getViews2D())[cycle].doubleClick();
         await volViewPage.waitForViewCounts(1, false);
         await expectColoredSlices(1);
+        traceLifecycle(`${cycle}:maximize:end`);
         await (await volViewPage.getViews2D())[0].doubleClick();
         await volViewPage.waitForViewCounts(3, true);
         await expectSlicesMatch(fourUp);
+        traceLifecycle(`${cycle}:restore:end`);
         await selectLayout('3D Only', 0, true);
+        traceLifecycle(`${cycle}:3d-only:end`);
         await volViewPage.layoutButton.click();
         await $('.v-list-item-title=Oblique').waitForClickable();
         await $('.v-list-item-title=Oblique').click();
         await $('.oblique-grid').waitForDisplayed();
         await $('.oblique-grid').waitForStable();
+        traceLifecycle(`${cycle}:oblique-layout:end`);
         await expectBaseSettings();
         await $('header').moveTo();
         await browser.waitUntil(async () => {
@@ -300,6 +323,7 @@ describe('Slice display lifecycle', () => {
         const baseImages = await captureOblique(
           `slice-lifecycle-oblique-before-${cycle}.png`
         );
+        traceLifecycle(`${cycle}:oblique-pixels:end`);
         await toggleVisibility('base-image');
         await browser.waitUntil(async () => {
           const pixels = await captureOblique(
@@ -314,6 +338,7 @@ describe('Slice display lifecycle', () => {
             )
           );
         });
+        traceLifecycle(`${cycle}:hidden-pixels:end`);
         await toggleVisibility('base-image');
         await browser.waitUntil(
           async () => {
@@ -332,8 +357,11 @@ describe('Slice display lifecycle', () => {
               'Expected restored oblique slices to match their visible appearance',
           }
         );
+        traceLifecycle(`${cycle}:restored-pixels:end`);
         await selectLayout('Four Up', 3, true);
+        traceLifecycle(`${cycle}:four-up-layout:end`);
         await expectSlicesMatch(fourUp);
+        traceLifecycle(`${cycle}:four-up-pixels:end`);
       }
       expect(errors).toEqual([]);
     } finally {

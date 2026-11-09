@@ -15,16 +15,20 @@ jobs:
         include:
           - os: ubuntu-latest
             prefix: ''
-          - os: macos-latest
-            prefix: '1'
-          - os: macos-15
+            lifecycle: '1'
+            legacy: '1'
+          - os: ubuntu-latest
             prefix: ''
+            lifecycle: '1'
+            legacy: ''
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     env:
       VITE_SHOW_SAMPLE_DATA: true
       DOWNLOAD_TIMEOUT: 90000
       CI_ORIGINAL_PREFIX: ${{ matrix.prefix }}
+      CI_LIFECYCLE_ONLY: ${{ matrix.lifecycle }}
+      CI_LEGACY_MENU: ${{ matrix.legacy }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -46,7 +50,7 @@ jobs:
           restore-keys: e2e-datasets-
       - run: npx vite build
       - name: Verify the menu failure control and successful wait
-        if: matrix.prefix != '1'
+        if: matrix.prefix != '1' && matrix.lifecycle != '1'
         run: |
           npx wdio run wdio.investigation.conf.ts --spec tests/specs/menu-readiness-probe.e2e.ts --mochaOpts.grep "CI menu readiness"
           mkdir -p .tmp/ci-investigation
@@ -61,7 +65,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-investigation-${{ matrix.os }}-${{ github.run_attempt }}
+          name: ci-investigation-${{ matrix.os }}-${{ matrix.lifecycle }}-${{ matrix.legacy }}-${{ github.run_attempt }}
           path: |
             .tmp/ci-investigation
             .tmp/runs
