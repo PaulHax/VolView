@@ -4,8 +4,14 @@ import { join } from 'node:path';
 import { config as original } from './wdio.chrome.conf';
 import { TEMP_DIR } from './wdio.shared.conf';
 
-let commandStarted = 0;
-let watchdog: ReturnType<typeof setTimeout>;
+const pending = new Map<
+  string,
+  {
+    started: number;
+    watchdog: ReturnType<typeof setTimeout>;
+  }[]
+>();
+let sampled = false;
 type BeforeHook = Exclude<NonNullable<typeof original.before>, unknown[]>;
 const record = (event: Record<string, unknown>) => {
   mkdirSync(TEMP_DIR, { recursive: true });
@@ -16,6 +22,8 @@ const record = (event: Record<string, unknown>) => {
 };
 
 function sampleChrome(command: string) {
+  if (sampled) return;
+  sampled = true;
   console.error(`[CI diagnostic] command stalled for 15s: ${command}`);
   if (process.platform !== 'darwin') return;
   execFile('ps', ['-axo', 'pid=,command='], (error, output) => {
@@ -50,14 +58,15 @@ function sampleChrome(command: string) {
 export const config = {
   ...original,
   specs: [
-    './tests/specs/label-outline.e2e.ts',
     './tests/specs/image-segmentation-sets.e2e.ts',
+    './tests/specs/label-outline.e2e.ts',
+    './tests/specs/menu-readiness-probe.e2e.ts',
     './tests/specs/slice-display-lifecycle.e2e.ts',
   ],
   maxInstances: 1,
   mochaOpts: {
     ...original.mochaOpts,
-    grep: 'Bounded label outlines|preserves a deliberately empty set|keeps base and overlay rendering live',
+    grep: 'Bounded label outlines|Image segmentation sets|CI menu readiness|keeps base and overlay rendering live',
   },
   // These selected cases create synthetic data and need no downloaded datasets.
   onPrepare() {
@@ -160,9 +169,13 @@ export const config = {
     });
   },
   beforeCommand(command: string) {
-    commandStarted = Date.now();
     record({ event: 'command-begin', command });
-    watchdog = setTimeout(() => sampleChrome(command), 15000);
+    const entries = pending.get(command) ?? [];
+    entries.push({
+      started: Date.now(),
+      watchdog: setTimeout(() => sampleChrome(command), 15000),
+    });
+    pending.set(command, entries);
   },
   async afterCommand(
     command: string,
@@ -170,11 +183,12 @@ export const config = {
     result: unknown,
     error?: Error
   ) {
-    clearTimeout(watchdog);
+    const entry = pending.get(command)?.pop();
+    clearTimeout(entry?.watchdog);
     record({
       event: 'command-end',
       command,
-      duration: Date.now() - commandStarted,
+      duration: entry ? Date.now() - entry.started : undefined,
       error: error ? String(error) : undefined,
     });
     for (const hook of [original.afterCommand].flat())
