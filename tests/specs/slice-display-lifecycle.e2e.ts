@@ -277,8 +277,7 @@ describe('Slice display lifecycle', () => {
     await expectBaseSettings();
   });
 
-  it('keeps base and overlay rendering live through repeated layout replacement', async function () {
-    this.timeout(lifecycleDeadline);
+  it('keeps base and overlay rendering live through repeated layout replacement', async () => {
     const testStarted = Date.now();
     traceLifecycle('open-display:start');
     await openDisplay();
@@ -380,5 +379,5 @@ describe('Slice display lifecycle', () => {
     } finally {
       browser.off('log.entryAdded', onLog);
     }
-  });
+  }).timeout(lifecycleDeadline);
 });
