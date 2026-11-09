@@ -19,8 +19,6 @@ import {
   segmentOutline,
 } from '@/src/segmentation/rendering/display';
 
-console.info('Outline fixture: modules loaded');
-
 const renderer = vtkRenderer.newInstance();
 const renderWindow = vtkRenderWindow.newInstance();
 const view = vtkOpenGLRenderWindow.newInstance();
@@ -119,21 +117,11 @@ function renderOutline(thickness = 3, outlineOpacity = 1) {
   );
   property.setLabelOutlineThickness(tables.thicknesses);
   property.setLabelOutlineOpacity(tables.opacities);
-  console.info(
-    `Outline fixture: rendering axis ${axis}, thickness ${thickness}, opacity ${outlineOpacity}`
-  );
   renderWindow.render();
-  console.info('Outline fixture: render completed');
   const gl = view.get3DContext({});
   if (!gl) throw new Error('WebGL is required for the outline regression');
-  const rendererInfo = gl.getExtension('WEBGL_debug_renderer_info');
-  console.info(
-    `Outline fixture: renderer ${gl.getParameter(rendererInfo?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER)}`
-  );
   const pixels = new Uint8Array(200 * 200 * 4);
-  console.info('Outline fixture: reading pixels');
   gl.readPixels(0, 0, 200, 200, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-  console.info('Outline fixture: pixel read completed');
   const red = (x: number, y: number) => pixels[(y * 200 + x) * 4];
   return {
     left: red(21, 100),
