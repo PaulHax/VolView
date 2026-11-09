@@ -80,7 +80,7 @@ jobs:
         if: matrix.stress == '1'
         timeout-minutes: 18
         run: |
-          npx wdio run wdio.investigation.conf.ts --repeat 20
+          npx wdio run wdio.investigation.conf.ts --spec tests/specs/label-outline.e2e.ts --repeat 20
           mkdir -p .tmp/ci-investigation
           mv .tmp/runs .tmp/ci-investigation/outline-stress
       - name: Preserve diagnostic evidence
