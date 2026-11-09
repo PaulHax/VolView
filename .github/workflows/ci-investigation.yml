@@ -51,15 +51,12 @@ jobs:
           npx wdio run wdio.investigation.conf.ts --spec tests/specs/menu-readiness-probe.e2e.ts --mochaOpts.grep "CI menu readiness"
           mkdir -p .tmp/ci-investigation
           mv .tmp/runs .tmp/ci-investigation/menu-proof
-      - name: Repeat focused browser cases with diagnostic logs
+      - name: Run the selected diagnostic sequence
         shell: bash
         run: |
-          for attempt in 1 2 3; do
-            npx wdio run wdio.investigation.conf.ts
-            mkdir -p .tmp/ci-investigation
-            mv .tmp/runs .tmp/ci-investigation/attempt-$attempt
-            if [ "$CI_ORIGINAL_PREFIX" = 1 ]; then break; fi
-          done
+          npx wdio run wdio.investigation.conf.ts
+          mkdir -p .tmp/ci-investigation
+          mv .tmp/runs .tmp/ci-investigation/sequence
       - name: Preserve diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4

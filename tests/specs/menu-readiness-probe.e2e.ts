@@ -66,16 +66,25 @@ describe('CI menu readiness', () => {
       }
       expect(failure).toContain('element click intercepted');
       console.info('CONTROL: the previous direct click fails:', failure);
+      let becameClickable = false;
+      const waiting = command.waitForClickable().then(() => {
+        becameClickable = true;
+      });
+      expect(await command.isClickable()).toBe(false);
+      expect(becameClickable).toBe(false);
+      await browser.execute(() =>
+        window.ciPausedMenus.forEach((animation) => animation.finish())
+      );
+      await waiting;
+      await command.click();
+      await menu.waitForDisplayed({ reverse: true });
+      console.info(
+        'FIXED: clickability wait stays pending until entry finishes, then the command succeeds'
+      );
     } finally {
       await browser.execute(() =>
         window.ciPausedMenus.forEach((animation) => animation.finish())
       );
     }
-    await command.waitForClickable();
-    await command.click();
-    await menu.waitForDisplayed({ reverse: true });
-    console.info(
-      'FIXED: waiting for clickability completes the real menu command'
-    );
   });
 });
