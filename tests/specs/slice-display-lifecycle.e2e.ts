@@ -20,6 +20,10 @@ const traceLifecycle = (stage: string) =>
     '[CI lifecycle]',
     JSON.stringify({ stage, time: new Date().toISOString() })
   );
+const lifecycleDeadline = Number(
+  process.env.CI_LIFECYCLE_TEST_TIMEOUT_MS ?? 90_000
+);
+const lifecycleHoldUntil = Number(process.env.CI_LIFECYCLE_HOLD_UNTIL_MS ?? 0);
 const baseRange = (endpoint: 'min' | 'max') =>
   $(`[data-testid="base-image-range-${endpoint}"] input`);
 const visibility = (image: 'base-image' | 'layer') =>
@@ -273,7 +277,9 @@ describe('Slice display lifecycle', () => {
     await expectBaseSettings();
   });
 
-  it('keeps base and overlay rendering live through repeated layout replacement', async () => {
+  it('keeps base and overlay rendering live through repeated layout replacement', async function () {
+    this.timeout(lifecycleDeadline);
+    const testStarted = Date.now();
     traceLifecycle('open-display:start');
     await openDisplay();
     traceLifecycle('open-display:end');
@@ -358,6 +364,13 @@ describe('Slice display lifecycle', () => {
           }
         );
         traceLifecycle(`${cycle}:restored-pixels:end`);
+        if (cycle === 1 && lifecycleHoldUntil > 0) {
+          const hold = lifecycleHoldUntil - (Date.now() - testStarted);
+          traceLifecycle(`deadline-control:hold:${Math.max(0, hold)}`);
+          if (hold > 0)
+            await new Promise((resolve) => setTimeout(resolve, hold));
+          traceLifecycle('deadline-control:released');
+        }
         await selectLayout('Four Up', 3, true);
         traceLifecycle(`${cycle}:four-up-layout:end`);
         await expectSlicesMatch(fourUp);

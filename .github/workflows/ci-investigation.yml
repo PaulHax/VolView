@@ -14,11 +14,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            prefix: ''
-            stress: '1'
-          - os: macos-latest
-            prefix: ''
-            stress: '1'
+            lifecycle: '1'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     env:
@@ -54,28 +50,30 @@ jobs:
           npx wdio run wdio.investigation.conf.ts --spec tests/specs/menu-readiness-probe.e2e.ts --mochaOpts.grep "CI menu readiness"
           mkdir -p .tmp/ci-investigation
           mv .tmp/runs .tmp/ci-investigation/menu-proof
-      - name: Run the selected diagnostic sequence
+      - name: Verify the lifecycle deadline control
         if: matrix.lifecycle == '1'
         timeout-minutes: 18
         shell: bash
         run: |
           mkdir -p .tmp/ci-investigation
-          result=0
-          for position in first second; do
-            if [[ "$position" == first ]]; then
-              legacy='${{ matrix.legacy }}'
-            elif [[ '${{ matrix.legacy }}' == 1 ]]; then
-              legacy=''
-            else
-              legacy=1
-            fi
-            echo "Lifecycle comparison: position=$position legacy=$legacy"
-            if ! CI_LEGACY_MENU="$legacy" npx wdio run wdio.investigation.conf.ts; then
-              result=1
-            fi
-            mv .tmp/runs ".tmp/ci-investigation/$position"
-          done
-          exit "$result"
+          set +e
+          CI_LIFECYCLE_TEST_TIMEOUT_MS=90000 \
+            CI_LIFECYCLE_HOLD_UNTIL_MS=92000 \
+            npx wdio run wdio.investigation.conf.ts 2>&1 | tee .tmp/timeout-90.log
+          control_status=${PIPESTATUS[0]}
+          set -e
+          if [[ "$control_status" -eq 0 ]]; then
+            echo 'Expected the 90-second deadline control to fail'
+            exit 1
+          fi
+          grep -F 'Timeout of 90000ms exceeded' .tmp/timeout-90.log
+          grep -F 'keeps base and overlay rendering live through repeated layout replacement' .tmp/timeout-90.log
+          mv .tmp/runs .tmp/ci-investigation/timeout-90
+
+          CI_LIFECYCLE_TEST_TIMEOUT_MS=120000 \
+            CI_LIFECYCLE_HOLD_UNTIL_MS=92000 \
+            npx wdio run wdio.investigation.conf.ts
+          mv .tmp/runs .tmp/ci-investigation/timeout-120
       - name: Repeat outline cases with native stall capture
         if: matrix.stress == '1'
         timeout-minutes: 18
