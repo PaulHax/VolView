@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { cpus } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import { TEMP_DIR } from './wdio.shared.conf';
 let nextCommand = 0;
 const originalPrefix = process.env.CI_ORIGINAL_PREFIX === '1';
 const lifecycleOnly = process.env.CI_LIFECYCLE_ONLY === '1';
+const outlineStress = process.env.CI_OUTLINE_STRESS === '1';
 const prefixSpecs = readdirSync('tests/specs')
   .filter((name) => name.endsWith('.e2e.ts') && name <= 'label-outline.e2e.ts')
   .sort()
@@ -59,18 +60,20 @@ function sampleChrome(command: string) {
     record({ event: 'chrome-processes', command, chrome });
     for (const line of chrome.slice(0, 4)) {
       const pid = line.trim().split(/\s+/)[0];
+      const samplePath = join(
+        TEMP_DIR,
+        `chrome-stack-${pid}-${Date.now()}.txt`
+      );
       execFile(
         'sample',
-        [
-          pid,
-          '3',
-          '1',
-          '-file',
-          join(TEMP_DIR, `chrome-stack-${pid}-${Date.now()}.txt`),
-        ],
+        [pid, '3', '1', '-file', samplePath],
         { timeout: 10000 },
         (failure) => {
           if (failure) console.error(failure.message);
+          else
+            console.info(
+              `[CI diagnostic] native sample ${pid}\n${readFileSync(samplePath, 'utf8').split('\n').slice(0, 250).join('\n')}`
+            );
         }
       );
     }
@@ -79,26 +82,30 @@ function sampleChrome(command: string) {
 
 export const config = {
   ...original,
-  specs: lifecycleOnly
-    ? ['./tests/specs/slice-display-lifecycle.e2e.ts']
-    : originalPrefix
-      ? prefixSpecs
-      : [
-          './tests/specs/image-segmentation-sets.e2e.ts',
-          './tests/specs/label-outline.e2e.ts',
-          './tests/specs/menu-readiness-probe.e2e.ts',
-          './tests/specs/slice-display-lifecycle.e2e.ts',
-        ],
+  specs: outlineStress
+    ? ['./tests/specs/label-outline.e2e.ts']
+    : lifecycleOnly
+      ? ['./tests/specs/slice-display-lifecycle.e2e.ts']
+      : originalPrefix
+        ? prefixSpecs
+        : [
+            './tests/specs/image-segmentation-sets.e2e.ts',
+            './tests/specs/label-outline.e2e.ts',
+            './tests/specs/menu-readiness-probe.e2e.ts',
+            './tests/specs/slice-display-lifecycle.e2e.ts',
+          ],
   maxInstances: 1,
   mochaOpts: {
     ...original.mochaOpts,
-    ...(lifecycleOnly
-      ? { grep: 'Slice display lifecycle' }
-      : originalPrefix
-        ? { bail: true }
-        : {
-            grep: 'Bounded label outlines|Image segmentation sets|CI menu readiness|keeps base and overlay rendering live',
-          }),
+    ...(outlineStress
+      ? { bail: true, grep: 'Bounded label outlines' }
+      : lifecycleOnly
+        ? { grep: 'Slice display lifecycle' }
+        : originalPrefix
+          ? { bail: true }
+          : {
+              grep: 'Bounded label outlines|Image segmentation sets|CI menu readiness|keeps base and overlay rendering live',
+            }),
   },
   // These selected cases create synthetic data and need no downloaded datasets.
   onPrepare: originalPrefix
