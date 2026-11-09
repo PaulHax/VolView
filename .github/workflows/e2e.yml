@@ -24,6 +24,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Install Chrome and ChromeDriver
+        run: node scripts/install-e2e-browser.mjs
       - name: Cache test datasets
         uses: actions/cache@v4
         with:

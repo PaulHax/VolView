@@ -1,4 +1,5 @@
 import { config as sharedConfig, TEMP_DIR } from './wdio.shared.conf';
+import { CHROME_VERSION } from './scripts/install-e2e-browser.mjs';
 
 const IS_CI = !!(process.env.CI || process.env.GITHUB_ACTIONS);
 const IS_LINUX_CI = IS_CI && process.platform === 'linux';
@@ -31,9 +32,10 @@ export const config = {
   capabilities: [
     {
       browserName: 'chrome',
-      browserVersion: '157.0.8103.26',
+      browserVersion: CHROME_VERSION,
       // this overrides the default chrome download directory with our temporary one
       'goog:chromeOptions': {
+        binary: process.env.CHROME_PATH,
         args: chromeArgs,
         prefs: {
           directory_upgrade: true,

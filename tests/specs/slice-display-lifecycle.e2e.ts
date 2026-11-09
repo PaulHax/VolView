@@ -41,10 +41,13 @@ async function showBaseInAllViews() {
   await $('[data-testid="module-tab-Data"]').click();
   await waitForModuleTransitions();
   const card = $(`.image-list-card*=${baseName}`);
-  await card.$('[data-testid="dataset-menu-button"]').click();
-  await $('.v-menu.v-overlay--active .v-overlay__content').waitForStable();
-  await $('.v-list-item*=Show in all views').click();
-  await browser.keys('Escape');
+  const menu = await volViewPage.openMenu(
+    card.$('[data-testid="dataset-menu-button"]')
+  );
+  const showInAllViews = menu.$('.v-list-item*=Show in all views');
+  await showInAllViews.waitForClickable();
+  await showInAllViews.click();
+  await menu.waitForDisplayed({ reverse: true });
 }
 
 async function setBaseRange(minimum: number, maximum: number) {
@@ -256,6 +259,9 @@ describe('Slice display lifecycle', () => {
   });
 
   it('keeps base and overlay rendering live through repeated layout replacement', async () => {
+    // This deliberately performs two full replacement cycles. The historical
+    // failure reached the second restored-oblique capture after about 81s, then
+    // Mocha ended the test at 90s while it was returning to Four Up.
     await openDisplay();
     const fourUp = await captureSlicePixels();
     const errors: string[] = [];
@@ -336,5 +342,5 @@ describe('Slice display lifecycle', () => {
     } finally {
       browser.off('log.entryAdded', onLog);
     }
-  });
+  }).timeout(120_000);
 });
