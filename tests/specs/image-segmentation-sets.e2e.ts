@@ -416,6 +416,10 @@ describe('Image segmentation sets', () => {
     await volViewPage.open();
     await openThroughDialog(savedPath);
     await volViewPage.waitForViews();
+    // Restoring Paint switches to Annotations after the masks finish decoding.
+    await expect($('button.tool-btn:has(i.mdi-brush)')).toHaveElementClass(
+      'tool-btn-selected'
+    );
     await showImage(SECOND);
     await expectSegments([]);
     await showImage(FIRST);
