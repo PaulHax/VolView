@@ -12,9 +12,14 @@ describe('CI menu readiness', () => {
     await browser.addInitScript(() => {
       window.ciPausedMenus = [];
       const animate = Element.prototype.animate;
+      const paused = new WeakSet<Element>();
       Element.prototype.animate = function (...args) {
         const animation = animate.apply(this, args);
-        if (this.classList.contains('v-overlay__content')) {
+        if (
+          this.classList.contains('v-overlay__content') &&
+          !paused.has(this)
+        ) {
+          paused.add(this);
           // Keep Vuetify's real entry transition pending at a visible frame.
           // onBeforeEnter disables pointer events until onAfterEnter runs.
           animation.pause();

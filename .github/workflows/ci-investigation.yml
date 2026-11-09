@@ -28,7 +28,14 @@ jobs:
       - run: node scripts/install-e2e-browser.mjs
       - name: Reproduce browser availability failure with cached Chrome
         run: node scripts/investigate-browser-setup.mjs
+      - name: Verify restore readiness with pending mask decoding
+        run: npx vitest run src/components/__tests__/restorePanelReadiness.spec.ts src/io/import/__tests__/restoreViewContent.spec.ts
       - run: npx vite build
+      - name: Verify the menu failure control and successful wait
+        run: |
+          npx wdio run wdio.investigation.conf.ts --spec tests/specs/menu-readiness-probe.e2e.ts --mochaOpts.grep "CI menu readiness"
+          mkdir -p .tmp/ci-investigation
+          mv .tmp/runs .tmp/ci-investigation/menu-proof
       - name: Repeat focused browser cases with diagnostic logs
         shell: bash
         run: |

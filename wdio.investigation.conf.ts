@@ -4,13 +4,7 @@ import { join } from 'node:path';
 import { config as original } from './wdio.chrome.conf';
 import { TEMP_DIR } from './wdio.shared.conf';
 
-const pending = new Map<
-  string,
-  {
-    started: number;
-    watchdog: ReturnType<typeof setTimeout>;
-  }[]
->();
+let nextCommand = 0;
 let sampled = false;
 type BeforeHook = Exclude<NonNullable<typeof original.before>, unknown[]>;
 const record = (event: Record<string, unknown>) => {
@@ -20,6 +14,27 @@ const record = (event: Record<string, unknown>) => {
     `${JSON.stringify({ time: new Date().toISOString(), ...event })}\n`
   );
 };
+
+async function traceCommand<T>(command: string, invoke: () => Promise<T>) {
+  const id = ++nextCommand;
+  const started = Date.now();
+  record({ event: 'command-begin', command, id });
+  const timer = setTimeout(() => sampleChrome(command), 15000);
+  try {
+    return await invoke();
+  } catch (error) {
+    record({ event: 'command-error', command, id, error: String(error) });
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    record({
+      event: 'command-end',
+      command,
+      id,
+      duration: Date.now() - started,
+    });
+  }
+}
 
 function sampleChrome(command: string) {
   if (sampled) return;
@@ -73,6 +88,18 @@ export const config = {
     mkdirSync(TEMP_DIR, { recursive: true });
   },
   async before(...hookArgs: Parameters<BeforeHook>) {
+    for (const command of [
+      'execute',
+      'executeAsync',
+      'url',
+      'saveScreenshot',
+    ] as const) {
+      browser.overwriteCommand(command, (invoke, ...parameters) =>
+        traceCommand(command, () =>
+          (invoke as (...values: any[]) => Promise<any>)(...parameters)
+        )
+      );
+    }
     for (const hook of [original.before].flat()) await hook?.(...hookArgs);
     await browser.addInitScript(() => {
       const log = (event: string, details = {}) =>
@@ -167,31 +194,5 @@ export const config = {
         return context;
       } as typeof getContext;
     });
-  },
-  beforeCommand(command: string) {
-    record({ event: 'command-begin', command });
-    const entries = pending.get(command) ?? [];
-    entries.push({
-      started: Date.now(),
-      watchdog: setTimeout(() => sampleChrome(command), 15000),
-    });
-    pending.set(command, entries);
-  },
-  async afterCommand(
-    command: string,
-    args: unknown[],
-    result: unknown,
-    error?: Error
-  ) {
-    const entry = pending.get(command)?.pop();
-    clearTimeout(entry?.watchdog);
-    record({
-      event: 'command-end',
-      command,
-      duration: entry ? Date.now() - entry.started : undefined,
-      error: error ? String(error) : undefined,
-    });
-    for (const hook of [original.afterCommand].flat())
-      await hook?.(command, args, result, error);
   },
 };
