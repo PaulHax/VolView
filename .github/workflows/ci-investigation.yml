@@ -9,21 +9,12 @@ permissions:
 jobs:
   investigate:
     if: github.repository == 'PaulHax/VolView'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            lifecycle: '1'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    runs-on: macos-latest
+    timeout-minutes: 45
     env:
       VITE_SHOW_SAMPLE_DATA: true
       DOWNLOAD_TIMEOUT: 90000
-      CI_ORIGINAL_PREFIX: ${{ matrix.prefix }}
-      CI_LIFECYCLE_ONLY: ${{ matrix.lifecycle }}
-      CI_LEGACY_MENU: ${{ matrix.legacy }}
-      CI_OUTLINE_STRESS: ${{ matrix.stress }}
+      CI_FIXTURE_DIAGNOSTIC_DIR: .tmp/ci-investigation/fixture-requests
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -36,56 +27,31 @@ jobs:
         run: node scripts/investigate-browser-setup.mjs
       - name: Verify restore readiness with pending mask decoding
         run: npx vitest run src/components/__tests__/restorePanelReadiness.spec.ts src/io/import/__tests__/restoreViewContent.spec.ts
-      - name: Cache datasets for the original test sequence
-        if: matrix.prefix == '1'
+      - name: Cache original lead-in datasets
         uses: actions/cache@v4
         with:
           path: .tmp/datasets
           key: e2e-datasets-${{ hashFiles('tests/datasets.ts') }}
           restore-keys: e2e-datasets-
       - run: npx vite build
-      - name: Verify the menu failure control and successful wait
-        if: matrix.prefix != '1' && matrix.lifecycle != '1' && matrix.stress != '1'
+      - name: Verify pending clickability wait during real entry on Apple Metal
+        timeout-minutes: 5
         run: |
           npx wdio run wdio.investigation.conf.ts --spec tests/specs/menu-readiness-probe.e2e.ts --mochaOpts.grep "CI menu readiness"
           mkdir -p .tmp/ci-investigation
           mv .tmp/runs .tmp/ci-investigation/menu-proof
-      - name: Verify the lifecycle deadline control
-        if: matrix.lifecycle == '1'
-        timeout-minutes: 18
-        shell: bash
+      - name: Replay original 27-spec lead-in with renderer and host stall capture
+        timeout-minutes: 30
+        env:
+          CI_ORIGINAL_PREFIX: '1'
         run: |
-          mkdir -p .tmp/ci-investigation
-          set +e
-          CI_LIFECYCLE_TEST_TIMEOUT_MS=90000 \
-            CI_LIFECYCLE_HOLD_UNTIL_MS=92000 \
-            npx wdio run wdio.investigation.conf.ts 2>&1 | tee .tmp/timeout-90.log
-          control_status=${PIPESTATUS[0]}
-          set -e
-          if [[ "$control_status" -eq 0 ]]; then
-            echo 'Expected the 90-second deadline control to fail'
-            exit 1
-          fi
-          grep -F 'Timeout of 90000ms exceeded' .tmp/timeout-90.log
-          grep -F 'keeps base and overlay rendering live through repeated layout replacement' .tmp/timeout-90.log
-          mv .tmp/runs .tmp/ci-investigation/timeout-90
-
-          CI_LIFECYCLE_TEST_TIMEOUT_MS=120000 \
-            CI_LIFECYCLE_HOLD_UNTIL_MS=92000 \
-            npx wdio run wdio.investigation.conf.ts
-          mv .tmp/runs .tmp/ci-investigation/timeout-120
-      - name: Repeat outline cases with native stall capture
-        if: matrix.stress == '1'
-        timeout-minutes: 18
-        run: |
-          npx wdio run wdio.investigation.conf.ts --spec tests/specs/label-outline.e2e.ts --repeat 20
-          mkdir -p .tmp/ci-investigation
-          mv .tmp/runs .tmp/ci-investigation/outline-stress
+          npx wdio run wdio.investigation.conf.ts
+          mv .tmp/runs .tmp/ci-investigation/original-prefix
       - name: Preserve diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-investigation-${{ matrix.os }}-${{ matrix.lifecycle }}-${{ matrix.legacy }}-${{ matrix.stress }}-${{ github.run_attempt }}
+          name: ci-investigation-macos-latest-${{ github.run_attempt }}
           path: |
             .tmp/ci-investigation
             .tmp/runs

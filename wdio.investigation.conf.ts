@@ -1,4 +1,10 @@
-import { appendFileSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { execFile } from 'node:child_process';
 import { cpus } from 'node:os';
 import { join } from 'node:path';
@@ -14,13 +20,20 @@ const prefixSpecs = readdirSync('tests/specs')
   .sort()
   .map((name) => `./tests/specs/${name}`);
 let sampled = false;
+let recordFailed = false;
 type BeforeHook = Exclude<NonNullable<typeof original.before>, unknown[]>;
 const record = (event: Record<string, unknown>) => {
-  mkdirSync(TEMP_DIR, { recursive: true });
-  appendFileSync(
-    join(TEMP_DIR, `commands-${process.pid}.jsonl`),
-    `${JSON.stringify({ time: new Date().toISOString(), ...event })}\n`
-  );
+  if (recordFailed) return;
+  try {
+    mkdirSync(TEMP_DIR, { recursive: true });
+    appendFileSync(
+      join(TEMP_DIR, `commands-${process.pid}.jsonl`),
+      `${JSON.stringify({ time: new Date().toISOString(), ...event })}\n`
+    );
+  } catch (error) {
+    recordFailed = true;
+    console.error('[CI diagnostic] command log write failed:', error);
+  }
 };
 
 async function traceCommand<T>(command: string, invoke: () => Promise<T>) {
@@ -49,35 +62,93 @@ function sampleChrome(command: string) {
   sampled = true;
   console.error(`[CI diagnostic] command stalled for 15s: ${command}`);
   if (process.platform !== 'darwin') return;
-  execFile('ps', ['-axo', 'pid=,command='], (error, output) => {
-    if (error) return console.error(error);
-    const chrome = output
-      .split('\n')
-      .filter(
-        (line) =>
-          /Google Chrome for Testing/.test(line) && !/crashpad/.test(line)
-      );
-    record({ event: 'chrome-processes', command, chrome });
-    for (const line of chrome.slice(0, 4)) {
-      const pid = line.trim().split(/\s+/)[0];
-      const samplePath = join(
-        TEMP_DIR,
-        `chrome-stack-${pid}-${Date.now()}.txt`
-      );
-      execFile(
-        'sample',
-        [pid, '3', '1', '-file', samplePath],
-        { timeout: 10000 },
-        (failure) => {
-          if (failure) console.error(failure.message);
-          else
-            console.info(
-              `[CI diagnostic] native sample ${pid}\n${readFileSync(samplePath, 'utf8').split('\n').slice(0, 250).join('\n')}`
-            );
+  // Distinguish renderer/GPU work from a runner disk fault or global starvation.
+  for (const [name, executable, args] of [
+    ['processes', 'ps', ['-axo', 'pid,ppid,stat,pcpu,pmem,etime,command']],
+    ['memory', 'vm_stat', []],
+    ['disk-space', 'df', ['-h']],
+    [
+      'kernel',
+      '/usr/bin/log',
+      [
+        'show',
+        '--last',
+        '10m',
+        '--style',
+        'compact',
+        '--predicate',
+        'process == "kernel" AND (eventMessage CONTAINS[c] "I/O error" OR eventMessage CONTAINS[c] "apfs" OR eventMessage CONTAINS[c] "GPU")',
+      ],
+    ],
+  ] as const) {
+    execFile(
+      executable,
+      [...args],
+      { timeout: 10000, maxBuffer: 8 * 1024 * 1024 },
+      (failure, output, stderr) => {
+        try {
+          writeFileSync(
+            join(TEMP_DIR, `stall-${name}-${process.pid}.txt`),
+            `${output}\n${stderr}\n${failure?.message ?? ''}`
+          );
+          record({
+            event: 'host-snapshot',
+            command,
+            name,
+            error: failure?.message,
+          });
+        } catch (error) {
+          console.error(
+            `[CI diagnostic] ${name} snapshot write failed:`,
+            error
+          );
         }
-      );
+      }
+    );
+  }
+  execFile(
+    'ps',
+    ['-axo', 'pid=,command='],
+    { timeout: 10000, maxBuffer: 4 * 1024 * 1024 },
+    (error, output) => {
+      if (error) return console.error(error);
+      const chrome = output
+        .split('\n')
+        .filter(
+          (line) =>
+            /Google Chrome for Testing/.test(line) && !/crashpad/.test(line)
+        );
+      record({ event: 'chrome-processes', command, chrome });
+      // Process order is not a role order: the renderer may be fifth or later.
+      for (const line of chrome) {
+        const pid = line.trim().split(/\s+/)[0];
+        const samplePath = join(
+          TEMP_DIR,
+          `chrome-stack-${pid}-${Date.now()}.txt`
+        );
+        execFile(
+          'sample',
+          [pid, '3', '1', '-file', samplePath],
+          { timeout: 10000 },
+          (failure) => {
+            if (failure) console.error(failure.message);
+            else {
+              try {
+                console.info(
+                  `[CI diagnostic] native sample ${pid}\n${readFileSync(samplePath, 'utf8').split('\n').slice(0, 250).join('\n')}`
+                );
+              } catch (sampleError) {
+                console.error(
+                  `[CI diagnostic] native sample ${pid} read failed:`,
+                  sampleError
+                );
+              }
+            }
+          }
+        );
+      }
     }
-  });
+  );
 }
 
 export const config = {
