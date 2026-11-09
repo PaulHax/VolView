@@ -251,7 +251,7 @@ describe('placing an annotation names its segment', () => {
     store.placeTool(id);
     store.removeTool(id);
 
-    useSegmentStore().seedDefaults('destination');
+    useSegmentStore().prepareIncomingSet('destination');
 
     expect(
       segments()
@@ -264,7 +264,7 @@ describe('placing an annotation names its segment', () => {
     const { store, id } = copyToDestination();
     store.resolveToolSegment(id);
 
-    useSegmentStore().seedDefaults('destination');
+    useSegmentStore().prepareIncomingSet('destination');
     store.updateTool(id, { firstPoint: [0, 0, 0], secondPoint: [1, 1, 0] });
     store.placeTool(id);
 
@@ -278,7 +278,7 @@ describe('placing an annotation names its segment', () => {
   it('replaces a copied set while its annotation is still an idle stub', () => {
     const { store, id } = copyToDestination();
 
-    useSegmentStore().seedDefaults('destination');
+    useSegmentStore().prepareIncomingSet('destination');
     expect(segments().segmentList('destination')).toEqual([]);
     store.placeTool(id);
 

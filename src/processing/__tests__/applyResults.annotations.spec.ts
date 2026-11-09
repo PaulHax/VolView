@@ -31,6 +31,7 @@ import { savedMasks, serializeScene } from './serializedScene';
 import { TOOL_COLORS } from '@/src/config';
 import {
   mintSegment,
+  savedSegmentNames,
   serializeAnnotations,
   lockSegment,
 } from '@/src/segmentation/__tests__/segmentMaskFixtures';
@@ -244,15 +245,7 @@ describe('applyIntent — add-annotations', () => {
     await nextTick();
 
     expect((await apply(intent(), context(IMAGE_ID))).status).toBe('applied');
-    const saved = serializeAnnotations();
-    const set = saved.imageSegmentSets!.find(
-      ({ imageId }) => imageId === IMAGE_ID
-    )!;
-    expect(
-      set.segmentIds.map(
-        (id) => saved.segments!.find((segment) => segment.id === id)!.name
-      )
-    ).toEqual(['Liver', 'roi', 'lesion']);
+    expect(savedSegmentNames(IMAGE_ID)).toEqual(['Liver', 'roi', 'lesion']);
     expect(toolCounts()).toEqual({ rulers: 1, rectangles: 1, polygons: 1 });
   });
 

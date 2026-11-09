@@ -11,12 +11,15 @@ import {
 } from '@/src/io/state-file/schema';
 import type { ConfiguredSegments } from '@/src/io/import/configSegments';
 import type { ManifestMigration } from '@/src/io/state-file/migrations';
-import type { Segment, SegmentDefaults } from '@/src/segmentation/segment';
+import {
+  DEFAULT_SEGMENT_COLOR,
+  type Segment,
+  type SegmentDefaults,
+} from '@/src/segmentation/segment';
 import {
   createSegmentRegistry,
   defaultsFromConfig,
   snapshotFromDefaults,
-  withCopiedColor,
 } from '@/src/segmentation/segmentRegistry';
 import { useImageCacheStore } from '@/src/store/image-cache';
 import type { Maybe } from '@/src/types';
@@ -80,8 +83,6 @@ export const useSegmentStore = defineStore('segments', () => {
   const { currentImageID: activeImageId } = useCurrentImage('global');
   const lastImageId = ref<string>();
 
-  const defaultSnapshot = () => snapshotFromDefaults(seedSegmentDefaults.value);
-
   const sourceImageId = (imageId?: Maybe<string>) =>
     [imageId, lastImageId.value].find(
       (id): id is string => !!id && !!registry.imageSets.value[id]
@@ -90,7 +91,9 @@ export const useSegmentStore = defineStore('segments', () => {
   // A new set copies the last viewed image's, else starts from the defaults.
   const inheritedSet = () => {
     const source = sourceImageId();
-    return source ? registry.snapshot(source) : defaultSnapshot();
+    return source
+      ? registry.snapshot(source)
+      : snapshotFromDefaults(seedSegmentDefaults.value);
   };
 
   const previewSegmentColor = (imageId: Maybe<string>) => {
@@ -101,10 +104,7 @@ export const useSegmentStore = defineStore('segments', () => {
         ? registry.appearanceOf(segmentId).color
         : registry.nextSegmentColor(source);
     }
-    return (
-      seedSegmentDefaults.value[0]?.color ??
-      registry.nextSegmentColor(undefined)
-    );
+    return seedSegmentDefaults.value[0]?.color ?? DEFAULT_SEGMENT_COLOR;
   };
 
   watch(
@@ -118,7 +118,8 @@ export const useSegmentStore = defineStore('segments', () => {
   );
 
   // Incoming definitions replace an untouched copy. An existing edited set,
-  // including one deliberately emptied by the user, keeps its identity.
+  // including one deliberately emptied by the user, keeps its identity. A
+  // replaced or missing set starts from `defaults`, which incoming labels join.
   function prepareIncomingSet(
     imageId: string,
     defaults: readonly SegmentDefaults[] = []
@@ -128,14 +129,6 @@ export const useSegmentStore = defineStore('segments', () => {
     if (!registry.imageSets.value[imageId])
       registry.initializeSet(imageId, snapshotFromDefaults(defaults));
     return true;
-  }
-
-  /** Incoming labels join configured defaults unless this image was edited. */
-  function seedDefaults(
-    imageId: string,
-    defaults: readonly SegmentDefaults[] = seedSegmentDefaults.value
-  ) {
-    prepareIncomingSet(imageId, defaults);
   }
 
   function replaceConfigSegments(
@@ -161,8 +154,7 @@ export const useSegmentStore = defineStore('segments', () => {
       segmentIds: [...set.segmentIds],
       selectedSegmentId: registry.selectedSegmentId(imageId),
     }));
-    state.manifest.seedSegmentDefaults =
-      seedSegmentDefaults.value.map(withCopiedColor);
+    state.manifest.seedSegmentDefaults = seedSegmentDefaults.value;
   }
 
   function restoreDefaults(
@@ -173,9 +165,9 @@ export const useSegmentStore = defineStore('segments', () => {
     // Initialize every restored image before views or asynchronous decoding can
     // give the active image a different borrowed set.
     if (manifest.seedSegmentDefaults || hasOnlyArtifactSegments(manifest)) {
+      // Defaults are only ever replaced, and seeding copies their colors.
       if (manifest.seedSegmentDefaults)
-        seedSegmentDefaults.value =
-          manifest.seedSegmentDefaults.map(withCopiedColor);
+        seedSegmentDefaults.value = manifest.seedSegmentDefaults;
       const savedImages = new Set(
         (manifest.imageSegmentSets ?? []).map(
           ({ imageId }) => dataIDMap[imageId]
@@ -189,7 +181,9 @@ export const useSegmentStore = defineStore('segments', () => {
       ].map((id) => dataIDMap[id]);
       [...new Set(incomingImageIds)]
         .filter((imageId) => imageId && !savedImages.has(imageId))
-        .forEach((imageId) => seedDefaults(imageId));
+        .forEach((imageId) =>
+          prepareIncomingSet(imageId, seedSegmentDefaults.value)
+        );
     }
   }
 
@@ -276,7 +270,7 @@ export const useSegmentStore = defineStore('segments', () => {
     seedSegmentDefaults,
     prepareForEdit,
     previewSegmentColor,
-    seedDefaults,
+    prepareIncomingSet,
     replaceConfigSegments,
     serialize,
     deserialize,

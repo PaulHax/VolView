@@ -263,4 +263,21 @@ describe('mask io concurrency', () => {
       [`Segment ${MASK_IO_CONCURRENCY}`]
     );
   });
+
+  it('keeps saved segment references consistent when a segment is added during encoding', async () => {
+    await seatSpecImage('img-1', 'CT A');
+    seedMasks(MASK_IO_CONCURRENCY);
+
+    const save = startGatedSave();
+    await save.queued;
+    useSegmentStore().segments.addSegment('img-1', {
+      name: 'Added during save',
+    });
+    await save.finish();
+
+    const parsed = ManifestSchema.parse(save.manifest);
+    expect(parsed.imageSegmentSets?.[0].segmentIds).toEqual(
+      parsed.segments?.map(({ id }) => id)
+    );
+  });
 });

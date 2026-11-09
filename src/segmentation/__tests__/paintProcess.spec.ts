@@ -424,7 +424,7 @@ describe('Paint process store', () => {
 
     await processStore.startProcess(emptyingProcess);
     processStore.confirmProcess();
-    segments.seedDefaults('image-2');
+    segments.prepareIncomingSet('image-2', segments.seedSegmentDefaults);
 
     expect(serializeAnnotations()).toEqual(saved);
     const { parsed } = await serializeToStateFiles(

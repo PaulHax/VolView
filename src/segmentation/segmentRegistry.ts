@@ -70,9 +70,7 @@ const configuredAppearance = ({
 const configuredColor = (index: number) =>
   cssColorToRGBA(TOOL_COLORS[index % TOOL_COLORS.length]);
 
-export const withCopiedColor = <T extends { color?: RGBAColor }>(
-  segment: T
-): T => ({
+const withCopiedColor = <T extends { color?: RGBAColor }>(segment: T): T => ({
   ...segment,
   ...(segment.color ? { color: [...segment.color] as RGBAColor } : {}),
 });
@@ -83,21 +81,6 @@ export const defaultsFromConfig = (configured: ConfiguredSegments) =>
     fromConfigured(name, props)
   );
 
-const configuredEntry = (
-  { name, color, fillOpacity, outlineOpacity, strokeWidth }: SegmentDefaults,
-  index: number
-) => ({
-  appearance: configuredAppearance({ color: configuredColor(index) }),
-  contribution: cleanUndefined({
-    name,
-    color,
-    fillOpacity,
-    outlineOpacity,
-    strokeWidth,
-  }),
-  minted: true,
-});
-
 /** Seeds defaults as config-minted segments, as the config itself would. */
 export const snapshotFromDefaults = (
   defaults: readonly SegmentDefaults[]
@@ -106,7 +89,9 @@ export const snapshotFromDefaults = (
   configured: defaults.map((segment, index) => ({
     name: segment.name,
     index,
-    ...configuredEntry(segment, index),
+    appearance: configuredAppearance({ color: configuredColor(index) }),
+    contribution: cleanUndefined(segment),
+    minted: true,
   })),
 });
 
@@ -189,6 +174,10 @@ export const createSegmentRegistry = (
   const ownerImageId = (id: Maybe<string>) => (id ? owners.get(id) : undefined);
   const belongsToImage = (imageId: Maybe<string>, id: Maybe<string>) =>
     !!imageId && !!id && ownerImageId(id) === imageId;
+  const assertBelongsToImage = (imageId: Maybe<string>, id: Maybe<string>) => {
+    if (id && !belongsToImage(imageId, id))
+      throw new Error('Segment belongs to another image');
+  };
 
   const indexName = (imageId: string, name: string, id: string) => {
     const { idsByName } = metadataFor(imageId);
@@ -365,10 +354,8 @@ export const createSegmentRegistry = (
     set.segmentIds = order;
   };
 
-  const nextSegmentColor = (imageId: Maybe<string>) =>
-    configuredColor(
-      imageId ? (metadataByImage.get(imageId)?.nextColorIndex ?? 0) : 0
-    );
+  const nextSegmentColor = (imageId: string) =>
+    configuredColor(metadataByImage.get(imageId)?.nextColorIndex ?? 0);
 
   const ensureSelectedSegment = (imageId: string) => {
     beforeEdit(imageId);
@@ -606,6 +593,7 @@ export const createSegmentRegistry = (
     initializeSet,
     snapshot,
     belongsToImage,
+    assertBelongsToImage,
     removeImage,
     releaseBorrowed,
     segmentList,

@@ -92,20 +92,10 @@ export const useAnnotationTool = <
 
   const registry = useSegmentStore().segments;
 
-  const assertOwnSegment = (
-    imageId: Maybe<string>,
-    segmentId: Maybe<string>
-  ) => {
-    if (segmentId && !registry.belongsToImage(imageId, segmentId))
-      throw new Error(
-        'An annotation must use a segment belonging to its image'
-      );
-  };
-
   function addTool(tool: ToolPatch): ToolID {
     const segmentId =
       tool.segmentId ?? registry.selectedSegmentId(tool.imageID) ?? '';
-    assertOwnSegment(tool.imageID, segmentId);
+    registry.assertBelongsToImage(tool.imageID, segmentId);
     const id = useIdStore().nextId() as ToolID;
     if (id in toolByID.value) {
       throw new Error('Cannot add tool with conflicting ID');
@@ -153,7 +143,7 @@ export const useAnnotationTool = <
     const next = { ...toolByID.value[id], ...patch, id };
     // A stub being placed may still name a deleted segment; placing resolves it.
     if (!next.placing || registry.getSegment(next.segmentId))
-      assertOwnSegment(next.imageID, next.segmentId);
+      registry.assertBelongsToImage(next.imageID, next.segmentId);
     toolByID.value[id] = next;
   }
 

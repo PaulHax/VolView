@@ -38,7 +38,7 @@ export type SegmentDefaults = Omit<
   color?: RGBAColor;
 };
 
-const DEFAULT_SEGMENT_COLOR = cssColorToRGBA(TOOL_COLORS[0]);
+export const DEFAULT_SEGMENT_COLOR = cssColorToRGBA(TOOL_COLORS[0]);
 
 const APPEARANCE_DEFAULTS = {
   name: '',

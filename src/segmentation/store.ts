@@ -59,7 +59,6 @@ import {
 import { boundScalars } from '@/src/segmentation/masks/overlap';
 import { SEGMENT_VALUE } from '@/src/segmentation/masks/labelValue';
 import { useSegmentStore } from '@/src/segmentation/segments';
-import { withCopiedColor } from '@/src/segmentation/segmentRegistry';
 import { useMessageStore } from '@/src/store/messages';
 import {
   cleanUndefined,
@@ -229,8 +228,7 @@ export const useSegmentationStore = defineStore('segmentation', () => {
     const segmentation = getSegmentation(segmentationId);
     if (!segmentRegistry.getSegment(segmentId))
       throw new Error('No such segment');
-    if (!segmentRegistry.belongsToImage(segmentation.parentImageId, segmentId))
-      throw new Error('Segment belongs to another image');
+    segmentRegistry.assertBelongsToImage(segmentation.parentImageId, segmentId);
     if (maskFor(segmentation.parentImageId, segmentId))
       throw new Error('Segment already has a mask on this image');
     const id = useIdStore().nextId();
@@ -429,8 +427,9 @@ export const useSegmentationStore = defineStore('segmentation', () => {
     if (running) return running;
 
     if (!seedDefaults) useSegmentStore().prepareForEdit(parentID);
+    // Replacing defaults during decoding leaves this captured configuration intact.
     const companionDefaults = seedDefaults
-      ? useSegmentStore().seedSegmentDefaults.map(withCopiedColor)
+      ? useSegmentStore().seedSegmentDefaults
       : undefined;
 
     const bySourceValue = new Map(
@@ -461,7 +460,7 @@ export const useSegmentationStore = defineStore('segmentation', () => {
       },
       split: (labelmap, descriptors) => {
         if (companionDefaults)
-          useSegmentStore().seedDefaults(parentID, companionDefaults);
+          useSegmentStore().prepareIncomingSet(parentID, companionDefaults);
         const created = splitLabelmapIntoMasks(
           parentID,
           labelmap,
@@ -656,8 +655,7 @@ export const useSegmentationStore = defineStore('segmentation', () => {
     preferredSegmentId: Maybe<string>
   ) => {
     if (preferredSegmentId && segmentRegistry.getSegment(preferredSegmentId)) {
-      if (!segmentRegistry.belongsToImage(imageId, preferredSegmentId))
-        throw new Error('Segment belongs to another image');
+      segmentRegistry.assertBelongsToImage(imageId, preferredSegmentId);
       return preferredSegmentId;
     }
     return segmentRegistry.selectedSegmentId(imageId);

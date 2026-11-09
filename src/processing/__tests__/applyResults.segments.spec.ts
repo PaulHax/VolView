@@ -15,6 +15,7 @@ import { useSegmentStore } from '@/src/segmentation/segments';
 import { usePolygonStore } from '@/src/store/tools/polygons';
 import { defer } from '@/src/utils';
 import {
+  savedSegmentNames,
   seatImage,
   showImage,
   seedVoxel,
@@ -131,15 +132,10 @@ describe('processing segment identity', () => {
       await importResult([{ value: 1, name: 'Tumor', color: blue }])
     ).toEqual({ status: 'applied' });
     const saved = await save();
-    const set = saved.manifest.imageSegmentSets!.find(
-      ({ imageId }) => imageId === 'parent-B'
-    )!;
-    expect(
-      set.segmentIds.map(
-        (id) =>
-          saved.manifest.segments!.find((segment) => segment.id === id)!.name
-      )
-    ).toEqual(['Liver', 'Tumor']);
+    expect(savedSegmentNames('parent-B', saved.manifest)).toEqual([
+      'Liver',
+      'Tumor',
+    ]);
     expect(savedMasks(saved, 'parent-B')).toMatchObject([
       { segment: { name: 'Tumor' } },
     ]);
