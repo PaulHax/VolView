@@ -258,7 +258,11 @@ describe('Slice display lifecycle', () => {
     await expectBaseSettings();
   });
 
-  it('keeps base and overlay rendering live through repeated layout replacement', async () => {
+  it('keeps base and overlay rendering live through repeated layout replacement', async function () {
+    // This deliberately performs two full replacement cycles. The historical
+    // failure reached the second restored-oblique capture after about 81s, then
+    // Mocha ended the test at 90s while it was returning to Four Up.
+    this.timeout(120_000);
     await openDisplay();
     const fourUp = await captureSlicePixels();
     const errors: string[] = [];
