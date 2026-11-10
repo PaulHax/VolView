@@ -16,6 +16,7 @@ jobs:
       DOWNLOAD_TIMEOUT: 90000
       CI_LIFECYCLE_ONLY: '1'
       CI_LIFECYCLE_COMMANDS: '1'
+      CI_LINUX_NATIVE: '1'
       CI_NO_PAGE_INSTRUMENTATION: '1'
       ORIGINAL_REV: 55dc25a8bf7aea46815b554da11b40880ebd19a2
     steps:
@@ -32,15 +33,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node scripts/install-e2e-browser.mjs
+      - name: Verify native sampler
+        run: |
+          gdb --version
+          sudo -n true
       - run: npx vite build
-      - name: Profile ten original lifecycle executions at the original deadline
+      - name: Sample native GPU stacks during three original lifecycle executions
         timeout-minutes: 40
         run: |
           mkdir -p .tmp/ci-investigation
           python3 scripts/investigate-linux-host.py .tmp/ci-investigation/linux-host.jsonl &
           monitor_pid=$!
           trap 'kill "$monitor_pid" 2>/dev/null || true; wait "$monitor_pid" 2>/dev/null || true' EXIT
-          npx wdio run wdio.investigation.conf.ts --spec tests/specs/slice-display-lifecycle.e2e.ts --repeat 9
+          npx wdio run wdio.investigation.conf.ts --spec tests/specs/slice-display-lifecycle.e2e.ts --repeat 3
       - name: Preserve diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4

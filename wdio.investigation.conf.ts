@@ -47,7 +47,12 @@ async function traceCommand<T>(
     event: 'command-begin', command, id, ...details,
     caller: new Error().stack?.split('\n').slice(2, 10),
   });
-  const timer = setTimeout(() => sampleChrome(command), 15000);
+  const nativeLinux = process.env.CI_LINUX_NATIVE === '1';
+  const sampleThis = !nativeLinux ||
+    (command === 'element.click' && details.selector === '.v-list-item-title=3D Only');
+  const timer = sampleThis
+    ? setTimeout(() => sampleChrome(command), nativeLinux ? 5000 : 15000)
+    : undefined;
   try {
     return await invoke();
   } catch (error) {
@@ -67,7 +72,37 @@ async function traceCommand<T>(
 function sampleChrome(command: string) {
   if (sampled) return;
   sampled = true;
-  console.error(`[CI diagnostic] command stalled for 15s: ${command}`);
+  console.error(`[CI diagnostic] command unfinished at native sampling threshold: ${command}`);
+  if (process.platform === 'linux' && process.env.CI_LINUX_NATIVE === '1') {
+    execFile('ps', ['-axo', 'pid=,command='],
+      { timeout: 5000, maxBuffer: 4 * 1024 * 1024 }, (error, output) => {
+        if (error) return console.error(error);
+        const gpu = output.split('\n').filter(line =>
+          /chrome.*--type=gpu-process/.test(line) &&
+          !/gdb|sudo/.test(line)
+        );
+        record({ event: 'linux-native-targets', command, gpu });
+        for (const line of gpu) {
+          const pid = line.trim().split(/\s+/)[0];
+          execFile('sudo', ['-n', 'gdb', '--batch', '--nx', '--nh',
+            '-iex', 'set auto-load off',
+            '-iex', 'set debuginfod enabled off',
+            '-ex', 'set pagination off',
+            '-ex', 'info threads',
+            '-ex', 'thread apply all bt 12',
+            '-ex', 'info sharedlibrary', '-p', pid],
+            { timeout: 10000, maxBuffer: 8 * 1024 * 1024 },
+            (failure, stdout, stderr) => {
+              record({ event: 'linux-native-sample', pid, error: failure?.message });
+              try {
+                writeFileSync(join(TEMP_DIR, `gpu-stack-${pid}.txt`),
+                  `${stdout}\n${stderr}\n${failure?.message ?? ''}`);
+              } catch (writeError) { console.error(writeError); }
+            });
+        }
+      });
+    return;
+  }
   if (process.platform !== 'darwin') return;
   // Distinguish renderer/GPU work from a runner disk fault or global starvation.
   for (const [name, executable, args] of [
