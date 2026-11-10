@@ -90,7 +90,9 @@ function sampleChrome(command: string) {
             '-ex', 'set pagination off',
             '-ex', 'info threads',
             '-ex', 'thread apply all bt 12',
-            '-ex', 'info sharedlibrary', '-p', pid],
+            '-ex', 'info sharedlibrary',
+            '-ex', 'info proc mappings',
+            '-ex', 'thread apply all x/8i $pc', '-p', pid],
             { timeout: 10000, maxBuffer: 8 * 1024 * 1024 },
             (failure, stdout, stderr) => {
               record({ event: 'linux-native-sample', pid, error: failure?.message });
