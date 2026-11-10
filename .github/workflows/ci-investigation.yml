@@ -33,10 +33,21 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node scripts/install-e2e-browser.mjs
-      - name: Verify native sampler
+      - name: Install and verify native sampler
+        timeout-minutes: 5
         run: |
+          if ! command -v gdb >/dev/null; then
+            sudo -n apt-get update
+            sudo -n apt-get install -y --no-install-recommends gdb
+          fi
           gdb --version
-          sudo -n true
+          sleep 20 &
+          probe_pid=$!
+          trap 'kill "$probe_pid" 2>/dev/null || true; wait "$probe_pid" 2>/dev/null || true' EXIT
+          sudo -n gdb --batch --nx --nh \
+            -iex 'set auto-load off' \
+            -iex 'set debuginfod enabled off' \
+            -ex 'thread apply all bt 1' -ex detach -p "$probe_pid"
       - run: npx vite build
       - name: Sample native GPU stacks during three original lifecycle executions
         timeout-minutes: 40
