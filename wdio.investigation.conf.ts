@@ -36,10 +36,17 @@ const record = (event: Record<string, unknown>) => {
   }
 };
 
-async function traceCommand<T>(command: string, invoke: () => Promise<T>) {
+async function traceCommand<T>(
+  command: string,
+  invoke: () => Promise<T>,
+  details: Record<string, unknown> = {}
+) {
   const id = ++nextCommand;
   const started = Date.now();
-  record({ event: 'command-begin', command, id });
+  record({
+    event: 'command-begin', command, id, ...details,
+    caller: new Error().stack?.split('\n').slice(2, 10),
+  });
   const timer = setTimeout(() => sampleChrome(command), 15000);
   try {
     return await invoke();
@@ -208,6 +215,20 @@ export const config = {
           (invoke as (...values: any[]) => Promise<any>)(...parameters)
         )
       );
+    }
+    if (process.env.CI_LIFECYCLE_COMMANDS === '1') {
+      for (const command of [
+        'click', 'doubleClick', 'moveTo', 'scrollIntoView',
+        'waitForStable', 'waitForDisplayed', 'waitForClickable',
+      ] as const) {
+        browser.overwriteCommand(command, function (invoke, ...parameters) {
+          return traceCommand(
+            `element.${command}`,
+            () => (invoke as (...values: any[]) => Promise<any>)(...parameters),
+            { selector: String(this.selector) }
+          );
+        }, true);
+      }
     }
     for (const hook of [original.before].flat()) await hook?.(...hookArgs);
     // Keep the original page free of observer/WebGL wrappers in the pristine replay.
