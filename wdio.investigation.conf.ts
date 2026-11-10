@@ -16,7 +16,10 @@ const originalPrefix = process.env.CI_ORIGINAL_PREFIX === '1';
 const lifecycleOnly = process.env.CI_LIFECYCLE_ONLY === '1';
 const outlineStress = process.env.CI_OUTLINE_STRESS === '1';
 const prefixSpecs = readdirSync('tests/specs')
-  .filter((name) => name.endsWith('.e2e.ts') && name <= 'label-outline.e2e.ts')
+  .filter((name) => name.endsWith('.e2e.ts') && name <=
+    (process.env.CI_LIFECYCLE_PREFIX === '1'
+      ? 'slice-display-lifecycle.e2e.ts'
+      : 'label-outline.e2e.ts'))
   .sort()
   .map((name) => `./tests/specs/${name}`);
 let sampled = false;
