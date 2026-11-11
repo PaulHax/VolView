@@ -234,6 +234,20 @@ export const config = {
   beforeTest(test: { title: string }) {
     record({ event: 'test-start', title: test.title });
   },
+  async after(...hookArgs: Parameters<Exclude<NonNullable<typeof original.after>, unknown[]>>) {
+    // Query only after the spec, so GPU collection cannot warm up the test page.
+    if (process.env.CI_BROWSER_GPU_INFO === '1') {
+      try {
+        const { captureBrowserGpuInfo } = await import('./scripts/investigate-browser-gpu.mjs');
+        const options = browser.capabilities['goog:chromeOptions'] as { debuggerAddress?: string } | undefined;
+        const info = await captureBrowserGpuInfo(options?.debuggerAddress);
+        record({ event: 'browser-gpu-info', ...info });
+      } catch (error) {
+        record({ event: 'browser-gpu-info-error', error: String(error) });
+      }
+    }
+    for (const hook of [original.after].flat()) await hook?.(...hookArgs);
+  },
   async before(...hookArgs: Parameters<BeforeHook>) {
     const processors = cpus();
     record({
