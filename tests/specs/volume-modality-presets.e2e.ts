@@ -143,7 +143,7 @@ describe('volume preset from declared modality', () => {
     await expectSelectedPreset('MR Default');
   });
 
-  it('selects Grayscale for a streamed DICOM series of an unlisted modality', async () => {
+  it('guesses CT AAA for a streamed DICOM series of an unlisted modality', async () => {
     const name = 'dicom-pt-preset';
     const directory = makeTempDir(name);
     const manifest = `${name}.json`;
@@ -153,7 +153,7 @@ describe('volume preset from declared modality', () => {
     );
     await openWith3DLayout(`tmp/${manifest}`, name);
     await expectVisibleVolume(name);
-    await expectSelectedPreset('Grayscale');
+    await expectSelectedPreset('CT AAA');
   });
 });
 
@@ -187,6 +187,21 @@ describe('grayscale default fitted to the data', () => {
     Math.floor(index / SIZE) % SIZE,
     Math.floor(index / SIZE ** 2),
   ];
+
+  it('guesses CT AAA for untagged data in Hounsfield units', async () => {
+    const name = 'fitted-untagged-hu';
+    const voxels = floatVoxels(SIZE, (index) => {
+      const radius = Math.hypot(...coordinates(index).map((c) => c - SIZE / 2));
+      if (radius < 8) return 700;
+      return radius < 24 ? 40 : -1024;
+    });
+    await openWith3DLayout(
+      writeNrrd(name, nrrd([], 'float', SIZE), voxels),
+      name
+    );
+    await expectVisibleVolume(name);
+    await expectSelectedPreset('CT AAA');
+  });
 
   it('shows a small block on a zero background with a bright outlier', async () => {
     const name = 'fitted-sparse';

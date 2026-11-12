@@ -23,6 +23,7 @@ import { DeepPartial, Maybe } from '@/src/types';
 import { identity } from '@/src/utils';
 import { isDicomImage } from '@/src/utils/dataSelection';
 import { getDeclaredModality } from '@/src/utils/declaredModality';
+import { looksLikeHounsfieldRange } from '@/src/utils/hounsfieldRange';
 import { useImageCacheStore } from '@/src/store/image-cache';
 import { createViewConfigSerializer } from './common';
 import { ViewConfig } from '../../io/state-file/schema';
@@ -46,15 +47,23 @@ function getDeclaredPreset(imageID: string) {
   return DEFAULT_PRESET_BY_MODALITY[modality];
 }
 
-/** Undefined while a choice that depends on the voxels awaits the full image. */
+/**
+ * Checks against the scalar range need every voxel, so a streaming image keeps
+ * its declared preset, or the CT guess, for good.
+ */
 function getDefaultPreset(imageID: string, image: vtkImageData) {
   const declared = getDeclaredPreset(imageID);
   const scalars = image.getPointData().getScalars();
-  if (scalars.getNumberOfComponents() !== 1) return declared ?? DEFAULT_PRESET;
-  if (!useImageCacheStore().imageById[imageID]?.isLoaded()) return declared;
-  return declared && hasVisibleOpacity(declared, scalars.getRange())
-    ? declared
-    : DEFAULT_GRAYSCALE_PRESET;
+  if (
+    scalars.getNumberOfComponents() !== 1 ||
+    !useImageCacheStore().imageById[imageID]?.isLoaded()
+  )
+    return declared ?? DEFAULT_PRESET;
+  const range = scalars.getRange();
+  const fits = declared
+    ? hasVisibleOpacity(declared, range)
+    : looksLikeHounsfieldRange(range);
+  return fits ? (declared ?? DEFAULT_PRESET) : DEFAULT_GRAYSCALE_PRESET;
 }
 
 export const defaultVolumeColorConfig = (): VolumeColorConfig => ({
@@ -166,7 +175,6 @@ export const useVolumeColoringStore = defineStore('volumeColoring', () => {
   ) => {
     const defaults = defaultConfigs[dataID];
     const preset = getInitialPreset(dataID, image);
-    if (!preset) return;
     const scalars = image.getPointData().getScalars();
 
     updateColorBy(viewID, dataID, {
