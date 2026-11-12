@@ -14,6 +14,7 @@ import {
 import vtkFieldData from '@kitware/vtk.js/Common/DataModel/DataSetAttributes/FieldData';
 import vtkImageData from '@kitware/vtk.js/Common/DataModel/ImageData';
 import { Maybe } from '@/src/types';
+import { robustScalarRange } from '@/src/utils/robustScalarRange';
 
 export function computeWorldToDisplay(
   xyz: Vector3,
@@ -153,6 +154,11 @@ export function getShiftedOpacityFromPreset(
   return null;
 }
 
+// Zero at the bottom of the range, then fully opaque at and above the top.
+export const RELATIVE_PRESET_GAUSSIANS = [
+  { position: 1, height: 1, width: 1, xBias: 0, yBias: 1 },
+];
+
 type OpacityFunctionWithoutRange =
   | Omit<OpacityGaussians, 'mappingRange'>
   | Omit<OpacityPoints, 'mappingRange'>
@@ -178,9 +184,7 @@ export function getOpacityFunctionFromPreset(
   return {
     mode: vtkPiecewiseFunctionProxy.Mode.Gaussians,
     // deep-copy necessary
-    gaussians: JSON.parse(
-      JSON.stringify(vtkPiecewiseFunctionProxy.Defaults.Gaussians)
-    ),
+    gaussians: RELATIVE_PRESET_GAUSSIANS.map((gaussian) => ({ ...gaussian })),
   };
 }
 
@@ -222,6 +226,41 @@ export function getColorFunctionRangeFromPreset(
     return [min, max];
   }
   return null;
+}
+
+/** The scalar range that a preset without an absolute range maps onto. */
+export function getRelativePresetRange(image: vtkImageData) {
+  const scalars = image.getPointData().getScalars();
+  const range = scalars.getRange();
+  return scalars.getNumberOfComponents() === 1
+    ? robustScalarRange(scalars.getData(), range)
+    : range;
+}
+
+/** Whether a preset's opacity points are nonzero anywhere in a scalar range. */
+export function hasVisibleOpacity(
+  presetName: string,
+  [low, high]: readonly number[]
+) {
+  const points = getPresetByName(presetName)?.OpacityPoints;
+  if (!points) return true;
+  const pairs = Array.from(
+    { length: points.length / 2 },
+    (_, index) => [points[2 * index], points[2 * index + 1]] as const
+  );
+  // Piecewise linear and clamped, so the extremes lie at the ends or at points.
+  const opacityAt = (value: number) => {
+    const next = pairs.findIndex(([x]) => x >= value);
+    if (next < 0) return pairs[pairs.length - 1][1];
+    if (next === 0) return pairs[0][1];
+    const [x0, y0] = pairs[next - 1];
+    const [x1, y1] = pairs[next];
+    return y0 + ((y1 - y0) * (value - x0)) / (x1 - x0);
+  };
+  return (
+    [low, high].some((value) => opacityAt(value) > 0) ||
+    pairs.some(([x, y]) => x >= low && x <= high && y > 0)
+  );
 }
 
 /**

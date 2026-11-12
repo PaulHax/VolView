@@ -66,6 +66,12 @@ const GroupedPresets = [
       'US-Fetal',
     ],
   },
+  {
+    group: 'Generic',
+    presets: [
+      'Grayscale',
+    ],
+  },
 ];
 
 export const PresetNameList = GroupedPresets.flatMap((group) => group.presets);

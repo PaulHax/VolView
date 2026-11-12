@@ -10,6 +10,8 @@ import { useCurrentImage } from './useCurrentImage';
 import {
   getColorFunctionRangeFromPreset,
   getOpacityRangeFromPreset,
+  getRelativePresetRange,
+  RELATIVE_PRESET_GAUSSIANS,
 } from '../utils/vtk-helpers';
 import { PresetNameList } from '../vtk/ColorMaps';
 import { logError } from '../utils/loggers';
@@ -38,7 +40,7 @@ function resetOpacityFunction(
     pwfProxy.setPoints(pointsNormalized);
   } else {
     pwfProxy.setMode(vtkPiecewiseFunctionProxy.Mode.Gaussians);
-    pwfProxy.setGaussians(vtkPiecewiseFunctionProxy.Defaults.Gaussians);
+    pwfProxy.setGaussians(RELATIVE_PRESET_GAUSSIANS);
   }
 }
 
@@ -75,7 +77,7 @@ export function useVolumeThumbnailing(
     interruptSentinel = localSentinel;
 
     thumbnailer.setInputImage(image);
-    const imageDataRange = image.getPointData().getScalars().getRange();
+    const relativeRange = getRelativePresetRange(image);
 
     async function helper(presetName: string) {
       // bail if a new thumbnail process has started
@@ -99,7 +101,7 @@ export function useVolumeThumbnailing(
       const opRange = getOpacityRangeFromPreset(presetName);
       resetOpacityFunction(
         thumbnailer.opacityFuncProxy,
-        opRange || imageDataRange,
+        opRange || relativeRange,
         presetName
       );
 
@@ -107,7 +109,7 @@ export function useVolumeThumbnailing(
       thumbnailer.colorTransferFuncProxy.setPresetName(presetName);
       const ctRange = getColorFunctionRangeFromPreset(presetName);
       thumbnailer.colorTransferFuncProxy.setDataRange(
-        ...(ctRange || imageDataRange)
+        ...(ctRange || relativeRange)
       );
 
       thumbnailer.resetCameraWithOrientation(

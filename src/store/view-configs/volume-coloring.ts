@@ -3,9 +3,14 @@ import vtkPiecewiseFunctionProxy from '@kitware/vtk.js/Proxy/Core/PiecewiseFunct
 import {
   getColorFunctionRangeFromPreset,
   getOpacityFunctionFromPreset,
+  getRelativePresetRange,
+  hasVisibleOpacity,
 } from '@/src/utils/vtk-helpers';
-import { DEFAULT_PRESET_BY_MODALITY, DEFAULT_PRESET } from '@/src/config';
-import { ColorTransferFunction } from '@/src/types/views';
+import {
+  DEFAULT_GRAYSCALE_PRESET,
+  DEFAULT_PRESET_BY_MODALITY,
+  DEFAULT_PRESET,
+} from '@/src/config';
 import { defineStore } from 'pinia';
 import { reactive } from 'vue';
 import {
@@ -30,7 +35,7 @@ export const DEFAULT_SPECULAR = 0.3;
 export const DEFAULT_EDGE_GRADIENT = 0.2;
 export const DEFAULT_SAMPLING_DISTANCE = 0.2;
 
-function getPresetFromImageModality(imageID: string) {
+function getDeclaredPreset(imageID: string) {
   const dicomModality = isDicomImage(imageID)
     ? useDICOMStore().volumeInfo[imageID]?.Modality
     : undefined;
@@ -38,27 +43,18 @@ function getPresetFromImageModality(imageID: string) {
     dicomModality,
     useImageCacheStore().imageById[imageID]?.headerMetadata
   );
-  return DEFAULT_PRESET_BY_MODALITY[modality] ?? DEFAULT_PRESET;
+  return DEFAULT_PRESET_BY_MODALITY[modality];
 }
 
-/**
- * Gets partial color and opacity function configs from a preset.
- * @param preset
- * @returns
- */
-function getColorAndOpacityFuncsFromPreset(preset: string) {
-  const ctFunc: Partial<ColorTransferFunction> = {
-    preset,
-  };
-
-  const ctRange = getColorFunctionRangeFromPreset(preset);
-  if (ctRange) {
-    ctFunc.mappingRange = ctRange;
-  }
-
-  const opFunc = getOpacityFunctionFromPreset(preset);
-
-  return { colorFunc: ctFunc, opacityFunc: opFunc };
+/** Undefined while a choice that depends on the voxels awaits the full image. */
+function getDefaultPreset(imageID: string, image: vtkImageData) {
+  const declared = getDeclaredPreset(imageID);
+  const scalars = image.getPointData().getScalars();
+  if (scalars.getNumberOfComponents() !== 1) return declared ?? DEFAULT_PRESET;
+  if (!useImageCacheStore().imageById[imageID]?.isLoaded()) return declared;
+  return declared && hasVisibleOpacity(declared, scalars.getRange())
+    ? declared
+    : DEFAULT_GRAYSCALE_PRESET;
 }
 
 export const defaultVolumeColorConfig = (): VolumeColorConfig => ({
@@ -143,19 +139,25 @@ export const useVolumeColoringStore = defineStore('volumeColoring', () => {
     const image = imageCacheStore.getVtkImageData(imageID);
     if (!image) throw new Error('Invalid imageID');
 
-    const imageDataRange = image.getPointData().getScalars().getRange();
-    const { colorFunc, opacityFunc } =
-      getColorAndOpacityFuncsFromPreset(preset);
-    colorFunc.mappingRange ||= imageDataRange;
+    const presetRange = getColorFunctionRangeFromPreset(preset);
+    // Absolute opacity points stay in scalar units, edited over the data range.
+    const opacityRange = presetRange
+      ? image.getPointData().getScalars().getRange()
+      : getRelativePresetRange(image);
 
-    const completeOpacityFunc = {
-      ...opacityFunc,
-      mappingRange: imageDataRange,
-    };
-
-    updateColorTransferFunction(viewID, imageID, colorFunc);
-    updateOpacityFunction(viewID, imageID, completeOpacityFunc);
+    updateColorTransferFunction(viewID, imageID, {
+      preset,
+      mappingRange: presetRange ?? opacityRange,
+    });
+    updateOpacityFunction(viewID, imageID, {
+      ...getOpacityFunctionFromPreset(preset),
+      mappingRange: opacityRange,
+    });
   };
+
+  const getInitialPreset = (dataID: string, image: vtkImageData) =>
+    defaultConfigs[dataID]?.transferFunction?.preset ??
+    getDefaultPreset(dataID, image);
 
   const resetToDefaultColoring = (
     viewID: string,
@@ -163,17 +165,15 @@ export const useVolumeColoringStore = defineStore('volumeColoring', () => {
     image: vtkImageData
   ) => {
     const defaults = defaultConfigs[dataID];
+    const preset = getInitialPreset(dataID, image);
+    if (!preset) return;
     const scalars = image.getPointData().getScalars();
 
     updateColorBy(viewID, dataID, {
       arrayName: defaults?.colorBy?.arrayName ?? scalars.getName(),
       location: defaults?.colorBy?.location ?? 'pointData',
     });
-    setColorPreset(
-      viewID,
-      dataID,
-      defaults?.transferFunction?.preset ?? getPresetFromImageModality(dataID)
-    );
+    setColorPreset(viewID, dataID, preset);
   };
 
   /**
