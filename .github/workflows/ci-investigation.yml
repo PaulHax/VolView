@@ -9,15 +9,17 @@ permissions:
 jobs:
   investigate:
     if: github.repository == 'PaulHax/VolView'
-    runs-on: macos-latest
-    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       VITE_SHOW_SAMPLE_DATA: true
       DOWNLOAD_TIMEOUT: 90000
       CI_ORIGINAL_PREFIX: '1'
-      CI_NO_PAGE_INSTRUMENTATION: '1'
+      CI_LIFECYCLE_PREFIX: '1'
+      CI_LIFECYCLE_ONLY: '1'
       CI_BROWSER_GPU_INFO: '1'
-      CI_FIXTURE_DIAGNOSTIC_DIR: .tmp/ci-investigation/fixture-requests
+      CI_LIFECYCLE_COMMANDS: '1'
+      CI_NO_PAGE_INSTRUMENTATION: '1'
       ORIGINAL_REV: 55dc25a8bf7aea46815b554da11b40880ebd19a2
     steps:
       - uses: actions/checkout@v4
@@ -25,9 +27,7 @@ jobs:
         run: |
           git fetch --no-tags origin "$ORIGINAL_REV"
           git restore --source="$ORIGINAL_REV" --worktree -- src tests
-          # Only the server-side request logger is retained under tests.
-          git restore --source="$GITHUB_SHA" --worktree -- tests/fixtures/vtkFixtureServer.mjs
-          git diff --exit-code "$ORIGINAL_REV" -- src tests ':!tests/fixtures/vtkFixtureServer.mjs'
+          git diff --exit-code "$ORIGINAL_REV" -- src tests
           git diff --stat "$ORIGINAL_REV"
       - uses: actions/setup-node@v4
         with:
@@ -42,17 +42,19 @@ jobs:
           key: e2e-datasets-${{ hashFiles('tests/datasets.ts') }}
           restore-keys: e2e-datasets-
       - run: npx vite build
-      - name: Replay original lead-in with external post-spec GPU info
-        timeout-minutes: 30
+      - name: Repeat original lifecycle with script and host evidence
+        timeout-minutes: 110
         run: |
-          npx wdio run wdio.investigation.conf.ts
           mkdir -p .tmp/ci-investigation
-          mv .tmp/runs .tmp/ci-investigation/original-source-prefix
+          python3 scripts/investigate-linux-host.py .tmp/ci-investigation/linux-host.jsonl &
+          monitor_pid=$!
+          trap 'kill "$monitor_pid" 2>/dev/null || true; wait "$monitor_pid" 2>/dev/null || true' EXIT
+          npx wdio run wdio.investigation.conf.ts --spec ./tests/specs/slice-display-lifecycle.e2e.ts --repeat 9
       - name: Preserve diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-investigation-external-gpu-macos-latest-${{ github.run_attempt }}
+          name: ci-investigation-lifecycle-script-linux-${{ github.run_attempt }}
           path: |
             .tmp/ci-investigation
             .tmp/runs
