@@ -1,7 +1,8 @@
 const SAMPLE_BUDGET = 2 ** 17;
 const TAIL_PERCENT = 1;
 
-function sampleValues(values: ArrayLike<number>) {
+/** A deterministic, evenly spread sample of at most 2^17 values. */
+export function sampleValues(values: ArrayLike<number>) {
   const count = Math.min(values.length, SAMPLE_BUDGET);
   return Float64Array.from({ length: count }, (_, index) => {
     // Jittered strata keep an integer stride from aliasing with the voxel grid.
