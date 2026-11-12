@@ -39,6 +39,22 @@ const record = (event: Record<string, unknown>) => {
   }
 };
 
+function describeScript(script: unknown): Record<string, unknown> {
+  try {
+    const source = typeof script === 'function'
+      ? Function.prototype.toString.call(script)
+      : typeof script === 'string' ? script : undefined;
+    if (source === undefined) return {};
+    return {
+      scriptSource: source.slice(0, 8192),
+      scriptSourceLength: source.length,
+      scriptSourceTruncated: source.length > 8192,
+    };
+  } catch (error) {
+    return { scriptCaptureError: String(error) };
+  }
+}
+
 async function traceCommand<T>(
   command: string,
   invoke: () => Promise<T>,
@@ -266,7 +282,10 @@ export const config = {
     ] as const) {
       browser.overwriteCommand(command, (invoke, ...parameters) =>
         traceCommand(command, () =>
-          (invoke as (...values: any[]) => Promise<any>)(...parameters)
+          (invoke as (...values: any[]) => Promise<any>)(...parameters),
+          command === 'execute' || command === 'executeAsync'
+            ? describeScript(parameters[0])
+            : {}
         )
       );
     }
