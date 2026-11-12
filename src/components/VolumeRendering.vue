@@ -22,6 +22,7 @@ import { useCurrentImage } from '@/src/composables/useCurrentImage';
 import useVolumeColoringStore from '@/src/store/view-configs/volume-coloring';
 import { piecewiseHistogram } from '@/src/utils/histogram';
 import { sampleValues } from '@/src/utils/robustScalarRange';
+import { mappingRangeSliders } from '@/src/utils/mappingRangeSliders';
 import {
   getColorFunctionRangeFromPreset,
   getRelativePresetRange,
@@ -351,17 +352,9 @@ export default defineComponent({
       mappingRange: computed(
         () => colorTransferFunctionRef.value!.mappingRange
       ),
-      colorSliderStep: computed(() => {
-        const [low, high] = imageDataRange.value;
-        const width = high - low;
-        const step = Math.min(1, width / 256);
-        return step > 1 ? Math.round(step) : step;
-      }),
-      rangeShiftMin: computed(() => -fullMappingRangeWidth.value / 2),
-      rangeShiftMax: computed(() => fullMappingRangeWidth.value / 2),
+      sliders: computed(() => mappingRangeSliders(fullMappingRangeWidth.value)),
       rangeShift,
       rangeWidth,
-      rangeWidthMax: computed(() => fullMappingRangeWidth.value * 2),
       request3DAnimation,
       cancel3DAnimation,
       selectPreset,
@@ -389,9 +382,9 @@ export default defineComponent({
           density="compact"
           hide-details
           label="Shift"
-          :min="rangeShiftMin"
-          :max="rangeShiftMax"
-          :step="colorSliderStep"
+          :min="sliders.shift[0]"
+          :max="sliders.shift[1]"
+          :step="sliders.step"
           @pointerdown="request3DAnimation"
           @pointerup="cancel3DAnimation"
         />
@@ -401,9 +394,9 @@ export default defineComponent({
           density="compact"
           hide-details
           label="Width"
-          min="1"
-          :max="rangeWidthMax"
-          :step="colorSliderStep"
+          :min="sliders.width[0]"
+          :max="sliders.width[1]"
+          :step="sliders.step"
           @pointerdown="request3DAnimation"
           @pointerup="cancel3DAnimation"
         />
