@@ -10,11 +10,12 @@ jobs:
   investigate:
     if: github.repository == 'PaulHax/VolView'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     env:
       VITE_SHOW_SAMPLE_DATA: true
       DOWNLOAD_TIMEOUT: 90000
-      CI_LIFECYCLE_ONLY: '1'
+      CI_ORIGINAL_PREFIX: '1'
+      CI_LIFECYCLE_PREFIX: '1'
       CI_BROWSER_GPU_INFO: '1'
       CI_LIFECYCLE_COMMANDS: '1'
       CI_NO_PAGE_INSTRUMENTATION: '1'
@@ -33,20 +34,26 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node scripts/install-e2e-browser.mjs
+      - name: Cache original lead-in datasets
+        uses: actions/cache@v4
+        with:
+          path: .tmp/datasets
+          key: e2e-datasets-${{ hashFiles('tests/datasets.ts') }}
+          restore-keys: e2e-datasets-
       - run: npx vite build
-      - name: Profile nine original lifecycle executions with post-spec GPU info
-        timeout-minutes: 40
+      - name: Profile original Linux sequence with post-spec GPU info
+        timeout-minutes: 110
         run: |
           mkdir -p .tmp/ci-investigation
           python3 scripts/investigate-linux-host.py .tmp/ci-investigation/linux-host.jsonl &
           monitor_pid=$!
           trap 'kill "$monitor_pid" 2>/dev/null || true; wait "$monitor_pid" 2>/dev/null || true' EXIT
-          npx wdio run wdio.investigation.conf.ts --spec tests/specs/slice-display-lifecycle.e2e.ts --repeat 9
+          npx wdio run wdio.investigation.conf.ts
       - name: Preserve diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-investigation-lifecycle-external-gpu-linux-${{ github.run_attempt }}
+          name: ci-investigation-original-prefix-external-gpu-linux-${{ github.run_attempt }}
           path: |
             .tmp/ci-investigation
             .tmp/runs
