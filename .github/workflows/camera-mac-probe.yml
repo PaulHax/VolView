@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ref: [4e01383584a7d2999d75803057d2488ac70bc12e, 71350c40c2014dc456b720244566a88eb588e9b8]
+        ref: [ci-camera-mac-probe]
     name: macOS ${{ matrix.ref }}
     runs-on: macos-latest
     env:
@@ -32,11 +32,11 @@ jobs:
       - name: Run failing macOS specs
         run: |
           status=0
-          for round in 1 2 3; do
-            for spec in projection-camera layer-display-controls multicomponent-layer-display; do
+          for round in 1; do
+            for spec in multicomponent-layer-display; do
               if npm run test:e2e:chrome:skip-build -- --spec tests/specs/$spec.e2e.ts > run.log 2>&1; then result=pass; else result=FAIL; status=1; fi
               echo "RESULT round=$round spec=$spec result=$result"
-              grep -E '✖|\] Error:' run.log | head -6
+              grep -E '✖|\] Error:|CAMDBG|Error in|✓' run.log | cut -c1-400
             done
           done
           exit $status
