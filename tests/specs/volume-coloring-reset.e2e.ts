@@ -59,17 +59,24 @@ async function dragOpacityCurve(steps: number) {
   await drag.up().perform();
 }
 
+const t0 = { v: Date.now() };
+const mark = (label: string) =>
+  console.log(`STEP ${((Date.now() - t0.v) / 1000).toFixed(1)}s ${label}`);
+
 describe('3D rendering color and opacity reset', () => {
   it('restores Shift, Width, and the opacity curve while keeping lighting', async () => {
+    t0.v = Date.now();
     const name = 'volume-coloring-reset';
     const voxels = floatVoxels(SIZE, radialRamp(SIZE));
     await openWith3DLayout(
       writeNrrd(name, nrrd([], 'float', SIZE), voxels),
       name
     );
+    mark('opened 3D layout');
     await volViewPage.renderingModuleTab.waitForClickable();
     await volViewPage.renderingModuleTab.click();
     await waitForModuleTransitions();
+    mark('rendering tab open');
     const reset = $(RESET);
     await expect(reset).toBeEnabled();
     await expect(reset).toHaveAttribute(
@@ -82,11 +89,14 @@ describe('3D rendering color and opacity reset', () => {
     await pressOn(ambientThumb(), 'ArrowRight');
     await expect(ambientThumb()).toHaveAttribute('aria-valuenow', '0.3');
 
+    mark('gaussian selected + ambient');
     const shift = await sliderValue(shiftThumb());
     const width = await sliderValue(widthThumb());
     const editor = await stablePixels(EDITOR, 0);
+    mark('editor baseline stable');
     const view = await stablePixels(VIEW, 40);
 
+    mark('view baseline stable');
     await dragOpacityCurve(3);
     await waitForPixels(
       EDITOR,
@@ -95,10 +105,12 @@ describe('3D rendering color and opacity reset', () => {
       false,
       'Expected dragging to change the opacity curve'
     );
+    mark('curve changed');
     await pressOn(shiftThumb(), 'End');
     await pressOn(widthThumb(), 'Home');
     await expect(shiftThumb()).not.toHaveAttribute('aria-valuenow', shift);
     await expect(widthThumb()).not.toHaveAttribute('aria-valuenow', width);
+    mark('sliders moved');
     await waitForPixels(
       VIEW,
       40,
@@ -107,12 +119,15 @@ describe('3D rendering color and opacity reset', () => {
       'Expected the edits to change the 3D rendering'
     );
 
+    mark('view changed');
     await browser.keys('Tab');
     await expect(reset).toBeFocused();
     await browser.keys('Enter');
 
+    mark('reset pressed');
     await expect(shiftThumb()).toHaveAttribute('aria-valuenow', shift);
     await expect(widthThumb()).toHaveAttribute('aria-valuenow', width);
+    mark('sliders restored');
     await waitForPixels(
       EDITOR,
       0,
@@ -120,6 +135,7 @@ describe('3D rendering color and opacity reset', () => {
       true,
       'Expected reset to restore the opacity curve'
     );
+    mark('editor restored');
     await waitForPixels(
       VIEW,
       40,
@@ -127,6 +143,7 @@ describe('3D rendering color and opacity reset', () => {
       true,
       'Expected reset to restore the 3D rendering'
     );
+    mark('view restored');
     await expect(ambientThumb()).toHaveAttribute('aria-valuenow', '0.3');
-  });
+  }).timeout(300_000);
 });

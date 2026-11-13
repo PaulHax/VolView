@@ -36,12 +36,12 @@ jobs:
       - name: Time at-risk specs
         run: |
           status=0
-          for round in 1 2 3; do
-            for spec in volume-coloring-reset slice-display-lifecycle projection-contrast; do
+          for round in 1 2; do
+            for spec in volume-coloring-reset; do
               start=$(date +%s)
               if env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY npm run test:e2e:chrome:skip-build -- --spec tests/specs/$spec.e2e.ts > run.log 2>&1; then result=pass; else result=FAIL; status=1; fi
               echo "TIMING round=$round spec=$spec result=$result seconds=$(( $(date +%s) - start ))"
-              grep -E '✓|✖|Error:' run.log | head -20
+              grep -E "STEP|✓|✖|Error:" run.log | head -30
             done
           done
           exit $status
