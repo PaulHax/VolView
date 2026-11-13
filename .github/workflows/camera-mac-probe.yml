@@ -1,0 +1,42 @@
+name: Camera mac probe
+on:
+  push:
+    branches: [ci-camera-mac-probe]
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [4e01383584a7d2999d75803057d2488ac70bc12e, 71350c40c2014dc456b720244566a88eb588e9b8]
+    name: macOS ${{ matrix.ref }}
+    runs-on: macos-latest
+    env:
+      DOWNLOAD_TIMEOUT: 90000
+      VITE_SHOW_SAMPLE_DATA: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: .tmp/datasets
+          key: e2e-datasets-${{ hashFiles('tests/datasets.ts') }}
+          restore-keys: e2e-datasets-
+      - run: npm run build
+      - name: Run failing macOS specs
+        run: |
+          status=0
+          for round in 1 2 3; do
+            for spec in projection-camera layer-display-controls multicomponent-layer-display; do
+              if npm run test:e2e:chrome:skip-build -- --spec tests/specs/$spec.e2e.ts > run.log 2>&1; then result=pass; else result=FAIL; status=1; fi
+              echo "RESULT round=$round spec=$spec result=$result"
+              grep -E '✖|\] Error:' run.log | head -6
+            done
+          done
+          exit $status
