@@ -24,7 +24,11 @@ const ambientThumb = () => $('.v-slider*=Ambient').$('[role="slider"]');
 const sliderValue = async (slider: ChainablePromiseElement) =>
   String(await slider.getAttribute('aria-valuenow'));
 
+const reveal = (selector: string) =>
+  $(selector).scrollIntoView({ block: 'center', behavior: 'instant' });
+
 async function pixels(selector: string, inset: number, file: string) {
+  await reveal(selector);
   const [{ data }] = await captureViewPixels(selector, inset, file);
   return data;
 }
@@ -100,6 +104,7 @@ describe('3D rendering color and opacity reset', () => {
       mark('gaussian selected + ambient');
       const shift = await sliderValue(shiftThumb());
       const width = await sliderValue(widthThumb());
+      await reveal(EDITOR);
       const editor = await stablePixels(EDITOR, 0);
       mark('editor baseline stable');
       const view = await stablePixels(VIEW, 40);
