@@ -74,7 +74,7 @@ describe('3D rendering color and opacity reset', () => {
     // Bound software 3D rendering cost.
     await browser.setViewport({
       ...CONTENT_VIEWPORT,
-      height: 400,
+      height: Number(process.env.PROBE_HEIGHT ?? 400),
       devicePixelRatio: 1,
     });
     try {

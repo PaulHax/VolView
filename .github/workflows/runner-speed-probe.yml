@@ -10,11 +10,19 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6]
-    name: Linux probe ${{ matrix.shard }}
+        include:
+          - { shard: 1, height: 480 }
+          - { shard: 2, height: 480 }
+          - { shard: 3, height: 560 }
+          - { shard: 4, height: 560 }
+          - { shard: 5, height: 640 }
+          - { shard: 6, height: 640 }
+    name: Linux probe ${{ matrix.shard }} h${{ matrix.height }}
     runs-on: ubuntu-latest
     env:
       DOWNLOAD_TIMEOUT: 90000
       VITE_SHOW_SAMPLE_DATA: true
+      PROBE_HEIGHT: ${{ matrix.height }}
     steps:
       - uses: actions/checkout@v4
       - name: Describe runner
