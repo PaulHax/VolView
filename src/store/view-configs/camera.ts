@@ -118,7 +118,6 @@ export const useViewCameraStore = defineStore('viewCamera', () => {
   const serialize = createViewConfigSerializer(configs, 'camera');
 
   const deserialize = (viewID: string, config: Record<string, ViewConfig>) => {
-    console.log('CAMDBG deserialize', viewID, Object.keys(config));
     Object.entries(config).forEach(([dataID, viewConfig]) => {
       if (viewConfig.camera) {
         updateConfig(viewID, dataID, viewConfig.camera);

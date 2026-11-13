@@ -112,7 +112,6 @@ useResizeObserver(vtkContainerRef, () => {
 function resetCamera() {
   const metadata = imageMetadata.value;
   if (!metadata) return;
-  console.log('CAMDBG reset', viewID.value, imageID.value);
   autoFit.autoFit.value = true;
   autoFit.withPaused(() => {
     resetCameraToImage(view, metadata, viewDirection.value, viewUp.value);
@@ -196,13 +195,6 @@ usePersistCameraConfig(viewID, imageID, view.renderer.getActiveCamera());
 watchImmediate([imageMetadata, disableCameraAutoReset], () => {
   const metadata = imageMetadata.value;
   if (!metadata) return;
-  console.log(
-    'CAMDBG clip',
-    viewID.value,
-    imageID.value,
-    viewCameraStore.isCameraInitialized(viewID.value, imageID.value),
-    JSON.stringify(view.renderer.getActiveCamera().getPosition())
-  );
   if (
     viewCameraStore.isCameraInitialized(viewID.value, imageID.value) ||
     disableCameraAutoReset.value
