@@ -66,11 +66,12 @@ async function traceCommand<T>(
     event: 'command-begin', command, id, ...details,
     caller: new Error().stack?.split('\n').slice(2, 10),
   });
-  const nativeLinux = process.env.CI_LINUX_NATIVE === '1';
+  const nativeLinux = process.env.CI_LINUX_NATIVE === '1' &&
+    process.env.CI_LINUX_NATIVE_STALL !== '1';
   const sampleThis = !nativeLinux ||
     (command === 'element.click' && details.selector === '.v-list-item-title=3D Only');
   const timer = sampleThis
-    ? setTimeout(() => sampleChrome(command), nativeLinux ? 5000 : 15000)
+    ? setTimeout(() => sampleChrome(command, id), nativeLinux ? 5000 : 15000)
     : undefined;
   try {
     return await invoke();
@@ -88,10 +89,74 @@ async function traceCommand<T>(
   }
 }
 
-function sampleChrome(command: string) {
+function sampleLinuxCommand(command: string, id?: number) {
+  const root = Number(browser.capabilities['goog:processID']);
+  if (!Number.isSafeInteger(root) || root <= 0) {
+    record({ event: 'linux-stall-target-error', command, id, error: 'Missing Chrome browser PID' });
+    return;
+  }
+  execFile('ps', ['-axo', 'pid=,ppid=,args='],
+    { timeout: 5000, maxBuffer: 4 * 1024 * 1024 }, (error, output) => {
+      if (error) {
+        record({ event: 'linux-stall-target-error', command, id, error: error.message });
+        return;
+      }
+      const processes = output.split('\n').flatMap(line => {
+        const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+        return match ? [{ pid: Number(match[1]), parent: Number(match[2]), args: match[3] }] : [];
+      });
+      const family = new Set([root]);
+      for (let changed = true; changed;) {
+        changed = false;
+        for (const entry of processes) {
+          if (family.has(entry.parent) && !family.has(entry.pid)) {
+            family.add(entry.pid);
+            changed = true;
+          }
+        }
+      }
+      const targets = processes.filter(entry => family.has(entry.pid))
+        .flatMap(entry => {
+          const role = entry.pid === root ? 'browser'
+            : /--type=gpu-process(?:\s|$)/.test(entry.args) ? 'gpu'
+              : /--type=renderer(?:\s|$)/.test(entry.args) ? 'renderer' : undefined;
+          return role ? [{ ...entry, role }] : [];
+        }).sort((a, b) => {
+          const rank: Record<string, number> = { browser: 0, gpu: 1, renderer: 2 };
+          return rank[a.role] - rank[b.role] || a.pid - b.pid;
+        });
+      record({ event: 'linux-stall-targets', command, id, root, targets,
+        omitted: Math.max(0, targets.length - 8) });
+      // Capture only this WDIO session's browser/GPU/renderers, once per worker.
+      for (const { pid, role } of targets.slice(0, 8)) {
+        record({ event: 'linux-stall-sample-begin', command, id, pid, role });
+        execFile('sudo', ['-n', 'gdb', '--batch', '--nx', '--nh',
+          '-iex', 'set auto-load off', '-iex', 'set debuginfod enabled off',
+          '-ex', 'set pagination off', '-ex', 'info threads',
+          '-ex', 'thread apply all bt 12', '-ex', 'info sharedlibrary',
+          '-ex', 'info proc mappings', '-ex', 'thread apply all x/8i $pc',
+          '-p', String(pid)],
+          { timeout: 10000, maxBuffer: 8 * 1024 * 1024 },
+          (failure, stdout, stderr) => {
+            record({ event: 'linux-stall-sample-end', command, id, pid, role,
+              error: failure?.message });
+            try {
+              writeFileSync(join(TEMP_DIR, `native-${process.pid}-${id}-${role}-${pid}.txt`),
+                `${stdout}\n${stderr}\n${failure?.message ?? ''}`);
+            } catch (writeError) { console.error(writeError); }
+          });
+      }
+    });
+}
+
+function sampleChrome(command: string, id?: number) {
   if (sampled) return;
   sampled = true;
   console.error(`[CI diagnostic] command unfinished at native sampling threshold: ${command}`);
+  if (process.platform === 'linux' && process.env.CI_LINUX_NATIVE_STALL === '1') {
+    sampleLinuxCommand(command, id);
+    return;
+  }
   if (process.platform === 'linux' && process.env.CI_LINUX_NATIVE === '1') {
     execFile('ps', ['-axo', 'pid=,command='],
       { timeout: 5000, maxBuffer: 4 * 1024 * 1024 }, (error, output) => {

@@ -16,18 +16,16 @@ jobs:
       DOWNLOAD_TIMEOUT: 90000
       CI_ORIGINAL_PREFIX: '1'
       CI_LIFECYCLE_PREFIX: '1'
-      CI_LIFECYCLE_ONLY: '1'
+      CI_LINUX_NATIVE_STALL: '1'
       CI_BROWSER_GPU_INFO: '1'
       CI_LIFECYCLE_COMMANDS: '1'
       CI_NO_PAGE_INSTRUMENTATION: '1'
       ORIGINAL_REV: 55dc25a8bf7aea46815b554da11b40880ebd19a2
-      SPEED_REV: 4404c266c5329d44d42f16453433ce4baad56f4a
     steps:
       - uses: actions/checkout@v4
       - name: Restore original failing application and tests
         run: |
           git fetch --no-tags origin "$ORIGINAL_REV"
-          git fetch --no-tags origin "$SPEED_REV"
           git restore --source="$ORIGINAL_REV" --worktree -- src tests
           git diff --exit-code "$ORIGINAL_REV" -- src tests
           git diff --stat "$ORIGINAL_REV"
@@ -35,6 +33,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Verify native sampler
+        run: gdb --version
       - run: npm ci
       - run: node scripts/install-e2e-browser.mjs
       - name: Cache original lead-in datasets
@@ -43,50 +43,20 @@ jobs:
           path: .tmp/datasets
           key: e2e-datasets-${{ hashFiles('tests/datasets.ts') }}
           restore-keys: e2e-datasets-
-      - name: Compare original and speed-probe application on one runner
+      - run: npx vite build
+      - name: Sample original Linux long commands across Chrome processes
         timeout-minutes: 110
         run: |
-          set -o pipefail
           mkdir -p .tmp/ci-investigation
-          status=0
-          for label in original-1 speed-1 speed-2 original-2; do
-            case "$label" in
-              original-*) source_rev="$ORIGINAL_REV" ;;
-              speed-*) source_rev="$SPEED_REV" ;;
-            esac
-            phase_dir=".tmp/ci-investigation/$label"
-            mkdir -p "$phase_dir"
-            echo "SOURCE_PHASE label=$label app=$source_rev tests=$ORIGINAL_REV"
-            # Index and worktree move together so revision-only files are removed.
-            git restore --source="$source_rev" --staged --worktree -- src
-            git restore --source="$ORIGINAL_REV" --staged --worktree -- tests
-            git diff --exit-code "$source_rev" -- src
-            git diff --exit-code "$ORIGINAL_REV" -- tests
-            npx vite build 2>&1 | tee "$phase_dir/build.log"
-            python3 scripts/investigate-linux-host.py "$phase_dir/linux-host.jsonl" &
-            monitor_pid=$!
-            trap 'kill "$monitor_pid" 2>/dev/null || true; wait "$monitor_pid" 2>/dev/null || true' EXIT
-            phase_status=0
-            if npx wdio run wdio.investigation.conf.ts --spec ./tests/specs/slice-display-lifecycle.e2e.ts 2>&1 | tee "$phase_dir/wdio.log"; then
-              phase_status=0
-            else
-              phase_status=$?
-              status=1
-            fi
-            kill "$monitor_pid" 2>/dev/null || true
-            wait "$monitor_pid" 2>/dev/null || true
-            trap - EXIT
-            if [ -d .tmp/runs ]; then
-              mv .tmp/runs "$phase_dir/runs"
-            fi
-            echo "SOURCE_PHASE_RESULT label=$label exit=$phase_status"
-          done
-          exit "$status"
+          python3 scripts/investigate-linux-host.py .tmp/ci-investigation/linux-host.jsonl &
+          monitor_pid=$!
+          trap 'kill "$monitor_pid" 2>/dev/null || true; wait "$monitor_pid" 2>/dev/null || true' EXIT
+          npx wdio run wdio.investigation.conf.ts
       - name: Preserve diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-investigation-source-comparison-linux-${{ github.run_attempt }}
+          name: ci-investigation-original-prefix-native-all-linux-${{ github.run_attempt }}
           path: |
             .tmp/ci-investigation
             .tmp/runs
