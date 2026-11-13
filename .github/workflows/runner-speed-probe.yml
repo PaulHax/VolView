@@ -1,0 +1,47 @@
+name: Runner speed probe
+on:
+  push:
+    branches: [ci-runner-speed-probe]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    name: Linux probe ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    env:
+      DOWNLOAD_TIMEOUT: 90000
+      VITE_SHOW_SAMPLE_DATA: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Describe runner
+        run: |
+          lscpu | grep -E 'Model name|^CPU\(s\)|Thread|MHz'
+          free -m
+          node -e "const c=require('crypto');const t=Date.now();let h=Buffer.alloc(32);for(let i=0;i<3e6;i++)h=c.createHash('sha256').update(h).digest();console.log('BENCH sha256 3e6 ms', Date.now()-t)"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: .tmp/datasets
+          key: e2e-datasets-${{ hashFiles('tests/datasets.ts') }}
+          restore-keys: e2e-datasets-
+      - run: npm run build
+      - name: Time at-risk specs
+        run: |
+          status=0
+          for round in 1 2 3; do
+            for spec in volume-coloring-reset slice-display-lifecycle projection-contrast; do
+              start=$(date +%s)
+              if env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY npm run test:e2e:chrome:skip-build -- --spec tests/specs/$spec.e2e.ts > run.log 2>&1; then result=pass; else result=FAIL; status=1; fi
+              echo "TIMING round=$round spec=$spec result=$result seconds=$(( $(date +%s) - start ))"
+              grep -E '✓|✖|Error:' run.log | head -20
+            done
+          done
+          exit $status
