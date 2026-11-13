@@ -33,8 +33,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Verify native sampler
-        run: gdb --version
+      - name: Install and verify native sampler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gdb
+          gdb --version
+          sudo -n gdb --batch --nx --nh -ex quit
       - run: npm ci
       - run: node scripts/install-e2e-browser.mjs
       - name: Cache original lead-in datasets
