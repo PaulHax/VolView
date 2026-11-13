@@ -68,7 +68,6 @@ export function usePersistCameraConfig(
     [() => unref(viewID), () => unref(dataID), cameraShowsImage],
     ([, , showsImage], _previous, onCleanup) => {
       console.log(
-        'CAMDBG bind',
         unref(viewID),
         unref(dataID),
         'shows',
@@ -81,13 +80,12 @@ export function usePersistCameraConfig(
       if (!showsImage) return;
       const stop = keys.map((key) => syncRef(configRefs[key], cameraRefs[key]));
       console.log(
-        'CAMDBG bound',
         unref(viewID),
         'cam',
         JSON.stringify(unref(camera).getPosition())
       );
       onCleanup(() => stop.forEach((unsubscribe) => unsubscribe()));
     },
-    { immediate: true, flush: 'post' }
+    { immediate: true, flush: 'sync' }
   );
 }
