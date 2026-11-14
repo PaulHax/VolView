@@ -17,6 +17,7 @@ jobs:
       CI_ORIGINAL_PREFIX: '1'
       CI_LIFECYCLE_PREFIX: '1'
       CI_LINUX_NATIVE_STALL: '1'
+      CI_LINUX_FAILURE_SNAPSHOT: '1'
       CI_BROWSER_GPU_INFO: '1'
       CI_LIFECYCLE_COMMANDS: '1'
       CI_NO_PAGE_INSTRUMENTATION: '1'
@@ -60,7 +61,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-investigation-original-prefix-native-all-linux-${{ github.run_attempt }}
+          name: ci-investigation-original-prefix-failure-snapshot-linux-${{ github.run_attempt }}
           path: |
             .tmp/ci-investigation
             .tmp/runs

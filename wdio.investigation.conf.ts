@@ -12,6 +12,9 @@ import { config as original } from './wdio.chrome.conf';
 import { TEMP_DIR } from './wdio.shared.conf';
 
 let nextCommand = 0;
+const pendingCommands = new Map<number, {
+  id: number; command: string; started: number; selector?: string;
+}>();
 const originalPrefix = process.env.CI_ORIGINAL_PREFIX === '1';
 const lifecycleOnly = process.env.CI_LIFECYCLE_ONLY === '1';
 const outlineStress = process.env.CI_OUTLINE_STRESS === '1';
@@ -23,6 +26,7 @@ const prefixSpecs = readdirSync('tests/specs')
   .sort()
   .map((name) => `./tests/specs/${name}`);
 let sampled = false;
+const activeLinuxSamples = new Set<number>();
 let recordFailed = false;
 type BeforeHook = Exclude<NonNullable<typeof original.before>, unknown[]>;
 const record = (event: Record<string, unknown>) => {
@@ -62,6 +66,10 @@ async function traceCommand<T>(
 ) {
   const id = ++nextCommand;
   const started = Date.now();
+  pendingCommands.set(id, {
+    id, command, started,
+    selector: details.selector === undefined ? undefined : String(details.selector),
+  });
   record({
     event: 'command-begin', command, id, ...details,
     caller: new Error().stack?.split('\n').slice(2, 10),
@@ -79,6 +87,7 @@ async function traceCommand<T>(
     record({ event: 'command-error', command, id, error: String(error) });
     throw error;
   } finally {
+    pendingCommands.delete(id);
     clearTimeout(timer);
     record({
       event: 'command-end',
@@ -127,8 +136,14 @@ function sampleLinuxCommand(command: string, id?: number) {
         });
       record({ event: 'linux-stall-targets', command, id, root, targets,
         omitted: Math.max(0, targets.length - 8) });
-      // Capture only this WDIO session's browser/GPU/renderers, once per worker.
+      // Capture only this WDIO session's browser/GPU/renderers. A failure can
+      // request another observation after the once-per-worker watchdog sample.
       for (const { pid, role } of targets.slice(0, 8)) {
+        if (activeLinuxSamples.has(pid)) {
+          record({ event: 'linux-stall-sample-active', command, id, pid, role });
+          continue;
+        }
+        activeLinuxSamples.add(pid);
         record({ event: 'linux-stall-sample-begin', command, id, pid, role });
         execFile('sudo', ['-n', 'gdb', '--batch', '--nx', '--nh',
           '-iex', 'set auto-load off', '-iex', 'set debuginfod enabled off',
@@ -138,6 +153,7 @@ function sampleLinuxCommand(command: string, id?: number) {
           '-p', String(pid)],
           { timeout: 10000, maxBuffer: 8 * 1024 * 1024 },
           (failure, stdout, stderr) => {
+            activeLinuxSamples.delete(pid);
             record({ event: 'linux-stall-sample-end', command, id, pid, role,
               error: failure?.message });
             try {
@@ -314,6 +330,28 @@ export const config = {
       },
   beforeTest(test: { title: string }) {
     record({ event: 'test-start', title: test.title });
+  },
+  async afterTest(...hookArgs: Parameters<Exclude<NonNullable<typeof original.afterTest>, unknown[]>>) {
+    const error = hookArgs[2].error;
+    if (error && process.platform === 'linux' &&
+        process.env.CI_LINUX_FAILURE_SNAPSHOT === '1') {
+      const id = ++nextCommand;
+      record({
+        event: 'test-failure-snapshot',
+        id, title: hookArgs[0].title, error: String(error),
+        pending: [...pendingCommands.values()].map(command => ({
+          ...command, elapsed: Date.now() - command.started,
+        })),
+      });
+      // A post-failure observation, independent of the once-per-worker watchdog.
+      // Request it before the original failure screenshot/cleanup can wait on Chrome.
+      try {
+        sampleLinuxCommand('afterTest failure', id);
+      } catch (captureError) {
+        record({ event: 'test-failure-snapshot-error', id, error: String(captureError) });
+      }
+    }
+    for (const hook of [original.afterTest].flat()) await hook?.(...hookArgs);
   },
   async after(...hookArgs: Parameters<Exclude<NonNullable<typeof original.after>, unknown[]>>) {
     // Query only after the spec, so GPU collection cannot warm up the test page.
