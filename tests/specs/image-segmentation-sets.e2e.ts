@@ -331,7 +331,21 @@ describe('Image segmentation sets', () => {
     await openCopySegmentsMenu();
     const copied = copySource(FIRST);
     await expect(copied).toHaveElementClass('v-list-item--disabled');
+    const probe = (label: string) =>
+      browser.execute((tag) => {
+        const item = [...document.querySelectorAll('.v-overlay--active .v-list-item')].find((el) => el.classList.contains('v-list-item--disabled'));
+        const r = item?.getBoundingClientRect();
+        const at = r ? document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) : null;
+        const toasts = [...document.querySelectorAll('.Vue-Toastification__toast')].map((t) => { const b = t.getBoundingClientRect(); return `${t.className.replace(/Vue-Toastification__/g, '')}@${Math.round(b.x)},${Math.round(b.y)},${Math.round(b.width)}x${Math.round(b.height)}:${t.textContent?.trim()}`; });
+        const hovered = [...document.querySelectorAll(':hover')].map((el) => el.className && typeof el.className === 'string' ? el.className.split(' ')[0] : el.tagName).slice(-4);
+        const overlay = document.querySelector('.v-overlay--active .v-overlay__content') as HTMLElement | null;
+        return `PROBE ${tag} focus=${document.hasFocus()} vis=${document.visibilityState} item=${r ? [r.x, r.y, r.width, r.height].map(Math.round).join(',') : 'none'} at=${at?.className ?? at?.tagName} overlayStyle=${overlay?.getAttribute('style')} overlayClass=${overlay?.className} toasts=${JSON.stringify(toasts)} hovered=${hovered.join('>')} tips=${document.querySelectorAll('.v-tooltip .v-overlay__content').length}`;
+      }, label).then((line) => console.log(line));
+    await probe('before-move');
     await copied.moveTo();
+    await probe('after-move');
+    await browser.pause(1500);
+    await probe('after-1500ms');
     const reason = await tooltipOf(copied.$('..'));
     await expect(reason).toHaveText('Every segment is already on this image');
     await browser.keys('Escape');

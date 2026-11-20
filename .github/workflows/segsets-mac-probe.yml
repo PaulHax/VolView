@@ -1,0 +1,33 @@
+name: Segment sets mac probe
+on:
+  push:
+    branches: [ci-segsets-mac-probe, ci-segsets-mac-probe-fix]
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    env:
+      DOWNLOAD_TIMEOUT: 90000
+      VITE_SHOW_SAMPLE_DATA: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Run spec
+        run: |
+          status=0
+          for round in 1 2 3; do
+            if npm run test:e2e:chrome:skip-build -- --spec tests/specs/image-segmentation-sets.e2e.ts > run.log 2>&1; then result=pass; else result=FAIL; status=1; fi
+            echo "RESULT round=$round result=$result"
+            grep -E 'PROBE|✖|Expected|Received' run.log | head -12
+          done
+          exit $status
