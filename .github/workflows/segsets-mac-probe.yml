@@ -25,9 +25,9 @@ jobs:
       - name: Run spec
         run: |
           status=0
-          for round in 1 2 3; do
+          for round in 1 2 3 4 5; do
             if npm run test:e2e:chrome:skip-build -- --spec tests/specs/image-segmentation-sets.e2e.ts > run.log 2>&1; then result=pass; else result=FAIL; status=1; fi
             echo "RESULT round=$round result=$result"
-            grep -E 'PROBE|✖|Expected|Received' run.log | head -12
+            grep -E '✖' run.log; grep -A14 -E '^\[chrome.*\] [0-9]+\) ' run.log | grep -v 'Browser Console' | head -40
           done
           exit $status
