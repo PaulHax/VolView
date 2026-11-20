@@ -63,6 +63,16 @@ const showImage = async (name: string) => {
   await volViewPage.waitForLoadingIndicator(active2DView());
 };
 
+// The restored Paint tool switches the side panel to Annotations once applied.
+const restorePaintSession = async (savedPath: string) => {
+  await openThroughDialog(savedPath);
+  await volViewPage.waitForViews();
+  await expect($('[data-testid="module-tab-Annotations"]')).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+};
+
 const paint = async () => {
   const view = active2DView();
   await view.waitForDisplayed();
@@ -414,8 +424,7 @@ describe('Image segmentation sets', () => {
     const savedPath = path.join(TEMP_DIR, filename);
     await waitForDownload(savedPath, SESSION_SAVE_TIMEOUT);
     await volViewPage.open();
-    await openThroughDialog(savedPath);
-    await volViewPage.waitForViews();
+    await restorePaintSession(savedPath);
     await showImage(SECOND);
     await expectSegments([]);
 
@@ -453,8 +462,7 @@ describe('Image segmentation sets', () => {
     await volViewPage.open();
     // A lost empty set would be seeded from this config.
     await openThroughDialog(competingDefaults);
-    await openThroughDialog(savedPath);
-    await volViewPage.waitForViews();
+    await restorePaintSession(savedPath);
     await showImage(SECOND);
     await expectSegments([]);
     await showImage(FIRST);
