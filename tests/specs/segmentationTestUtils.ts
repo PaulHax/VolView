@@ -52,7 +52,12 @@ export const copySource = (imageName: string) =>
 
 export const openCopySegmentsMenu = async () => {
   await copySegmentsRow().click();
-  await $('.v-overlay--active .v-list').waitForDisplayed();
+  const menu = $('.v-menu.v-overlay--active .v-overlay__content');
+  await menu.waitForDisplayed();
+  // The menu ignores the pointer until its opening transition ends.
+  await browser.waitUntil(
+    async () => (await menu.getCSSProperty('pointer-events')).value !== 'none'
+  );
 };
 
 export const copySegmentsFrom = async (imageName: string) => {
