@@ -406,8 +406,8 @@ describe('Image segmentation sets', () => {
     writeMetaImage(SECOND, { size: 32, step: 5 });
     await volViewPage.open(`?urls=[tmp/${FIRST},tmp/${SECOND}]`);
     await volViewPage.waitForViews();
-    await openAnnotationSegments();
-    await expect(segmentImageName()).toHaveText(FIRST);
+    await browser.waitUntil(async () => (await volumeCards().length) === 2);
+    await showImage(FIRST);
     await createSourceDefinitions();
 
     const filename = await volViewPage.saveSession();
